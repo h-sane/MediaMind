@@ -1,4 +1,13 @@
 import { useHealth, useLibraries, useAddLibrary, useRemoveLibrary } from './api/hooks'
+import { useProgressSocket } from './api/progress'
+import { useAppStore } from './stores/app'
+import { LibraryDetail } from './screens/LibraryDetail'
+import { DedupeReview } from './screens/DedupeReview'
+import type { Library } from './api/client'
+
+// ---------------------------------------------------------------------------
+// Engine status indicator
+// ---------------------------------------------------------------------------
 
 function EngineStatus(): React.JSX.Element {
   const { data, isError, isPending } = useHealth()
@@ -13,10 +22,15 @@ function EngineStatus(): React.JSX.Element {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Libraries list
+// ---------------------------------------------------------------------------
+
 function Libraries(): React.JSX.Element {
   const { data: libraries, isPending } = useLibraries()
   const addLibrary = useAddLibrary()
   const removeLibrary = useRemoveLibrary()
+  const navigate = useAppStore((s) => s.navigate)
 
   const onAddFolder = async (): Promise<void> => {
     const folder = await window.mediamind.pickFolder()
@@ -57,22 +71,26 @@ function Libraries(): React.JSX.Element {
         </div>
       ) : (
         <ul className="space-y-2">
-          {libraries.map((lib) => (
+          {libraries.map((lib: Library) => (
             <li
               key={lib.id}
-              className="group flex items-center justify-between rounded-xl border border-zinc-200 bg-white px-5 py-4 shadow-sm"
+              onClick={() => navigate({ name: 'library', libraryId: lib.id })}
+              className="group flex cursor-pointer items-center justify-between rounded-xl border border-zinc-200 bg-white px-5 py-4 shadow-sm transition hover:border-zinc-300 hover:shadow-md"
             >
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium">{lib.name}</p>
                 <p className="truncate text-xs text-zinc-400">{lib.path}</p>
               </div>
-              <button
-                onClick={() => removeLibrary.mutate(lib.id)}
-                title="Remove from MediaMind (files are not touched)"
-                className="invisible rounded-md px-2 py-1 text-xs text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-600 group-hover:visible"
-              >
-                Remove
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={(e) => { e.stopPropagation(); removeLibrary.mutate(lib.id) }}
+                  title="Remove from MediaMind (files are not touched)"
+                  className="invisible rounded-md px-2 py-1 text-xs text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-600 group-hover:visible"
+                >
+                  Remove
+                </button>
+                <span className="text-zinc-300">›</span>
+              </div>
             </li>
           ))}
         </ul>
@@ -81,15 +99,37 @@ function Libraries(): React.JSX.Element {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Root app
+// ---------------------------------------------------------------------------
+
 export default function App(): React.JSX.Element {
+  // Mount the WS progress socket once for the app's lifetime.
+  useProgressSocket()
+
+  const view = useAppStore((s) => s.view)
+  const { data: libraries } = useLibraries()
+
+  const currentLibrary =
+    (view.name === 'library' || view.name === 'dedupe-review')
+      ? libraries?.find((l: Library) => l.id === view.libraryId)
+      : undefined
+
   return (
     <div className="flex min-h-screen flex-col">
       <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-8 py-4">
-        <h1 className="text-base font-semibold tracking-tight">MediaMind</h1>
+        <h1
+          className="cursor-pointer text-base font-semibold tracking-tight"
+          onClick={() => useAppStore.getState().navigate({ name: 'libraries' })}
+        >
+          MediaMind
+        </h1>
         <EngineStatus />
       </header>
       <main className="flex-1">
-        <Libraries />
+        {view.name === 'libraries' && <Libraries />}
+        {view.name === 'library' && currentLibrary && <LibraryDetail library={currentLibrary} />}
+        {view.name === 'dedupe-review' && <DedupeReview libraryId={view.libraryId} />}
       </main>
     </div>
   )
