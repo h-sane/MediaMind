@@ -32,6 +32,7 @@ class JobSnapshot(BaseModel):
 class ScanIn(BaseModel):
     type: str = "dedupe"
     near_threshold: int = 5
+    provider_id: str | None = None  # faces scans only
 
 
 # ---------------------------------------------------------------------------
@@ -101,3 +102,68 @@ class ExecutionReportOut(BaseModel):
     dry_run: bool
     manifest_path: str | None
     entries: list[ManifestEntryOut]
+
+
+# ---------------------------------------------------------------------------
+# Providers (M5)
+# ---------------------------------------------------------------------------
+
+class LicenseOut(BaseModel):
+    name: str
+    url: str
+    commercial_use: bool
+    summary: str
+
+
+class ProviderOut(BaseModel):
+    id: str
+    name: str
+    description: str
+    license: LicenseOut
+    installed: bool
+    size_bytes: int
+    embedding_dim: int
+
+
+class ProviderDownloadIn(BaseModel):
+    license_accepted: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Persons (M5)
+# ---------------------------------------------------------------------------
+
+class PersonOut(BaseModel):
+    id: int
+    auto_label: str
+    name: str | None
+    face_count: int
+    media_count: int
+    sample_face_ids: list[int]
+
+
+class PersonsOut(BaseModel):
+    scan_id: str
+    scanned_at: float | None
+    provider_id: str
+    persons: list[PersonOut]
+    unassigned_faces: int
+    no_face_files: int
+    unreadable_files: int
+
+
+class PersonRenameIn(BaseModel):
+    name: str | None
+
+
+class PersonMergeIn(BaseModel):
+    source_id: int
+    target_id: int
+
+
+class PersonMediaItemOut(BaseModel):
+    file_id: int
+    path: str
+    kind: str
+    face_id: int
+    bbox: tuple[float, float, float, float]

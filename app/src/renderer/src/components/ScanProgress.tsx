@@ -47,10 +47,16 @@ export function ScanProgress({ libraryId, job }: Props): React.JSX.Element {
         />
       </div>
 
-      {job.state === 'succeeded' && job.result && (
+      {job.state === 'succeeded' && job.result && job.type === 'dedupe' && (
         <p className="mt-2 text-xs text-zinc-500">
           Found {(job.result.groups as number).toLocaleString()} groups ·{' '}
           {formatBytes(job.result.reclaimable_bytes as number)} reclaimable
+        </p>
+      )}
+      {job.state === 'succeeded' && job.result && job.type === 'faces' && (
+        <p className="mt-2 text-xs text-zinc-500">
+          {(job.result.people as number).toLocaleString()} people ·{' '}
+          {(job.result.faces as number).toLocaleString()} faces detected
         </p>
       )}
     </div>

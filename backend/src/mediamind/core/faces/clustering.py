@@ -27,6 +27,19 @@ class ClusterResult:
     n_people: int = 0
 
 
+def cluster_embeddings(
+    embeddings: list[np.ndarray],
+    eps: float = DEFAULT_EPS,
+    min_samples: int = DEFAULT_MIN_SAMPLES,
+) -> np.ndarray:
+    """Run DBSCAN on a flat list of embeddings; return one label per embedding."""
+    if not embeddings:
+        return np.empty(0, dtype=int)
+    from sklearn.cluster import DBSCAN
+    X = np.asarray(embeddings, dtype=np.float32)
+    return DBSCAN(eps=eps, min_samples=min_samples, metric="cosine", n_jobs=-1).fit_predict(X)
+
+
 def cluster_media_faces(
     media_faces: list[MediaFaces],
     eps: float = DEFAULT_EPS,
@@ -40,13 +53,7 @@ def cluster_media_faces(
             embeddings.append(emb)
             owner.append(idx)
 
-    if not embeddings:
-        return ClusterResult(labels=np.empty(0, dtype=int))
-
-    from sklearn.cluster import DBSCAN
-
-    X = np.asarray(embeddings, dtype=np.float32)
-    labels = DBSCAN(eps=eps, min_samples=min_samples, metric="cosine", n_jobs=-1).fit_predict(X)
+    labels = cluster_embeddings(embeddings, eps=eps, min_samples=min_samples)
 
     result = ClusterResult(labels=labels)
     for label, media_idx in zip(labels, owner):

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from typing import Callable
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _V1_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -47,7 +48,6 @@ CREATE TABLE IF NOT EXISTS persons (
 );
 """
 
-# Each migration string is idempotent (CREATE TABLE IF NOT EXISTS).
 _V2_ADDITIONS = """
 CREATE TABLE IF NOT EXISTS scans (
     id TEXT PRIMARY KEY,
@@ -81,17 +81,84 @@ CREATE TABLE IF NOT EXISTS duplicate_members (
 CREATE INDEX IF NOT EXISTS idx_dup_members_group ON duplicate_members(group_id);
 """
 
-_MIGRATIONS: list[tuple[int, str]] = [
+
+def _v3_migration(conn: sqlite3.Connection) -> None:
+    """Schema v3: bbox columns on embeddings + faces, persons, organize tracking tables."""
+    # ALTER TABLE is not idempotent — guard each column addition.
+    for col in ("frame_no", "bbox_x1", "bbox_y1", "bbox_x2", "bbox_y2"):
+        try:
+            conn.execute(f"ALTER TABLE embeddings ADD COLUMN {col} REAL")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
+    conn.executescript("""
+CREATE TABLE IF NOT EXISTS faces (
+    id INTEGER PRIMARY KEY,
+    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    provider_id TEXT NOT NULL,
+    frame_no INTEGER NOT NULL DEFAULT 0,
+    bbox_x1 REAL NOT NULL DEFAULT 0, bbox_y1 REAL NOT NULL DEFAULT 0,
+    bbox_x2 REAL NOT NULL DEFAULT 0, bbox_y2 REAL NOT NULL DEFAULT 0,
+    embedding BLOB NOT NULL,
+    person_id INTEGER REFERENCES persons(id) ON DELETE SET NULL,
+    confidence REAL NOT NULL DEFAULT 1.0
+);
+CREATE INDEX IF NOT EXISTS idx_faces_file ON faces(file_id);
+CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id);
+CREATE INDEX IF NOT EXISTS idx_faces_provider ON faces(provider_id);
+
+CREATE TABLE IF NOT EXISTS pending_matches (
+    id INTEGER PRIMARY KEY,
+    face_id INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+    person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    confidence REAL NOT NULL,
+    decision TEXT
+);
+
+CREATE TABLE IF NOT EXISTS route_choices (
+    file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+    person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    decided_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS organize_actions (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    manifest_path TEXT NOT NULL,
+    planned INTEGER NOT NULL, handled INTEGER NOT NULL, ok INTEGER NOT NULL,
+    dry_run INTEGER NOT NULL DEFAULT 0,
+    undone INTEGER NOT NULL DEFAULT 0,
+    undo_data TEXT
+);
+
+CREATE TABLE IF NOT EXISTS manifest_entries (
+    id INTEGER PRIMARY KEY,
+    action_id INTEGER NOT NULL REFERENCES organize_actions(id) ON DELETE CASCADE,
+    source TEXT NOT NULL, action TEXT NOT NULL,
+    destination TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_manifest_action ON manifest_entries(action_id);
+""")
+    conn.commit()
+
+
+# v2 is a string; v3 is a callable (ALTER TABLE requires special handling).
+_MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (2, _V2_ADDITIONS),
+    (3, _v3_migration),
 ]
 
 
 def _apply_migrations(conn: sqlite3.Connection) -> None:
     row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
     current = int(row["value"]) if row else 1
-    for target_version, sql in _MIGRATIONS:
+    for target_version, migration in _MIGRATIONS:
         if current < target_version:
-            conn.executescript(sql)
+            if callable(migration):
+                migration(conn)
+            else:
+                conn.executescript(migration)
             conn.execute(
                 "UPDATE meta SET value = ? WHERE key = 'schema_version'",
                 (str(target_version),),

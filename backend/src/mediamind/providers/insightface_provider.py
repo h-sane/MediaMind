@@ -18,11 +18,18 @@ from mediamind.providers.base import DetectedFace
 class InsightFaceProvider:
     embedding_dim = 512
 
-    def __init__(self, pack: str = "buffalo_l", ctx_id: int = -1, det_size: int = 640):
+    def __init__(
+        self,
+        pack: str = "buffalo_l",
+        ctx_id: int = -1,
+        det_size: int = 640,
+        root: str | None = None,
+    ):
         self.id = f"insightface-{pack.replace('_', '-')}"
         self._pack = pack
         self._ctx_id = ctx_id  # -1 = CPU
         self._det_size = det_size
+        self._root = root  # model weights directory; None = InsightFace default (~/.insightface)
         self._app = None
 
     def prepare(self) -> None:
@@ -30,9 +37,10 @@ class InsightFaceProvider:
             return
         from insightface.app import FaceAnalysis
 
-        self._app = FaceAnalysis(
-            name=self._pack, allowed_modules=["detection", "recognition"]
-        )
+        kwargs = dict(name=self._pack, allowed_modules=["detection", "recognition"])
+        if self._root is not None:
+            kwargs["root"] = self._root
+        self._app = FaceAnalysis(**kwargs)
         self._app.prepare(ctx_id=self._ctx_id, det_size=(self._det_size, self._det_size))
 
     def get_faces(self, frame_bgr: np.ndarray) -> list[DetectedFace]:

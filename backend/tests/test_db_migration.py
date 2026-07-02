@@ -1,4 +1,4 @@
-"""Tests for schema migration (v1 → v2) and duplicates store helpers."""
+"""Tests for schema migration and duplicates store helpers."""
 
 from __future__ import annotations
 
@@ -57,8 +57,8 @@ def test_fresh_db_reaches_current_schema_version(tmp_path: Path):
     assert row["value"] == str(SCHEMA_VERSION)
 
 
-def test_v1_db_migrates_to_v2(tmp_path: Path):
-    """Simulate a v1 database (no scan/duplicate tables) and verify migration."""
+def test_v1_db_migrates_to_current(tmp_path: Path):
+    """Simulate a v1 database and verify it migrates to the current schema version."""
     db_path = library_db_path(tmp_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -77,25 +77,28 @@ def test_v1_db_migrates_to_v2(tmp_path: Path):
     conn.commit()
     conn.close()
 
-    # open_db should migrate it.
+    # open_db should migrate to the current SCHEMA_VERSION.
     conn = open_db(db_path)
     version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()["value"]
-    assert version == "2"
+    assert version == str(SCHEMA_VERSION)
 
-    # v2 tables must exist.
+    # Core tables must exist.
     tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     assert "scans" in tables
     assert "duplicate_groups" in tables
     assert "duplicate_members" in tables
+    assert "faces" in tables
+    assert "pending_matches" in tables
+    assert "organize_actions" in tables
 
 
 def test_migration_is_idempotent(tmp_path: Path):
-    """Opening a v2 db a second time must not raise or change the version."""
+    """Opening a fully-migrated db a second time must not raise or change the version."""
     conn1 = open_db(library_db_path(tmp_path))
     conn1.close()
     conn2 = open_db(library_db_path(tmp_path))
     row = conn2.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-    assert row["value"] == "2"
+    assert row["value"] == str(SCHEMA_VERSION)
 
 
 # ---------------------------------------------------------------------------

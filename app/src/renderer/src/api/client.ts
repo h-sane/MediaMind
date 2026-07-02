@@ -122,6 +122,58 @@ export interface ExecutionReport {
 }
 
 // ---------------------------------------------------------------------------
+// Provider types (M5)
+// ---------------------------------------------------------------------------
+
+export interface License {
+  name: string
+  url: string
+  commercial_use: boolean
+  summary: string
+}
+
+export interface Provider {
+  id: string
+  name: string
+  description: string
+  license: License
+  installed: boolean
+  size_bytes: number
+  embedding_dim: number
+}
+
+// ---------------------------------------------------------------------------
+// Person types (M5)
+// ---------------------------------------------------------------------------
+
+export interface Person {
+  id: number
+  auto_label: string
+  name: string | null
+  face_count: number
+  media_count: number
+  sample_face_ids: number[]
+}
+
+export interface PersonsOut {
+  scan_id: string
+  scanned_at: number | null
+  provider_id: string
+  persons: Person[]
+  unassigned_faces: number
+  no_face_files: number
+  unreadable_files: number
+}
+
+export interface PersonMediaItem {
+  file_id: number
+  path: string
+  kind: string
+  face_id: number
+  bbox: [number, number, number, number]
+}
+
+// ---------------------------------------------------------------------------
 // API surface
 // ---------------------------------------------------------------------------
 
@@ -135,15 +187,24 @@ export const api = {
   },
 
   scans: {
-    start: (libraryId: string, nearThreshold = 5) =>
+    start: (
+      libraryId: string,
+      opts?: { type?: 'dedupe' | 'faces'; nearThreshold?: number; providerId?: string }
+    ) =>
       request<JobSnapshot>('POST', `/v1/libraries/${libraryId}/scans`, {
-        type: 'dedupe',
-        near_threshold: nearThreshold
+        type: opts?.type ?? 'dedupe',
+        near_threshold: opts?.nearThreshold ?? 5,
+        provider_id: opts?.providerId ?? null
       }),
     get: (libraryId: string, jobId: string) =>
       request<JobSnapshot>('GET', `/v1/libraries/${libraryId}/scans/${jobId}`),
     cancel: (libraryId: string, jobId: string) =>
       request<{ status: string }>('DELETE', `/v1/libraries/${libraryId}/scans/${jobId}`)
+  },
+
+  jobs: {
+    get: (jobId: string) => request<JobSnapshot>('GET', `/v1/jobs/${jobId}`),
+    cancel: (jobId: string) => request<{ status: string }>('DELETE', `/v1/jobs/${jobId}`)
   },
 
   duplicates: {
@@ -168,6 +229,39 @@ export const api = {
         { headers: { 'X-MediaMind-Token': token } }
       )
       if (!res.ok) throw new Error('Thumbnail unavailable')
+      return URL.createObjectURL(await res.blob())
+    }
+  },
+
+  providers: {
+    list: () => request<Provider[]>('GET', '/v1/providers'),
+    download: (id: string) =>
+      request<JobSnapshot>('POST', `/v1/providers/${id}/download`, { license_accepted: true })
+  },
+
+  persons: {
+    list: (libraryId: string) =>
+      request<PersonsOut>('GET', `/v1/libraries/${libraryId}/persons`),
+
+    rename: (libraryId: string, personId: number, name: string | null) =>
+      request<{ ok: boolean }>('PATCH', `/v1/libraries/${libraryId}/persons/${personId}`, { name }),
+
+    merge: (libraryId: string, sourceId: number, targetId: number) =>
+      request<{ ok: boolean }>('POST', `/v1/libraries/${libraryId}/persons/merge`, {
+        source_id: sourceId,
+        target_id: targetId
+      }),
+
+    media: (libraryId: string, personId: number) =>
+      request<PersonMediaItem[]>('GET', `/v1/libraries/${libraryId}/persons/${personId}/media`),
+
+    faceThumbnailUrl: async (libraryId: string, faceId: number, size = 192): Promise<string> => {
+      const { port, token } = await connectBackend()
+      const res = await fetch(
+        `http://127.0.0.1:${port}/v1/libraries/${libraryId}/faces/${faceId}/thumbnail?size=${size}`,
+        { headers: { 'X-MediaMind-Token': token } }
+      )
+      if (!res.ok) throw new Error('Face thumbnail unavailable')
       return URL.createObjectURL(await res.blob())
     }
   }

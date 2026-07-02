@@ -107,8 +107,36 @@ def start_scan(library_id: str, body: ScanIn, request: Request):
     if jm.running_for(library_id) is not None:
         raise HTTPException(status_code=409, detail="A scan is already running for this library")
 
-    threshold = body.near_threshold if body.type == "dedupe" else DEFAULT_NEAR_THRESHOLD
-    runner = _make_dedupe_runner(Path(lib.path), threshold)
+    if body.type == "dedupe":
+        runner = _make_dedupe_runner(Path(lib.path), body.near_threshold)
+    elif body.type == "faces":
+        from mediamind.core.faces.scan import make_face_scan_runner
+        from mediamind.providers.manager import ProviderManager
+
+        pm: ProviderManager = request.app.state.providers
+
+        # Resolve which provider to use
+        if body.provider_id:
+            entry = pm.get_entry(body.provider_id)
+        else:
+            entry = next((e for e in pm.entries() if pm.is_installed(e.id)), None)
+
+        if entry is None or not pm.is_installed(entry.id):
+            raise HTTPException(
+                status_code=422,
+                detail="No face recognition provider installed — download one first",
+            )
+
+        provider_id = entry.id
+        runner = make_face_scan_runner(
+            Path(lib.path),
+            lambda: pm.create(provider_id),
+            provider_id,
+            eps=entry.cluster_eps,
+        )
+    else:
+        raise HTTPException(status_code=422, detail=f"Unknown scan type '{body.type}'")
+
     job = jm.start(library_id, body.type, runner)
     return _snapshot(job)
 

@@ -1,31 +1,35 @@
 import { useAppStore } from '../stores/app'
 import { useJobsStore, selectJobForLibrary } from '../stores/jobs'
-import { useStartScan, useDuplicates } from '../api/hooks'
+import { useStartScan, useDuplicates, usePersons, useProviders } from '../api/hooks'
 import { ScanProgress } from '../components/ScanProgress'
+import { formatBytes } from '../lib/format'
 import type { Library } from '../api/client'
 
 interface Props {
   library: Library
 }
 
-function formatBytes(b: number): string {
-  if (b < 1024) return `${b} B`
-  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`
-  if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(1)} MB`
-  return `${(b / (1024 * 1024 * 1024)).toFixed(2)} GB`
-}
-
 export function LibraryDetail({ library }: Props): React.JSX.Element {
   const navigate = useAppStore((s) => s.navigate)
   const back = useAppStore((s) => s.back)
   const jobs = useJobsStore((s) => s.jobs)
-  const activeJob = selectJobForLibrary(jobs, library.id)
+
+  // Dedupe job and data
+  const dedupeJob = selectJobForLibrary(jobs, library.id, 'dedupe')
+  const facesJob = selectJobForLibrary(jobs, library.id, 'faces')
+  const activeJob = dedupeJob ?? facesJob  // any active job for this library
 
   const startScan = useStartScan(library.id)
   const { data: dups, isError: dupsError } = useDuplicates(library.id)
+  const { data: providers } = useProviders()
+  const { data: personsData, isError: personsError } = usePersons(library.id)
 
-  const hasResults = !!dups && dups.groups.length > 0
-  const isScanning = !!activeJob && activeJob.state !== 'succeeded'
+  const hasDedupeResults = !!dups && dups.groups.length > 0
+  const isDedupeScanning = !!dedupeJob
+  const isFaceScanning = !!facesJob
+
+  const anyProviderInstalled = providers?.some((p) => p.installed) ?? false
+  const hasPeopleResults = !!personsData && personsData.persons.length > 0
 
   return (
     <section className="mx-auto w-full max-w-3xl px-8 py-12">
@@ -54,10 +58,9 @@ export function LibraryDetail({ library }: Props): React.JSX.Element {
           </div>
         </div>
 
-        {/* Scan states */}
-        {isScanning && activeJob ? (
-          <ScanProgress libraryId={library.id} job={activeJob} />
-        ) : hasResults && dups ? (
+        {isDedupeScanning && dedupeJob ? (
+          <ScanProgress libraryId={library.id} job={dedupeJob} />
+        ) : hasDedupeResults && dups ? (
           <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-5 py-4">
             <p className="text-sm font-medium">
               {dups.summary.groups.toLocaleString()} groups ·{' '}
@@ -82,7 +85,7 @@ export function LibraryDetail({ library }: Props): React.JSX.Element {
           </div>
         ) : (
           <div>
-            {dupsError && !hasResults && (
+            {dupsError && !hasDedupeResults && (
               <p className="mb-3 text-xs text-zinc-400">No previous scan found.</p>
             )}
             {startScan.isError && (
@@ -99,10 +102,66 @@ export function LibraryDetail({ library }: Props): React.JSX.Element {
         )}
       </div>
 
-      {/* People — placeholder for M5 */}
-      <div className="mt-4 rounded-2xl border border-dashed border-zinc-200 p-6">
-        <h3 className="text-sm font-semibold text-zinc-400">People</h3>
-        <p className="mt-0.5 text-xs text-zinc-400">Face recognition coming soon.</p>
+      {/* People card */}
+      <div className="mt-4 rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+        <div className="mb-4">
+          <h3 className="text-sm font-semibold">People</h3>
+          <p className="mt-0.5 text-xs text-zinc-500">
+            Cluster your media by the people in it using AI face recognition.
+          </p>
+        </div>
+
+        {!anyProviderInstalled ? (
+          /* No model installed yet */
+          <div>
+            <p className="mb-3 text-xs text-zinc-400">
+              Face recognition needs a model. Download one to get started.
+            </p>
+            <button
+              onClick={() => navigate({ name: 'providers', libraryId: library.id })}
+              className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 active:scale-[0.98]"
+            >
+              Set up face recognition →
+            </button>
+          </div>
+        ) : isFaceScanning && facesJob ? (
+          /* Face scan in progress */
+          <ScanProgress libraryId={library.id} job={facesJob} />
+        ) : hasPeopleResults && personsData ? (
+          /* Has results */
+          <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-5 py-4">
+            <p className="text-sm font-medium">
+              {personsData.persons.length} {personsData.persons.length === 1 ? 'person' : 'people'} found
+            </p>
+            <div className="mt-3 flex gap-2">
+              <button
+                onClick={() => navigate({ name: 'people', libraryId: library.id })}
+                className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 active:scale-[0.98]"
+              >
+                View people
+              </button>
+              <button
+                onClick={() => navigate({ name: 'people', libraryId: library.id })}
+                className="rounded-lg border border-zinc-200 px-4 py-2 text-sm text-zinc-600 transition hover:bg-zinc-50"
+              >
+                Rescan
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* Installed, no scan yet */
+          <div>
+            {personsError && !hasPeopleResults && (
+              <p className="mb-3 text-xs text-zinc-400">No previous scan found.</p>
+            )}
+            <button
+              onClick={() => navigate({ name: 'people', libraryId: library.id })}
+              className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 active:scale-[0.98]"
+            >
+              Find people
+            </button>
+          </div>
+        )}
       </div>
     </section>
   )

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './client'
-import type { DuplicateFile } from './client'
+import type { DuplicateFile, Person } from './client'
 
 // ---------------------------------------------------------------------------
 // Engine + libraries
@@ -45,6 +45,15 @@ export function useStartScan(libraryId: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: () => api.scans.start(libraryId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['scan', libraryId] })
+  })
+}
+
+export function useStartFaceScan(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (providerId?: string) =>
+      api.scans.start(libraryId, { type: 'faces', providerId }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['scan', libraryId] })
   })
 }
@@ -109,7 +118,82 @@ export function useExecute(libraryId: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Thumbnail (fetch with auth header → object URL, revoked on unmount)
+// Providers (M5)
+// ---------------------------------------------------------------------------
+
+export function useProviders() {
+  return useQuery({
+    queryKey: ['providers'],
+    queryFn: api.providers.list,
+    retry: false
+  })
+}
+
+export function useDownloadProvider() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (providerId: string) => api.providers.download(providerId),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['providers'] })
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Persons (M5)
+// ---------------------------------------------------------------------------
+
+export function usePersons(libraryId: string) {
+  return useQuery({
+    queryKey: ['persons', libraryId],
+    queryFn: () => api.persons.list(libraryId),
+    retry: false
+  })
+}
+
+export function useRenamePerson(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ personId, name }: { personId: number; name: string | null }) =>
+      api.persons.rename(libraryId, personId, name),
+    onMutate: async ({ personId, name }) => {
+      await qc.cancelQueries({ queryKey: ['persons', libraryId] })
+      const prev = qc.getQueryData(['persons', libraryId])
+      qc.setQueryData(['persons', libraryId], (old: ReturnType<typeof api.persons.list> extends Promise<infer T> ? T : never) => {
+        if (!old) return old
+        return {
+          ...old,
+          persons: old.persons.map((p: Person) =>
+            p.id === personId ? { ...p, name } : p
+          )
+        }
+      })
+      return { prev }
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(['persons', libraryId], ctx.prev)
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ['persons', libraryId] })
+  })
+}
+
+export function useMergePersons(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ sourceId, targetId }: { sourceId: number; targetId: number }) =>
+      api.persons.merge(libraryId, sourceId, targetId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['persons', libraryId] })
+  })
+}
+
+export function usePersonMedia(libraryId: string, personId: number) {
+  return useQuery({
+    queryKey: ['person-media', libraryId, personId],
+    queryFn: () => api.persons.media(libraryId, personId),
+    enabled: personId > 0
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Thumbnails (fetch with auth header → object URL, revoked on unmount)
 // ---------------------------------------------------------------------------
 
 export function useThumbnailUrl(libraryId: string, memberId: number): string | null {
@@ -138,6 +222,37 @@ export function useThumbnailUrl(libraryId: string, memberId: number): string | n
       }
     }
   }, [libraryId, memberId])
+
+  return url
+}
+
+export function useFaceThumbnailUrl(libraryId: string, faceId: number, size = 192): string | null {
+  const [url, setUrl] = useState<string | null>(null)
+  const urlRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    if (faceId <= 0) return
+    api.persons
+      .faceThumbnailUrl(libraryId, faceId, size)
+      .then((objectUrl) => {
+        if (!cancelled) {
+          urlRef.current = objectUrl
+          setUrl(objectUrl)
+        } else {
+          URL.revokeObjectURL(objectUrl)
+        }
+      })
+      .catch(() => {})
+
+    return () => {
+      cancelled = true
+      if (urlRef.current) {
+        URL.revokeObjectURL(urlRef.current)
+        urlRef.current = null
+      }
+    }
+  }, [libraryId, faceId, size])
 
   return url
 }

@@ -1,9 +1,40 @@
+import { useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useHealth, useLibraries, useAddLibrary, useRemoveLibrary } from './api/hooks'
 import { useProgressSocket } from './api/progress'
 import { useAppStore } from './stores/app'
+import { useJobsStore } from './stores/jobs'
 import { LibraryDetail } from './screens/LibraryDetail'
 import { DedupeReview } from './screens/DedupeReview'
+import { ProvidersScreen } from './screens/ProvidersScreen'
+import { PeopleScreen } from './screens/PeopleScreen'
 import type { Library } from './api/client'
+
+// ---------------------------------------------------------------------------
+// Invalidate TanStack queries when jobs complete
+// ---------------------------------------------------------------------------
+
+function JobInvalidator(): null {
+  const jobs = useJobsStore((s) => s.jobs)
+  const qc = useQueryClient()
+
+  useEffect(() => {
+    for (const job of Object.values(jobs)) {
+      if (job.state === 'succeeded') {
+        if (job.type === 'dedupe') {
+          qc.invalidateQueries({ queryKey: ['duplicates', job.library_id] })
+        } else if (job.type === 'faces') {
+          qc.invalidateQueries({ queryKey: ['persons', job.library_id] })
+        } else if (job.type === 'provider-download') {
+          qc.invalidateQueries({ queryKey: ['providers'] })
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobs])
+
+  return null
+}
 
 // ---------------------------------------------------------------------------
 // Engine status indicator
@@ -110,13 +141,16 @@ export default function App(): React.JSX.Element {
   const view = useAppStore((s) => s.view)
   const { data: libraries } = useLibraries()
 
-  const currentLibrary =
-    (view.name === 'library' || view.name === 'dedupe-review')
-      ? libraries?.find((l: Library) => l.id === view.libraryId)
-      : undefined
+  const currentLibraryId =
+    view.name !== 'libraries' ? (view as { libraryId?: string }).libraryId : undefined
+
+  const currentLibrary = currentLibraryId
+    ? libraries?.find((l: Library) => l.id === currentLibraryId)
+    : undefined
 
   return (
     <div className="flex min-h-screen flex-col">
+      <JobInvalidator />
       <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-8 py-4">
         <h1
           className="cursor-pointer text-base font-semibold tracking-tight"
@@ -128,8 +162,18 @@ export default function App(): React.JSX.Element {
       </header>
       <main className="flex-1">
         {view.name === 'libraries' && <Libraries />}
-        {view.name === 'library' && currentLibrary && <LibraryDetail library={currentLibrary} />}
-        {view.name === 'dedupe-review' && <DedupeReview libraryId={view.libraryId} />}
+        {view.name === 'library' && currentLibrary && (
+          <LibraryDetail library={currentLibrary} />
+        )}
+        {view.name === 'dedupe-review' && (
+          <DedupeReview libraryId={(view as { libraryId: string }).libraryId} />
+        )}
+        {view.name === 'providers' && (
+          <ProvidersScreen libraryId={(view as { libraryId: string }).libraryId} />
+        )}
+        {view.name === 'people' && (
+          <PeopleScreen libraryId={(view as { libraryId: string }).libraryId} />
+        )}
       </main>
     </div>
   )
