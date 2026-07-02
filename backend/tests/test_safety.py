@@ -1,0 +1,141 @@
+"""The non-negotiable safety invariants (CLAUDE.md).
+
+These tests are the project's highest-priority suite: copy-then-delete,
+collision-safe naming, manifest completeness, dry-run inertness, count
+verification, and per-op fault isolation.
+"""
+
+import csv
+from pathlib import Path
+
+from mediamind.core.safety import (
+    ExecutionReport,
+    FileOp,
+    execute,
+    new_manifest_path,
+    trash,
+    unique_destination,
+)
+
+
+def _mk(path: Path, content: str = "data") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    return path
+
+
+def test_unique_destination_never_overwrites(tmp_path: Path):
+    src = _mk(tmp_path / "src" / "a.jpg")
+    dest_dir = tmp_path / "out"
+    first = unique_destination(dest_dir, src)
+    _mk(first)
+    second = unique_destination(dest_dir, src)
+    _mk(second)
+    third = unique_destination(dest_dir, src)
+    assert first.name == "a.jpg"
+    assert second.name == "a_1.jpg"
+    assert third.name == "a_2.jpg"
+
+
+def test_copy_keeps_original(tmp_path: Path):
+    src = _mk(tmp_path / "a.jpg", "photo")
+    report = execute([FileOp(src, tmp_path / "out", mode="copy")])
+    assert report.ok
+    assert src.exists()
+    assert (tmp_path / "out" / "a.jpg").read_text() == "photo"
+
+
+def test_move_is_copy_then_delete(tmp_path: Path):
+    src = _mk(tmp_path / "a.jpg", "photo")
+    report = execute([FileOp(src, tmp_path / "out", mode="move")])
+    assert report.ok
+    assert not src.exists()
+    assert (tmp_path / "out" / "a.jpg").read_text() == "photo"
+
+
+def test_move_to_multiple_folders_deletes_source_once_all_copied(tmp_path: Path):
+    src = _mk(tmp_path / "a.jpg", "photo")
+    ops = [
+        FileOp(src, tmp_path / "out1", mode="move"),
+        FileOp(src, tmp_path / "out2", mode="move"),
+    ]
+    report = execute(ops)
+    assert report.ok
+    assert not src.exists()
+    assert (tmp_path / "out1" / "a.jpg").exists()
+    assert (tmp_path / "out2" / "a.jpg").exists()
+
+
+def test_failed_copy_blocks_source_deletion(tmp_path: Path):
+    """Copy-then-delete: if any copy of a source fails, the original stays."""
+    src = _mk(tmp_path / "a.jpg", "photo")
+    bad_dest = tmp_path / "out_ok" / "a.jpg"  # a FILE where a folder is expected
+    _mk(bad_dest)
+    bad_folder = bad_dest / "sub"  # mkdir under a file -> the copy op fails
+    ops = [
+        FileOp(src, bad_folder, mode="move"),
+        FileOp(src, tmp_path / "out2", mode="move"),
+    ]
+    report = execute(ops)
+    assert not report.ok
+    assert src.exists()  # original preserved because one copy failed
+    assert (tmp_path / "out2" / "a.jpg").exists()  # good copy still made
+
+
+def test_dry_run_changes_nothing(tmp_path: Path):
+    src = _mk(tmp_path / "a.jpg", "photo")
+    manifest = tmp_path / "m.csv"
+    report = execute([FileOp(src, tmp_path / "out", mode="move")], manifest, dry_run=True)
+    assert report.ok
+    assert src.exists()
+    assert not (tmp_path / "out").exists()
+    rows = list(csv.DictReader(open(manifest, encoding="utf-8")))
+    assert rows[0]["action"] == "dry-run-moved"
+
+
+def test_manifest_records_every_operation(tmp_path: Path):
+    a = _mk(tmp_path / "a.jpg")
+    b = _mk(tmp_path / "b.jpg")
+    manifest = tmp_path / "m.csv"
+    execute(
+        [FileOp(a, tmp_path / "out", "copy"), FileOp(b, tmp_path / "out", "move")],
+        manifest,
+    )
+    rows = list(csv.DictReader(open(manifest, encoding="utf-8")))
+    assert len(rows) == 2
+    actions = {Path(r["source"]).name: r["action"] for r in rows}
+    assert actions == {"a.jpg": "copied", "b.jpg": "moved"}
+
+
+def test_one_bad_file_never_aborts_the_batch(tmp_path: Path):
+    missing = tmp_path / "ghost.jpg"  # never created
+    good = _mk(tmp_path / "good.jpg")
+    report = execute(
+        [FileOp(missing, tmp_path / "out", "copy"), FileOp(good, tmp_path / "out", "copy")]
+    )
+    assert not report.ok  # count check catches the failure
+    assert report.handled == 1
+    assert len(report.errors) == 1
+    assert (tmp_path / "out" / "good.jpg").exists()
+
+
+def test_trash_dry_run_touches_nothing(tmp_path: Path):
+    src = _mk(tmp_path / "a.jpg")
+    report = trash([src], dry_run=True)
+    assert report.ok
+    assert src.exists()
+    assert report.entries[0].action == "dry-run-trashed"
+
+
+def test_report_ok_is_the_count_check():
+    r = ExecutionReport(planned=2, handled=1)
+    assert not r.ok
+    r2 = ExecutionReport(planned=2, handled=2)
+    assert r2.ok
+
+
+def test_manifest_path_layout(tmp_path: Path):
+    p = new_manifest_path(tmp_path, "organize")
+    assert p.parent == tmp_path / "manifests"
+    assert p.suffix == ".csv"
+    assert "organize" in p.name
