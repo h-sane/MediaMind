@@ -41,3 +41,6 @@ desktop.ini
 # Logs
 *.log
 logs/
+
+# electron-vite build output
+app/out/

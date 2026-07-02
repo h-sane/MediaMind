@@ -1,0 +1,16 @@
+@import 'tailwindcss';
+
+:root {
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    'Segoe UI',
+    Roboto,
+    'Helvetica Neue',
+    sans-serif;
+}
+
+body {
+  @apply bg-zinc-50 text-zinc-900 antialiased;
+  user-select: none;
+}
