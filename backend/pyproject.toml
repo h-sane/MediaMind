@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mediamind"
+version = "0.1.0"
+description = "MediaMind engine — filesystem-first AI media manager backend"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "numpy",
+    "opencv-python>=4.9",
+    "pillow>=10",
+    "pillow-heif>=0.16",
+    "scikit-learn>=1.4",
+    "send2trash>=1.8",
+    "imagehash>=4.3",
+]
+
+[project.optional-dependencies]
+faces = [
+    "insightface>=0.7",
+    "onnxruntime>=1.17",
+]
+dev = [
+    "pytest>=8",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+mediamind-server = "mediamind.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "integration: tests that need real ML models (deselect with '-m \"not integration\"')",
+]
