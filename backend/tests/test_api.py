@@ -3,16 +3,14 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-import mediamind.api.routes.libraries as libraries_module
 from mediamind.api.app import create_app
 
 
 @pytest.fixture
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    # Isolate the library registry into a temp app-data dir.
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("MEDIAMIND_DATA_DIR", str(tmp_path / "appdata"))
-    monkeypatch.setattr(libraries_module, "_registry", None)
-    return TestClient(create_app())
+    with TestClient(create_app()) as c:
+        yield c
 
 
 def test_health(client: TestClient):
@@ -22,10 +20,9 @@ def test_health(client: TestClient):
 
 def test_token_auth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("MEDIAMIND_DATA_DIR", str(tmp_path / "appdata"))
-    monkeypatch.setattr(libraries_module, "_registry", None)
-    c = TestClient(create_app(token="s3cret"))
-    assert c.get("/v1/health").status_code == 401
-    assert c.get("/v1/health", headers={"X-MediaMind-Token": "s3cret"}).status_code == 200
+    with TestClient(create_app(token="s3cret")) as c:
+        assert c.get("/v1/health").status_code == 401
+        assert c.get("/v1/health", headers={"X-MediaMind-Token": "s3cret"}).status_code == 200
 
 
 def test_library_lifecycle(client: TestClient, tmp_path: Path):

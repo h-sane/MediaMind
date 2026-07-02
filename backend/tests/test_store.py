@@ -52,7 +52,8 @@ def test_reput_replaces(tmp_path: Path):
 
 
 def test_db_opens_twice_idempotently(tmp_path: Path):
+    from mediamind.store.db import SCHEMA_VERSION
     open_db(library_db_path(tmp_path)).close()
     conn = open_db(library_db_path(tmp_path))
     row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-    assert row["value"] == "1"
+    assert row["value"] == str(SCHEMA_VERSION)

@@ -4,20 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from mediamind.core.libraries import LibraryRegistry
-
 router = APIRouter(tags=["libraries"])
-_registry: LibraryRegistry | None = None
-
-
-def get_registry() -> LibraryRegistry:
-    global _registry
-    if _registry is None:
-        _registry = LibraryRegistry()
-    return _registry
 
 
 class LibraryIn(BaseModel):
@@ -31,21 +21,21 @@ class LibraryOut(BaseModel):
 
 
 @router.get("/libraries", response_model=list[LibraryOut])
-def list_libraries():
-    return [LibraryOut(**lib.__dict__) for lib in get_registry().list()]
+def list_libraries(request: Request):
+    return [LibraryOut(**lib.__dict__) for lib in request.app.state.registry.list()]
 
 
 @router.post("/libraries", response_model=LibraryOut, status_code=201)
-def add_library(body: LibraryIn):
+def add_library(body: LibraryIn, request: Request):
     try:
-        lib = get_registry().add(Path(body.path))
+        lib = request.app.state.registry.add(Path(body.path))
     except NotADirectoryError as e:
         raise HTTPException(status_code=400, detail=f"Not a folder: {e}")
     return LibraryOut(**lib.__dict__)
 
 
 @router.delete("/libraries/{library_id}", status_code=204)
-def remove_library(library_id: str):
+def remove_library(library_id: str, request: Request):
     # Unregisters the folder from MediaMind only — never deletes user files.
-    if not get_registry().remove(library_id):
+    if not request.app.state.registry.remove(library_id):
         raise HTTPException(status_code=404, detail="Unknown library")
