@@ -64,4 +64,8 @@ class ProviderManager:
             from mediamind.providers.insightface_provider import InsightFaceProvider
             pack_name = entry.id.replace("insightface-", "").replace("-", "_")
             return InsightFaceProvider(pack=pack_name, root=str(self._root))
+        if entry.kind == "opencv_zoo":
+            from mediamind.providers.opencv_provider import OpenCVYuNetSFaceProvider
+            model_dir = self._root / entry.extract_subdir
+            return OpenCVYuNetSFaceProvider(model_dir)
         raise ValueError(f"Unsupported provider kind: {entry.kind}")

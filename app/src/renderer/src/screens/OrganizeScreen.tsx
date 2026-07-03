@@ -103,6 +103,7 @@ export function OrganizeScreen({ libraryId }: Props): React.JSX.Element {
   const [showConfirm, setShowConfirm] = useState(false)
   const [result, setResult] = useState<ExecutionReport | null>(null)
   const [showMoves, setShowMoves] = useState(false)
+  const [showRescanNotice, setShowRescanNotice] = useState(false)
 
   const lastAction = audit?.find((a) => !a.dry_run && !a.undone && a.ok)
 
@@ -117,6 +118,7 @@ export function OrganizeScreen({ libraryId }: Props): React.JSX.Element {
       onSuccess: (data) => {
         setResult(data)
         setShowConfirm(false)
+        if (data.ok && !data.dry_run) setShowRescanNotice(true)
       },
     })
   }
@@ -154,7 +156,26 @@ export function OrganizeScreen({ libraryId }: Props): React.JSX.Element {
       </div>
 
       {result && (
-        <ResultBanner report={result} onDismiss={() => setResult(null)} />
+        <ResultBanner report={result} onDismiss={() => { setResult(null); setShowRescanNotice(false) }} />
+      )}
+
+      {showRescanNotice && (
+        <div className="mb-4 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <svg className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+          </svg>
+          <div className="flex-1">
+            <p className="text-sm font-medium text-amber-800">Run a face scan to update file locations</p>
+            <p className="mt-0.5 text-xs text-amber-700">
+              Files were moved on disk. The database still points to old paths — organizing again before rescanning will fail for already-moved files.
+            </p>
+          </div>
+          <button onClick={() => setShowRescanNotice(false)} className="text-amber-400 hover:text-amber-600">
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
       )}
 
       {execute.isError && (

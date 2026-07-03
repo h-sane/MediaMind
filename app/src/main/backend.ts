@@ -7,6 +7,7 @@
  */
 import { spawn, ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
+import { app } from 'electron'
 
 export interface BackendInfo {
   port: number
@@ -18,9 +19,16 @@ const HEALTH_TIMEOUT_MS = 30_000
 let child: ChildProcess | null = null
 let info: BackendInfo | null = null
 
-function pythonCommand(): { cmd: string; args: string[] } {
-  // Dev override via .env (MAIN_VITE_PYTHON) or the environment; a packaged
-  // build will point at the bundled PyInstaller engine instead (M8).
+function engineCommand(): { cmd: string; args: string[] } {
+  if (app.isPackaged) {
+    // In a packaged build, the PyInstaller bundle is extracted to
+    // resources/engine/ by electron-builder extraResources.
+    const { join } = require('node:path')
+    const engineExe = process.platform === 'win32' ? 'mediamind.exe' : 'mediamind'
+    const enginePath = join(process.resourcesPath, 'engine', engineExe)
+    return { cmd: enginePath, args: [] }
+  }
+  // Dev: use the venv Python from .env or the environment.
   const python =
     import.meta.env.MAIN_VITE_PYTHON || process.env.MEDIAMIND_PYTHON || 'python'
   return { cmd: python, args: ['-m', 'mediamind'] }
@@ -67,7 +75,7 @@ async function waitForHealth(port: number, token: string): Promise<void> {
 export async function startBackend(): Promise<BackendInfo> {
   if (info) return info
   const token = randomBytes(32).toString('hex')
-  const { cmd, args } = pythonCommand()
+  const { cmd, args } = engineCommand()
 
   const proc = spawn(cmd, args, {
     env: { ...process.env, MEDIAMIND_TOKEN: token },

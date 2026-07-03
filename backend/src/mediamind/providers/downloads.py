@@ -165,16 +165,23 @@ def make_download_runner(
         extract_dir = models_root / entry.extract_subdir
         extract_dir.mkdir(parents=True, exist_ok=True)
 
-        for dl_file in entry.downloads:
-            archive_path = models_root / dl_file.filename
+        for i, dl_file in enumerate(entry.downloads):
+            # "direct" downloads go straight into extract_dir; zip archives land
+            # in models_root then are extracted into extract_dir.
+            if entry.archive == "direct":
+                dest_path = extract_dir / dl_file.filename
+            else:
+                dest_path = models_root / dl_file.filename
 
-            def _progress(done: int, total: int) -> None:
-                ctx.report_progress(done, total, "downloading")
+            file_label = f"file {i + 1}/{len(entry.downloads)}: {dl_file.filename}"
+
+            def _progress(done: int, total: int, _label: str = file_label) -> None:
+                ctx.report_progress(done, total, f"downloading {_label}")
 
             try:
                 download_file(
                     dl_file.url,
-                    archive_path,
+                    dest_path,
                     expected_sha256=dl_file.sha256,
                     progress=_progress,
                     should_cancel=ctx.cancelled,
@@ -186,10 +193,10 @@ def make_download_runner(
             ctx.report_progress(0, 0, "verifying")
             # sha256 already verified inside download_file if expected_sha256 set
 
-            ctx.report_progress(0, 0, "extracting")
             if entry.archive == "zip":
-                _flatten_zip(archive_path, extract_dir)
-                archive_path.unlink(missing_ok=True)  # clean up archive after extraction
+                ctx.report_progress(0, 0, "extracting")
+                _flatten_zip(dest_path, extract_dir)
+                dest_path.unlink(missing_ok=True)  # clean up archive after extraction
 
         manager.mark_installed(entry.id)
         return {"provider_id": entry.id, "installed": True}

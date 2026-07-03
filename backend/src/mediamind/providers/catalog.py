@@ -42,6 +42,42 @@ class CatalogEntry:
 
 CATALOG: list[CatalogEntry] = [
     CatalogEntry(
+        id="opencv-yunet-sface",
+        name="OpenCV YuNet + SFace",
+        description=(
+            "Lightweight face detection (YuNet, ~241 KB) + recognition (SFace, ~37 MB) "
+            "from the OpenCV model zoo. Apache-2.0 licensed — free for commercial use."
+        ),
+        license=LicenseInfo(
+            name="Apache-2.0",
+            url="https://github.com/opencv/opencv_zoo",
+            commercial_use=True,
+            summary=(
+                "Apache-2.0 — free to use in commercial and open-source projects. "
+                "No restrictions on deployment or distribution."
+            ),
+        ),
+        downloads=[
+            DownloadFile(
+                url="https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+                sha256=None,
+                filename="face_detection_yunet_2023mar.onnx",
+                size_bytes=241_000,
+            ),
+            DownloadFile(
+                url="https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
+                sha256=None,
+                filename="face_recognition_sface_2021dec.onnx",
+                size_bytes=38_000_000,
+            ),
+        ],
+        archive="direct",
+        extract_subdir="models/opencv-yunet-sface",
+        embedding_dim=128,
+        cluster_eps=0.5,
+        kind="opencv_zoo",
+    ),
+    CatalogEntry(
         id="insightface-buffalo-l",
         name="InsightFace buffalo_l",
         description=(

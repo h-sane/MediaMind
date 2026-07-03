@@ -1,0 +1,65 @@
+# electron-builder configuration for MediaMind desktop app.
+#
+# Build:
+#   cd app
+#   npm run dist
+#
+# Prerequisites:
+#   1. Build the frontend:    npm run build
+#   2. Build the backend:     cd ../backend && pyinstaller mediamind.spec
+#   3. Run dist:              npm run dist
+#
+# The backend bundle (backend/dist/mediamind/) is included as an extraResource
+# and extracted alongside the app. backend.ts detects process.resourcesPath
+# to locate the engine executable at runtime.
+
+appId: "io.mediamind.app"
+productName: "MediaMind"
+copyright: "Copyright © 2024-2025 MediaMind contributors"
+asar: true
+
+directories:
+  output: dist
+  buildResources: build-resources
+
+files:
+  - out/**/*
+  - "!out/**/*.map"
+
+extraResources:
+  - from: "../backend/dist/mediamind"
+    to: "engine"
+    filter:
+      - "**/*"
+
+win:
+  target:
+    - target: nsis
+      arch: x64
+  icon: build-resources/icon.ico
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: build-resources/icon.ico
+  uninstallerIcon: build-resources/icon.ico
+  installerHeaderIcon: build-resources/icon.ico
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: MediaMind
+  license: ../LICENSE
+  artifactName: "MediaMind-Setup-${version}.exe"
+
+mac:
+  target:
+    - target: dmg
+      arch: x64
+  category: public.app-category.photography
+  icon: build-resources/icon.icns
+
+linux:
+  target:
+    - target: AppImage
+      arch: x64
+  category: Graphics
+  icon: build-resources/icon.png

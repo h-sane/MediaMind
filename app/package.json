@@ -10,7 +10,8 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "dist": "electron-vite build && electron-builder"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.0",
@@ -25,6 +26,7 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.0",
     "electron": "^37.0.0",
+    "electron-builder": "^25.1.8",
     "electron-vite": "^4.0.0",
     "tailwindcss": "^4.1.0",
     "typescript": "^5.7.0",

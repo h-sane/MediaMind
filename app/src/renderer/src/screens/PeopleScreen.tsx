@@ -274,15 +274,28 @@ export function PeopleScreen({ libraryId }: Props): React.JSX.Element {
         </div>
       )}
 
+      {/* Unreadable files warning */}
+      {personsData && !isLoading && personsData.unreadable_files > 0 && (
+        <div className="mt-4 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <svg className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+          </svg>
+          <div>
+            <p className="text-sm font-medium text-amber-800">
+              {personsData.unreadable_files} unreadable {personsData.unreadable_files === 1 ? 'file' : 'files'}
+            </p>
+            <p className="mt-0.5 text-xs text-amber-700">
+              These files could not be decoded (corrupt, unsupported format, or permission error).
+              On organize they will be routed to <code className="rounded bg-amber-100 px-1">People/_unsorted/</code> and left untouched until reviewed.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Stats footer */}
-      {personsData && !isLoading && (
-        <div className="mt-6 flex gap-4 text-xs text-zinc-400">
-          {personsData.no_face_files > 0 && (
-            <span>{personsData.no_face_files} files with no faces</span>
-          )}
-          {personsData.unreadable_files > 0 && (
-            <span>{personsData.unreadable_files} unreadable files (routed to _unsorted on organize)</span>
-          )}
+      {personsData && !isLoading && personsData.no_face_files > 0 && (
+        <div className="mt-3 text-xs text-zinc-400">
+          {personsData.no_face_files} files scanned with no faces detected (stay in place on organize)
         </div>
       )}
 
