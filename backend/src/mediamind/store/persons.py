@@ -94,7 +94,8 @@ def upsert_file(
         VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET
             kind=excluded.kind, size=excluded.size, mtime=excluded.mtime,
-            content_hash=excluded.content_hash, decoded_ok=excluded.decoded_ok
+            content_hash=excluded.content_hash,
+            decoded_ok=COALESCE(excluded.decoded_ok, files.decoded_ok)
         """,
         (rel_path, kind, size, mtime, content_hash, int(decoded_ok) if decoded_ok is not None else None),
     )
@@ -133,7 +134,23 @@ def persist_face_scan(
 
     Returns summary dict augmented with people/faces/pending counts.
     """
-    # --- 1. clear old faces for this provider (pending_matches cascade via FK) ---
+    # --- 1. snapshot rejected pairs before deleting faces (cascade clears pending_matches) ---
+    # We preserve rejections by re-suppressing pending_matches for the same
+    # content_hash + frame_no + person_id after the rescan.
+    rejected_pairs: set[tuple[str, int, int]] = set()
+    for row in conn.execute(
+        """
+        SELECT fi.content_hash, f.frame_no, pm.person_id
+        FROM pending_matches pm
+        JOIN faces f ON f.id = pm.face_id
+        JOIN files fi ON fi.id = f.file_id
+        WHERE pm.decision = 'rejected' AND f.provider_id = ?
+        """,
+        (provider_id,),
+    ):
+        if row["content_hash"]:
+            rejected_pairs.add((row["content_hash"], row["frame_no"], row["person_id"]))
+
     conn.execute("DELETE FROM faces WHERE provider_id = ?", (provider_id,))
 
     # --- 2. cluster centroids ---
@@ -268,10 +285,13 @@ def persist_face_scan(
             face_db_id = cur.lastrowid
 
             # M6 pending logic: new file + assigned to a named person → stage as pending
+            # Skip faces the user already rejected (same content_hash + frame_no + person).
+            was_rejected = (ff.content_hash, cached_face.frame_no, assigned_pid) in rejected_pairs
             if (
                 pending_for_named
                 and assigned_pid in named_person_ids
                 and ff.file_id in new_file_ids
+                and not was_rejected
             ):
                 confidence = float(np.dot(cached_face.embedding, cluster_centroids[label]))
                 conn.execute(
@@ -432,12 +452,15 @@ def person_media(conn: sqlite3.Connection, person_id: int) -> list[FaceInfo]:
                f.person_id, f.confidence
         FROM faces f JOIN files fi ON fi.id = f.file_id
         WHERE f.person_id = ?
-        GROUP BY f.file_id
-        HAVING (f.bbox_x2 - f.bbox_x1) * (f.bbox_y2 - f.bbox_y1) =
-               MAX((f.bbox_x2 - f.bbox_x1) * (f.bbox_y2 - f.bbox_y1))
+          AND f.id = (
+              SELECT f2.id FROM faces f2
+              WHERE f2.file_id = f.file_id AND f2.person_id = ?
+              ORDER BY (f2.bbox_x2 - f2.bbox_x1) * (f2.bbox_y2 - f2.bbox_y1) DESC
+              LIMIT 1
+          )
         ORDER BY fi.path
         """,
-        (person_id,),
+        (person_id, person_id),
     ).fetchall()
     return [
         FaceInfo(

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useAppStore } from '../stores/app'
-import { useJobsStore, selectJobByType } from '../stores/jobs'
+import { useJobsStore } from '../stores/jobs'
 import { useProviders, useDownloadProvider } from '../api/hooks'
 import { formatBytes } from '../lib/format'
 import type { Provider } from '../api/client'
@@ -24,16 +24,23 @@ function LicenseBadge({ commercial_use }: { commercial_use: boolean }): React.JS
 function DownloadDialog({
   provider,
   onClose,
+  onJobStarted,
 }: {
   provider: Provider
   onClose: () => void
+  onJobStarted: (jobId: string) => void
 }): React.JSX.Element {
   const [accepted, setAccepted] = useState(false)
   const download = useDownloadProvider()
 
   const handleDownload = () => {
     if (!accepted) return
-    download.mutate(provider.id, { onSuccess: onClose })
+    download.mutate(provider.id, {
+      onSuccess: (job) => {
+        onJobStarted(job.id)
+        onClose()
+      }
+    })
   }
 
   return (
@@ -99,16 +106,17 @@ function DownloadDialog({
 
 function ProviderCard({ provider }: { provider: Provider }): React.JSX.Element {
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [myJobId, setMyJobId] = useState<string | null>(null)
   const jobs = useJobsStore((s) => s.jobs)
-  const downloadJob = selectJobByType(jobs, 'provider-download')
-  const isDownloading =
-    !!downloadJob &&
-    downloadJob.library_id === '__app__' &&
-    (downloadJob.state === 'queued' || downloadJob.state === 'running')
+
+  // Track the specific download job started by THIS card — prevents one card's
+  // download from showing progress on all cards simultaneously.
+  const myJob = myJobId ? jobs[myJobId] : null
+  const isDownloading = !!myJob && (myJob.state === 'queued' || myJob.state === 'running')
 
   const downloadProgress =
-    isDownloading && downloadJob && downloadJob.total > 0
-      ? Math.round((downloadJob.done / downloadJob.total) * 100)
+    isDownloading && myJob && myJob.total > 0
+      ? Math.round((myJob.done / myJob.total) * 100)
       : null
 
   return (
@@ -134,7 +142,7 @@ function ProviderCard({ provider }: { provider: Provider }): React.JSX.Element {
           ) : isDownloading ? (
             <div className="shrink-0 text-right">
               <p className="text-xs text-zinc-500">
-                {downloadJob?.phase ?? 'downloading'}
+                {myJob?.phase ?? 'downloading'}
                 {downloadProgress !== null ? ` ${downloadProgress}%` : '…'}
               </p>
               {downloadProgress !== null && (
@@ -158,7 +166,11 @@ function ProviderCard({ provider }: { provider: Provider }): React.JSX.Element {
       </div>
 
       {dialogOpen && (
-        <DownloadDialog provider={provider} onClose={() => setDialogOpen(false)} />
+        <DownloadDialog
+          provider={provider}
+          onClose={() => setDialogOpen(false)}
+          onJobStarted={(id) => setMyJobId(id)}
+        />
       )}
     </>
   )

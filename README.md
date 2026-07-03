@@ -60,6 +60,71 @@ Electron + React + TypeScript (UI) · Python + FastAPI (engine) ·
 ONNX Runtime + InsightFace (faces) · scikit-learn DBSCAN (clustering) ·
 OpenCV + Pillow/pillow-heif (decoding, incl. HEIC/AVIF) · SQLite (index).
 
+## Development setup
+
+**Prerequisites:** Python 3.11+, Node.js 20+, npm 10+.
+
+```bash
+# Backend (Python engine)
+python -m venv .venv
+# Windows: .venv\Scripts\activate  | Linux/Mac: source .venv/bin/activate
+pip install -e "backend[dev]"
+
+# Frontend (Electron + React)
+cd app
+npm install
+```
+
+**Run in dev mode:**
+
+```bash
+# Terminal 1 — start the backend
+cd backend
+python -m mediamind
+
+# Terminal 2 — start the Electron app
+cd app
+npm run dev
+```
+
+**Run backend tests:**
+
+```bash
+cd backend
+python -m pytest -m "not integration"   # model-free (fast, no GPU needed)
+```
+
+**TypeScript check + build:**
+
+```bash
+cd app
+npm run typecheck   # type checking only
+npm run build       # production build (output: app/out/)
+```
+
+## Building a release installer
+
+> Requires the backend to be built first with PyInstaller, then the Electron packager.
+
+```bash
+# 1. Build the backend bundle (requires pyinstaller)
+cd backend
+pip install pyinstaller
+pyinstaller mediamind.spec
+# Output: backend/dist/mediamind/
+
+# 2. Build the app installer
+cd app
+npm run dist
+# Output: app/dist/MediaMind-Setup-<version>.exe  (Windows)
+#         app/dist/MediaMind-<version>.dmg         (macOS)
+#         app/dist/MediaMind-<version>.AppImage    (Linux)
+```
+
+**Model license note:** Face recognition models are downloaded on first use,
+with their license shown in-app before download. InsightFace `buffalo_l` is
+non-commercial / research-only. OpenCV YuNet+SFace is Apache-2.0 (permissive).
+
 ## License
 
 Code: [Apache-2.0](LICENSE). Downloadable face-recognition models carry their

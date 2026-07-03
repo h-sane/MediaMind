@@ -49,6 +49,10 @@ function waitForPort(proc: ChildProcess): Promise<number> {
         resolve(Number(match[1]))
       }
     })
+    proc.on('error', (err) => {
+      clearTimeout(timer)
+      reject(new Error(`Failed to start backend process: ${err.message}`))
+    })
     proc.on('exit', (code) => {
       clearTimeout(timer)
       reject(new Error(`Backend exited early (code ${code})`))
@@ -91,6 +95,16 @@ export async function startBackend(): Promise<BackendInfo> {
   await waitForHealth(port, token)
   info = { port, token }
   console.log(`[engine] ready on 127.0.0.1:${port}`)
+
+  // Monitor post-startup exit so we don't silently lose the engine.
+  proc.on('exit', (code, signal) => {
+    if (info) {
+      console.error(`[engine] exited unexpectedly (code=${code} signal=${signal})`)
+      info = null
+      child = null
+    }
+  })
+
   return info
 }
 

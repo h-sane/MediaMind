@@ -23,6 +23,7 @@ from mediamind.api.models import (
     PlannedMoveOut,
 )
 from mediamind.config import library_data_dir
+from mediamind.core.jobs import JobManager
 from mediamind.core.libraries import LibraryRegistry
 from mediamind.core.organize_plan import build_organize_plan
 from mediamind.core.safety import FileOp, execute as safety_execute, new_manifest_path
@@ -35,6 +36,10 @@ router = APIRouter(tags=["organize"])
 
 def _registry(request: Request) -> LibraryRegistry:
     return request.app.state.registry
+
+
+def _job_manager(request: Request) -> JobManager:
+    return request.app.state.job_manager
 
 
 def _get_library_root(request: Request, library_id: str) -> Path:
@@ -93,6 +98,14 @@ def organize_preview(library_id: str, request: Request):
 @router.post("/libraries/{library_id}/organize/execute", response_model=ExecutionReportOut)
 def organize_execute(library_id: str, body: OrganizeExecuteIn, request: Request):
     """Execute the organize plan (or dry-run it)."""
+    # Concurrency guard: reject if a scan is already running for this library.
+    running = _job_manager(request).running_for(library_id)
+    if running:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A {running.type} scan is still running — wait for it to finish",
+        )
+
     library_root = _get_library_root(request, library_id)
     conn = _open_db(library_root)
     try:
@@ -105,6 +118,16 @@ def organize_execute(library_id: str, body: OrganizeExecuteIn, request: Request)
         raise HTTPException(
             status_code=422,
             detail="Nothing to organize — run a face scan first or name some people",
+        )
+
+    # Expected-count guard: reject if the plan size changed since the user confirmed.
+    if body.expected_planned is not None and len(moves) != body.expected_planned:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Plan changed: expected {body.expected_planned} moves but "
+                f"server computed {len(moves)}. Refresh and re-confirm."
+            ),
         )
 
     ops = [
@@ -129,6 +152,21 @@ def organize_execute(library_id: str, body: OrganizeExecuteIn, request: Request)
             report=report,
             dry_run=body.dry_run,
         )
+        # Update files.path so thumbnails and subsequent organize plans reflect the
+        # new locations without requiring a full rescan.
+        if not body.dry_run:
+            for e in report.entries:
+                if e.action == "moved" and e.destination:
+                    try:
+                        old_rel = Path(e.source).relative_to(library_root).as_posix()
+                        new_rel = Path(e.destination).relative_to(library_root).as_posix()
+                        conn.execute(
+                            "UPDATE files SET path = ? WHERE path = ?",
+                            (new_rel, old_rel),
+                        )
+                    except ValueError:
+                        pass  # source outside library_root — skip gracefully
+            conn.commit()
     finally:
         conn.close()
 
@@ -153,6 +191,13 @@ def organize_execute(library_id: str, body: OrganizeExecuteIn, request: Request)
 @router.post("/libraries/{library_id}/organize/undo")
 def organize_undo(library_id: str, request: Request):
     """Undo the most recent non-dry-run organize action."""
+    running = _job_manager(request).running_for(library_id)
+    if running:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A {running.type} scan is still running — wait for it to finish",
+        )
+
     library_root = _get_library_root(request, library_id)
     conn = _open_db(library_root)
     try:
@@ -201,6 +246,20 @@ def organize_undo(library_id: str, request: Request):
             report=report,
             dry_run=False,
         )
+        # Update files.path to reflect undo moves (destination → original source dir).
+        for e in report.entries:
+            if e.action == "moved" and e.destination:
+                try:
+                    # After undo: the old "destination" is the new location on disk.
+                    old_rel = Path(e.source).relative_to(library_root).as_posix()
+                    new_rel = Path(e.destination).relative_to(library_root).as_posix()
+                    conn.execute(
+                        "UPDATE files SET path = ? WHERE path = ?",
+                        (new_rel, old_rel),
+                    )
+                except ValueError:
+                    pass
+        conn.commit()
     finally:
         conn.close()
 

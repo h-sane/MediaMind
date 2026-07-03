@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 @dataclass(frozen=True)
@@ -126,6 +126,11 @@ def build_organize_plan(
                 dest_name = None
 
         dest_folder_rel = f"{target_rel}/{dest_folder}"
+
+        # Skip files already in their destination folder — prevents _1 churn on re-run.
+        if PurePosixPath(source_rel).parent.as_posix() == dest_folder_rel:
+            continue
+
         plans.append(
             PlannedMove(
                 source_rel=source_rel,

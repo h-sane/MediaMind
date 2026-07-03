@@ -80,6 +80,16 @@ def make_face_scan_runner(
                     content_hashes.append(None)
                 ctx.report_progress(i + 1, total, "hashing")
 
+            # Prune stale faces for paths no longer on disk (external moves/deletes).
+            seen_file_ids = {fid for fid in file_ids if fid is not None}
+            if seen_file_ids:
+                placeholders = ",".join("?" * len(seen_file_ids))
+                conn.execute(
+                    f"DELETE FROM faces WHERE provider_id = ? AND file_id NOT IN ({placeholders})",
+                    [provider_id, *seen_file_ids],
+                )
+                conn.commit()
+
             # phase 2: detect faces (cache-first, per-file commits for resume)
             file_faces_list: list[FileFaces] = []
             no_face_files = 0
@@ -129,7 +139,9 @@ def make_face_scan_runner(
                         )
                         for fr in mf.faces
                     ]
-                    put_cached_faces(conn, content_hash, provider_id, cached_faces)
+                    # Only cache successful decodes — failures should be retried on the next scan.
+                    if mf.decoded_ok:
+                        put_cached_faces(conn, content_hash, provider_id, cached_faces)
                     # update decoded_ok in the files row
                     try:
                         stat = scanned.path.stat()

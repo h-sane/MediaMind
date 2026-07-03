@@ -108,19 +108,22 @@ export function OrganizeScreen({ libraryId }: Props): React.JSX.Element {
   const lastAction = audit?.find((a) => !a.dry_run && !a.undone && a.ok)
 
   const handleDryRun = () => {
-    execute.mutate(true, {
+    execute.mutate({ dryRun: true }, {
       onSuccess: (data) => setResult(data),
     })
   }
 
   const handleExecute = () => {
-    execute.mutate(false, {
-      onSuccess: (data) => {
-        setResult(data)
-        setShowConfirm(false)
-        if (data.ok && !data.dry_run) setShowRescanNotice(true)
-      },
-    })
+    execute.mutate(
+      { dryRun: false, expectedPlanned: preview?.planned },
+      {
+        onSuccess: (data) => {
+          setResult(data)
+          setShowConfirm(false)
+          if (data.ok && !data.dry_run) setShowRescanNotice(true)
+        },
+      }
+    )
   }
 
   const handleUndo = () => {
@@ -266,7 +269,7 @@ export function OrganizeScreen({ libraryId }: Props): React.JSX.Element {
                 disabled={execute.isPending}
                 className="rounded-lg border border-zinc-200 px-4 py-2 text-sm text-zinc-600 hover:bg-zinc-50 disabled:opacity-50"
               >
-                {execute.isPending && execute.variables === true ? 'Running…' : 'Dry run'}
+                {execute.isPending && execute.variables?.dryRun === true ? 'Running…' : 'Dry run'}
               </button>
               <button
                 onClick={() => setShowConfirm(true)}

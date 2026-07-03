@@ -241,9 +241,10 @@ export function useOrganizePreview(libraryId: string) {
 export function useOrganizeExecute(libraryId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (dryRun: boolean) => api.organize.execute(libraryId, dryRun),
-    onSuccess: (_data, dryRun) => {
-      if (!dryRun) {
+    mutationFn: ({ dryRun, expectedPlanned }: { dryRun: boolean; expectedPlanned?: number }) =>
+      api.organize.execute(libraryId, dryRun, expectedPlanned),
+    onSuccess: (_data, vars) => {
+      if (!vars.dryRun) {
         qc.invalidateQueries({ queryKey: ['organize-preview', libraryId] })
         qc.invalidateQueries({ queryKey: ['organize-audit', libraryId] })
       }

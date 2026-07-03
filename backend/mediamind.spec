@@ -48,8 +48,10 @@ hiddenimports = [
     "sklearn.neighbors",
     "sklearn.utils",
     "sklearn.utils._cython_blas",
+    "sklearn.utils._typedefs",
     "sklearn.neighbors._typedefs",
     "sklearn.neighbors._quad_tree",
+    "sklearn.neighbors._partition_nodes",
     "sklearn.tree._utils",
     # OpenCV
     "cv2",
@@ -64,6 +66,10 @@ hiddenimports = [
     # Image handling
     "PIL",
     "PIL.Image",
+    "pillow_heif",
+    # send2trash (used for safe file deletion)
+    "send2trash",
+    "send2trash.plat_win",
     # Mediamind itself (all submodules)
     "mediamind",
     "mediamind.api",
@@ -90,7 +96,9 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "matplotlib", "test", "tests", "unittest"],
+    # Only exclude pure-GUI/viz packages — do NOT exclude 'unittest' or 'test'
+    # as those prefixes match packages needed by numpy, sklearn, etc.
+    excludes=["tkinter", "matplotlib", "_tkinter", "wx", "PyQt5", "PyQt6"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -108,7 +116,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,  # UPX can corrupt ONNX/OpenCV DLLs on Windows — keep off
     console=True,  # backend is a server, not a GUI app
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -123,7 +131,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name="mediamind",
 )

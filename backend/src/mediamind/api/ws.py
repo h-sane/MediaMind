@@ -23,16 +23,18 @@ from mediamind.core.jobs import Job, JobManager
 
 def _job_to_msg(job: Job) -> str:
     return json.dumps({
-        "type": "job",
-        "job_id": job.id,
+        "msg_type": "job",  # envelope discriminator (avoids collision with job.type)
+        "id": job.id,
         "library_id": job.library_id,
-        "job_type": job.type,
+        "type": job.type,
         "state": job.state,
         "phase": job.phase,
         "done": job.done,
         "total": job.total,
         "error": job.error,
         "result": job.result,
+        "created_at": job.created_at,
+        "finished_at": job.finished_at,
     })
 
 

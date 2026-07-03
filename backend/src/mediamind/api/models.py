@@ -190,6 +190,7 @@ class OrganizePreviewOut(BaseModel):
 
 class OrganizeExecuteIn(BaseModel):
     dry_run: bool = False
+    expected_planned: int | None = None  # safety guard: reject if plan size changed
 
 
 class OrganizeActionOut(BaseModel):

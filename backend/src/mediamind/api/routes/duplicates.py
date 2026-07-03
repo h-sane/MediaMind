@@ -24,6 +24,7 @@ from mediamind.api.models import (
     ResolutionsIn,
 )
 from mediamind.config import library_data_dir
+from mediamind.core.jobs import JobManager
 from mediamind.core.libraries import LibraryRegistry
 from mediamind.core.safety import new_manifest_path, trash
 from mediamind.store.db import library_db_path, open_db
@@ -40,6 +41,10 @@ router = APIRouter(tags=["duplicates"])
 
 def _registry(request: Request) -> LibraryRegistry:
     return request.app.state.registry
+
+
+def _job_manager(request: Request) -> JobManager:
+    return request.app.state.job_manager
 
 
 def _get_library_and_root(request: Request, library_id: str) -> tuple:
@@ -147,6 +152,13 @@ def set_resolutions(library_id: str, body: ResolutionsIn, request: Request):
 
 @router.post("/libraries/{library_id}/duplicates/execute", response_model=ExecutionReportOut)
 def execute_duplicates(library_id: str, body: ExecuteIn, request: Request):
+    running = _job_manager(request).running_for(library_id)
+    if running:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A {running.type} scan is still running — wait for it to finish",
+        )
+
     _, library_root = _get_library_and_root(request, library_id)
     conn = _open_library_db(library_root)
     try:

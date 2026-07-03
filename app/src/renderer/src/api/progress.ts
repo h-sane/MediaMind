@@ -46,13 +46,27 @@ export function useProgressSocket(): void {
       ws.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data as string) as Record<string, unknown>
-          if (msg.type === 'job') {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            useJobsStore.getState().upsert(msg as any)
-            const isTerminal = ['succeeded', 'failed', 'cancelled'].includes(msg.state as string)
+          if (msg.msg_type === 'job') {
+            const snap = {
+              id: msg.id as string,
+              library_id: msg.library_id as string,
+              type: msg.type as string,
+              state: msg.state as 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled',
+              phase: (msg.phase ?? '') as string,
+              done: (msg.done ?? 0) as number,
+              total: (msg.total ?? 0) as number,
+              error: (msg.error ?? '') as string,
+              result: (msg.result ?? null) as Record<string, unknown> | null,
+              created_at: (msg.created_at ?? Date.now() / 1000) as number,
+              finished_at: (msg.finished_at ?? null) as number | null,
+            }
+            useJobsStore.getState().upsert(snap)
+            const isTerminal = ['succeeded', 'failed', 'cancelled'].includes(snap.state)
             if (isTerminal) {
-              qc.invalidateQueries({ queryKey: ['duplicates', msg.library_id as string] })
-              qc.invalidateQueries({ queryKey: ['scan', msg.id as string] })
+              qc.invalidateQueries({ queryKey: ['duplicates', snap.library_id] })
+              qc.invalidateQueries({ queryKey: ['persons', snap.library_id] })
+              qc.invalidateQueries({ queryKey: ['multi-person', snap.library_id] })
+              qc.invalidateQueries({ queryKey: ['providers'] })
             }
           }
         } catch {

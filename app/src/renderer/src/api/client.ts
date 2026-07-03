@@ -303,9 +303,10 @@ export const api = {
   organize: {
     preview: (libraryId: string) =>
       request<OrganizePreview>('POST', `/v1/libraries/${libraryId}/organize/preview`),
-    execute: (libraryId: string, dryRun: boolean) =>
+    execute: (libraryId: string, dryRun: boolean, expectedPlanned?: number) =>
       request<ExecutionReport>('POST', `/v1/libraries/${libraryId}/organize/execute`, {
-        dry_run: dryRun
+        dry_run: dryRun,
+        expected_planned: expectedPlanned ?? null
       }),
     undo: (libraryId: string) =>
       request<{ ok: boolean; handled: number; planned: number; errors: number }>(

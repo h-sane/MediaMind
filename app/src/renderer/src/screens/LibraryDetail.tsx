@@ -1,5 +1,5 @@
 import { useAppStore } from '../stores/app'
-import { useJobsStore, selectJobForLibrary } from '../stores/jobs'
+import { useJobsStore, selectJobForLibrary, selectFailedJobForLibrary } from '../stores/jobs'
 import { useStartScan, useDuplicates, usePersons, useProviders } from '../api/hooks'
 import { ScanProgress } from '../components/ScanProgress'
 import { formatBytes } from '../lib/format'
@@ -18,6 +18,8 @@ export function LibraryDetail({ library }: Props): React.JSX.Element {
   const dedupeJob = selectJobForLibrary(jobs, library.id, 'dedupe')
   const facesJob = selectJobForLibrary(jobs, library.id, 'faces')
   const activeJob = dedupeJob ?? facesJob  // any active job for this library
+  const failedDedupeJob = selectFailedJobForLibrary(jobs, library.id, 'dedupe')
+  const failedFacesJob = selectFailedJobForLibrary(jobs, library.id, 'faces')
 
   const startScan = useStartScan(library.id)
   const { data: dups, isError: dupsError } = useDuplicates(library.id)
@@ -85,8 +87,13 @@ export function LibraryDetail({ library }: Props): React.JSX.Element {
           </div>
         ) : (
           <div>
-            {dupsError && !hasDedupeResults && (
+            {dupsError && !hasDedupeResults && !failedDedupeJob && (
               <p className="mb-3 text-xs text-zinc-400">No previous scan found.</p>
+            )}
+            {failedDedupeJob && (
+              <p className="mb-3 text-sm text-red-600">
+                Last scan failed: {failedDedupeJob.error || 'unknown error'}
+              </p>
             )}
             {startScan.isError && (
               <p className="mb-3 text-sm text-red-600">{startScan.error.message}</p>
@@ -151,8 +158,13 @@ export function LibraryDetail({ library }: Props): React.JSX.Element {
         ) : (
           /* Installed, no scan yet */
           <div>
-            {personsError && !hasPeopleResults && (
+            {personsError && !hasPeopleResults && !failedFacesJob && (
               <p className="mb-3 text-xs text-zinc-400">No previous scan found.</p>
+            )}
+            {failedFacesJob && (
+              <p className="mb-3 text-sm text-red-600">
+                Last scan failed: {failedFacesJob.error || 'unknown error'}
+              </p>
             )}
             <button
               onClick={() => navigate({ name: 'people', libraryId: library.id })}

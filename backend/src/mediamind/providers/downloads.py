@@ -25,7 +25,7 @@ class DownloadCancelled(Exception):
 def _default_opener(url: str, headers: dict) -> io.RawIOBase:
     import urllib.request
     req = urllib.request.Request(url, headers=headers)
-    return urllib.request.urlopen(req)  # type: ignore[return-value]
+    return urllib.request.urlopen(req, timeout=60)  # type: ignore[return-value]
 
 
 def download_file(
@@ -109,17 +109,6 @@ def download_file(
             )
 
     part.rename(dest)
-
-
-def extract_zip(archive: Path, dest_dir: Path) -> None:
-    """Zip-slip-safe extraction: reject entries that resolve outside dest_dir."""
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(archive, "r") as zf:
-        for member in zf.infolist():
-            member_path = (dest_dir / member.filename).resolve()
-            if not str(member_path).startswith(str(dest_dir.resolve())):
-                raise ValueError(f"Zip-slip detected: {member.filename}")
-            zf.extract(member, dest_dir)
 
 
 def _flatten_zip(archive: Path, dest_dir: Path) -> None:

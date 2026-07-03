@@ -34,3 +34,19 @@ export function selectJobByType(
     .filter((j) => j.type === type)
     .sort((a, b) => b.created_at - a.created_at)[0]
 }
+
+/** Most recent terminal (failed/cancelled) job for a library and type. */
+export function selectFailedJobForLibrary(
+  jobs: Record<string, JobSnapshot>,
+  libraryId: string,
+  type: string
+): JobSnapshot | undefined {
+  return Object.values(jobs)
+    .filter(
+      (j) =>
+        j.library_id === libraryId &&
+        j.type === type &&
+        (j.state === 'failed' || j.state === 'cancelled')
+    )
+    .sort((a, b) => (b.finished_at ?? 0) - (a.finished_at ?? 0))[0]
+}
