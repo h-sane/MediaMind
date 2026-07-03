@@ -163,6 +163,7 @@ export interface PersonsOut {
   unassigned_faces: number
   no_face_files: number
   unreadable_files: number
+  pending_count: number
 }
 
 export interface PersonMediaItem {
@@ -171,6 +172,46 @@ export interface PersonMediaItem {
   kind: string
   face_id: number
   bbox: [number, number, number, number]
+}
+
+// ---------------------------------------------------------------------------
+// Organize types (M6)
+// ---------------------------------------------------------------------------
+
+export interface PlannedMove {
+  source_rel: string
+  dest_folder_rel: string
+  person_id: number | null
+  person_name: string | null
+}
+
+export interface OrganizePreview {
+  planned: number
+  by_person: Record<string, number>
+  moves: PlannedMove[]
+}
+
+export interface OrganizeAction {
+  id: number
+  kind: string
+  created_at: number
+  planned: number
+  handled: number
+  ok: boolean
+  dry_run: boolean
+  undone: boolean
+}
+
+// ---------------------------------------------------------------------------
+// Pending match types (M6)
+// ---------------------------------------------------------------------------
+
+export interface PendingMatch {
+  id: number
+  face_id: number
+  person_id: number
+  person_name: string
+  confidence: number
 }
 
 // ---------------------------------------------------------------------------
@@ -237,6 +278,34 @@ export const api = {
     list: () => request<Provider[]>('GET', '/v1/providers'),
     download: (id: string) =>
       request<JobSnapshot>('POST', `/v1/providers/${id}/download`, { license_accepted: true })
+  },
+
+  organize: {
+    preview: (libraryId: string) =>
+      request<OrganizePreview>('POST', `/v1/libraries/${libraryId}/organize/preview`),
+    execute: (libraryId: string, dryRun: boolean) =>
+      request<ExecutionReport>('POST', `/v1/libraries/${libraryId}/organize/execute`, {
+        dry_run: dryRun
+      }),
+    undo: (libraryId: string) =>
+      request<{ ok: boolean; handled: number; planned: number; errors: number }>(
+        'POST',
+        `/v1/libraries/${libraryId}/organize/undo`
+      ),
+    audit: (libraryId: string) =>
+      request<OrganizeAction[]>('GET', `/v1/libraries/${libraryId}/organize/audit`)
+  },
+
+  pending: {
+    list: (libraryId: string) =>
+      request<PendingMatch[]>('GET', `/v1/libraries/${libraryId}/pending`),
+    decide: (
+      libraryId: string,
+      decisions: { pending_id: number; decision: 'confirmed' | 'rejected' }[]
+    ) =>
+      request<{ updated: number }>('POST', `/v1/libraries/${libraryId}/pending/decisions`, {
+        decisions
+      })
   },
 
   persons: {

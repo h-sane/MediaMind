@@ -226,6 +226,74 @@ export function useThumbnailUrl(libraryId: string, memberId: number): string | n
   return url
 }
 
+// ---------------------------------------------------------------------------
+// Organize (M6)
+// ---------------------------------------------------------------------------
+
+export function useOrganizePreview(libraryId: string) {
+  return useQuery({
+    queryKey: ['organize-preview', libraryId],
+    queryFn: () => api.organize.preview(libraryId),
+    retry: false
+  })
+}
+
+export function useOrganizeExecute(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (dryRun: boolean) => api.organize.execute(libraryId, dryRun),
+    onSuccess: (_data, dryRun) => {
+      if (!dryRun) {
+        qc.invalidateQueries({ queryKey: ['organize-preview', libraryId] })
+        qc.invalidateQueries({ queryKey: ['organize-audit', libraryId] })
+      }
+    }
+  })
+}
+
+export function useOrganizeUndo(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.organize.undo(libraryId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['organize-preview', libraryId] })
+      qc.invalidateQueries({ queryKey: ['organize-audit', libraryId] })
+    }
+  })
+}
+
+export function useOrganizeAudit(libraryId: string) {
+  return useQuery({
+    queryKey: ['organize-audit', libraryId],
+    queryFn: () => api.organize.audit(libraryId),
+    retry: false
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Pending matches (M6)
+// ---------------------------------------------------------------------------
+
+export function usePendingMatches(libraryId: string) {
+  return useQuery({
+    queryKey: ['pending', libraryId],
+    queryFn: () => api.pending.list(libraryId),
+    retry: false
+  })
+}
+
+export function useDecidePending(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (decisions: { pending_id: number; decision: 'confirmed' | 'rejected' }[]) =>
+      api.pending.decide(libraryId, decisions),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['pending', libraryId] })
+      qc.invalidateQueries({ queryKey: ['persons', libraryId] })
+    }
+  })
+}
+
 export function useFaceThumbnailUrl(libraryId: string, faceId: number, size = 192): string | null {
   const [url, setUrl] = useState<string | null>(null)
   const urlRef = useRef<string | null>(null)

@@ -124,6 +124,7 @@ function PersonCard({
 
 export function PeopleScreen({ libraryId }: Props): React.JSX.Element {
   const back = useAppStore((s) => s.back)
+  const navigate = useAppStore((s) => s.navigate)
   const jobs = useJobsStore((s) => s.jobs)
   const activeJob = selectJobForLibrary(jobs, libraryId, 'faces')
 
@@ -183,7 +184,23 @@ export function PeopleScreen({ libraryId }: Props): React.JSX.Element {
           )}
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {personsData && personsData.pending_count > 0 && !isScanning && (
+            <button
+              onClick={() => navigate({ name: 'pending-review', libraryId })}
+              className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 transition hover:bg-amber-100"
+            >
+              {personsData.pending_count} pending
+            </button>
+          )}
+          {persons.length > 0 && !isScanning && (
+            <button
+              onClick={() => navigate({ name: 'organize', libraryId })}
+              className="rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-600 transition hover:bg-zinc-50"
+            >
+              Organize
+            </button>
+          )}
           {persons.length >= 2 && !isScanning && (
             <button
               onClick={() => {

@@ -82,6 +82,10 @@ def list_persons(library_id: str, request: Request):
             (provider_id,),
         ).fetchone()[0]
 
+        pending_count = conn.execute(
+            "SELECT COUNT(*) FROM pending_matches WHERE decision IS NULL",
+        ).fetchone()[0]
+
     finally:
         conn.close()
 
@@ -93,6 +97,7 @@ def list_persons(library_id: str, request: Request):
         unassigned_faces=unassigned,
         no_face_files=summary.get("no_face_files", 0),
         unreadable_files=summary.get("unreadable_files", 0),
+        pending_count=pending_count,
     )
 
 

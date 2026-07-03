@@ -150,6 +150,7 @@ class PersonsOut(BaseModel):
     unassigned_faces: int
     no_face_files: int
     unreadable_files: int
+    pending_count: int = 0
 
 
 class PersonRenameIn(BaseModel):
@@ -167,3 +168,56 @@ class PersonMediaItemOut(BaseModel):
     kind: str
     face_id: int
     bbox: tuple[float, float, float, float]
+
+
+# ---------------------------------------------------------------------------
+# Organize (M6)
+# ---------------------------------------------------------------------------
+
+class PlannedMoveOut(BaseModel):
+    source_rel: str
+    dest_folder_rel: str
+    person_id: int | None
+    person_name: str | None
+
+
+class OrganizePreviewOut(BaseModel):
+    planned: int
+    by_person: dict[str, int]   # display label -> file count
+    moves: list[PlannedMoveOut]
+
+
+class OrganizeExecuteIn(BaseModel):
+    dry_run: bool = False
+
+
+class OrganizeActionOut(BaseModel):
+    id: int
+    kind: str
+    created_at: float
+    planned: int
+    handled: int
+    ok: bool
+    dry_run: bool
+    undone: bool
+
+
+# ---------------------------------------------------------------------------
+# Pending matches (M6)
+# ---------------------------------------------------------------------------
+
+class PendingMatchOut(BaseModel):
+    id: int
+    face_id: int
+    person_id: int
+    person_name: str
+    confidence: float
+
+
+class PendingDecisionItem(BaseModel):
+    pending_id: int
+    decision: str   # "confirmed" | "rejected"
+
+
+class PendingDecisionsIn(BaseModel):
+    decisions: list[PendingDecisionItem]

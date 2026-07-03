@@ -133,6 +133,7 @@ def start_scan(library_id: str, body: ScanIn, request: Request):
             lambda: pm.create(provider_id),
             provider_id,
             eps=entry.cluster_eps,
+            pending_for_named=True,
         )
     else:
         raise HTTPException(status_code=422, detail=f"Unknown scan type '{body.type}'")

@@ -80,11 +80,15 @@ def create_app(
     from mediamind.api.routes import duplicates
     from mediamind.api.routes import providers
     from mediamind.api.routes import persons
+    from mediamind.api.routes import organize
+    from mediamind.api.routes import pending
 
     app.include_router(libraries.router, prefix="/v1")
     app.include_router(scans.router, prefix="/v1")
     app.include_router(duplicates.router, prefix="/v1")
     app.include_router(providers.router, prefix="/v1")
     app.include_router(persons.router, prefix="/v1")
+    app.include_router(organize.router, prefix="/v1")
+    app.include_router(pending.router, prefix="/v1")
 
     return app
