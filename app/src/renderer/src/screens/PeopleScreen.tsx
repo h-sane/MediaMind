@@ -185,6 +185,14 @@ export function PeopleScreen({ libraryId }: Props): React.JSX.Element {
         </div>
 
         <div className="flex flex-wrap gap-2">
+          {personsData && personsData.multi_person_count > 0 && !isScanning && (
+            <button
+              onClick={() => navigate({ name: 'multi-person-review', libraryId })}
+              className="rounded-lg border border-violet-300 bg-violet-50 px-3 py-2 text-sm text-violet-800 transition hover:bg-violet-100"
+            >
+              {personsData.multi_person_count} multi-person
+            </button>
+          )}
           {personsData && personsData.pending_count > 0 && !isScanning && (
             <button
               onClick={() => navigate({ name: 'pending-review', libraryId })}

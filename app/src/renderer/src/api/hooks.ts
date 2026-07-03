@@ -294,6 +294,30 @@ export function useDecidePending(libraryId: string) {
   })
 }
 
+// ---------------------------------------------------------------------------
+// Multi-person review (M6 remainder)
+// ---------------------------------------------------------------------------
+
+export function useMultiPersonFiles(libraryId: string) {
+  return useQuery({
+    queryKey: ['multi-person', libraryId],
+    queryFn: () => api.multiPerson.list(libraryId),
+    retry: false
+  })
+}
+
+export function useSetRouteChoices(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (choices: { file_id: number; person_id: number }[]) =>
+      api.multiPerson.setChoices(libraryId, choices),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['multi-person', libraryId] })
+      qc.invalidateQueries({ queryKey: ['organize-preview', libraryId] })
+    }
+  })
+}
+
 export function useFaceThumbnailUrl(libraryId: string, faceId: number, size = 192): string | null {
   const [url, setUrl] = useState<string | null>(null)
   const urlRef = useRef<string | null>(null)

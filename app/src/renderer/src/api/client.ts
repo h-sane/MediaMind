@@ -164,6 +164,7 @@ export interface PersonsOut {
   no_face_files: number
   unreadable_files: number
   pending_count: number
+  multi_person_count: number
 }
 
 export interface PersonMediaItem {
@@ -172,6 +173,25 @@ export interface PersonMediaItem {
   kind: string
   face_id: number
   bbox: [number, number, number, number]
+}
+
+// ---------------------------------------------------------------------------
+// Multi-person types (M6 remainder)
+// ---------------------------------------------------------------------------
+
+export interface PersonOption {
+  person_id: number
+  person_name: string
+  face_count: number
+  sample_face_id: number
+}
+
+export interface MultiPersonFile {
+  file_id: number
+  path: string
+  kind: string
+  persons: PersonOption[]
+  current_choice: number | null
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +326,13 @@ export const api = {
       request<{ updated: number }>('POST', `/v1/libraries/${libraryId}/pending/decisions`, {
         decisions
       })
+  },
+
+  multiPerson: {
+    list: (libraryId: string) =>
+      request<MultiPersonFile[]>('GET', `/v1/libraries/${libraryId}/multi-person`),
+    setChoices: (libraryId: string, choices: { file_id: number; person_id: number }[]) =>
+      request<{ updated: number }>('POST', `/v1/libraries/${libraryId}/route-choices`, { choices })
   },
 
   persons: {

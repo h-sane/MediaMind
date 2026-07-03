@@ -7,6 +7,8 @@ type ProvidersView = { name: 'providers'; libraryId: string }
 type PeopleView = { name: 'people'; libraryId: string }
 type OrganizeView = { name: 'organize'; libraryId: string }
 type PendingReviewView = { name: 'pending-review'; libraryId: string }
+type MultiPersonReviewView = { name: 'multi-person-review'; libraryId: string }
+type AuditView = { name: 'audit'; libraryId: string }
 
 export type View =
   | LibrariesView
@@ -16,9 +18,14 @@ export type View =
   | PeopleView
   | OrganizeView
   | PendingReviewView
+  | MultiPersonReviewView
+  | AuditView
 
 // All views that are "children" of a library view navigate back to that library.
-const LIBRARY_CHILDREN = new Set(['dedupe-review', 'providers', 'people', 'organize', 'pending-review'])
+const LIBRARY_CHILDREN = new Set([
+  'dedupe-review', 'providers', 'people', 'organize',
+  'pending-review', 'multi-person-review', 'audit',
+])
 
 function parentOf(view: View): View {
   if (LIBRARY_CHILDREN.has(view.name)) {

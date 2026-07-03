@@ -86,6 +86,18 @@ def list_persons(library_id: str, request: Request):
             "SELECT COUNT(*) FROM pending_matches WHERE decision IS NULL",
         ).fetchone()[0]
 
+        multi_person_count = conn.execute(
+            """
+            SELECT COUNT(*) FROM (
+                SELECT file_id FROM faces
+                WHERE provider_id = ? AND person_id IS NOT NULL
+                GROUP BY file_id
+                HAVING COUNT(DISTINCT person_id) >= 2
+            )
+            """,
+            (provider_id,),
+        ).fetchone()[0]
+
     finally:
         conn.close()
 
@@ -98,6 +110,7 @@ def list_persons(library_id: str, request: Request):
         no_face_files=summary.get("no_face_files", 0),
         unreadable_files=summary.get("unreadable_files", 0),
         pending_count=pending_count,
+        multi_person_count=multi_person_count,
     )
 
 

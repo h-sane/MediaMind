@@ -10,6 +10,8 @@ import { ProvidersScreen } from './screens/ProvidersScreen'
 import { PeopleScreen } from './screens/PeopleScreen'
 import { OrganizeScreen } from './screens/OrganizeScreen'
 import { PendingReview } from './screens/PendingReview'
+import { MultiPersonReview } from './screens/MultiPersonReview'
+import { AuditScreen } from './screens/AuditScreen'
 import type { Library } from './api/client'
 
 // ---------------------------------------------------------------------------
@@ -29,6 +31,7 @@ function JobInvalidator(): null {
           qc.invalidateQueries({ queryKey: ['persons', job.library_id] })
           qc.invalidateQueries({ queryKey: ['pending', job.library_id] })
           qc.invalidateQueries({ queryKey: ['organize-preview', job.library_id] })
+          qc.invalidateQueries({ queryKey: ['multi-person', job.library_id] })
         } else if (job.type === 'provider-download') {
           qc.invalidateQueries({ queryKey: ['providers'] })
         }
@@ -183,6 +186,12 @@ export default function App(): React.JSX.Element {
         )}
         {view.name === 'pending-review' && (
           <PendingReview libraryId={(view as { libraryId: string }).libraryId} />
+        )}
+        {view.name === 'multi-person-review' && (
+          <MultiPersonReview libraryId={(view as { libraryId: string }).libraryId} />
+        )}
+        {view.name === 'audit' && (
+          <AuditScreen libraryId={(view as { libraryId: string }).libraryId} />
         )}
       </main>
     </div>

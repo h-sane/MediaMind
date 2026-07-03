@@ -7,6 +7,7 @@ import {
   useOrganizeAudit,
 } from '../api/hooks'
 import type { ExecutionReport } from '../api/client'
+import type { View } from '../stores/app'
 
 interface Props {
   libraryId: string
@@ -92,6 +93,7 @@ function ResultBanner({ report, onDismiss }: { report: ExecutionReport; onDismis
 
 export function OrganizeScreen({ libraryId }: Props): React.JSX.Element {
   const back = useAppStore((s) => s.back)
+  const navigate = useAppStore((s) => s.navigate)
 
   const { data: preview, isLoading, isError } = useOrganizePreview(libraryId)
   const { data: audit } = useOrganizeAudit(libraryId)
@@ -279,6 +281,18 @@ export function OrganizeScreen({ libraryId }: Props): React.JSX.Element {
           {undo.isError && (
             <p className="mt-2 text-xs text-red-600">{undo.error.message}</p>
           )}
+        </div>
+      )}
+
+      {/* Audit log link */}
+      {audit && audit.length > 0 && (
+        <div className="mt-3 text-right">
+          <button
+            onClick={() => navigate({ name: 'audit', libraryId } as View)}
+            className="text-xs text-zinc-400 underline hover:text-zinc-600"
+          >
+            View full organize history ({audit.length} action{audit.length !== 1 ? 's' : ''}) →
+          </button>
         </div>
       )}
     </section>

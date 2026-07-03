@@ -151,6 +151,7 @@ class PersonsOut(BaseModel):
     no_face_files: int
     unreadable_files: int
     pending_count: int = 0
+    multi_person_count: int = 0
 
 
 class PersonRenameIn(BaseModel):
@@ -221,3 +222,31 @@ class PendingDecisionItem(BaseModel):
 
 class PendingDecisionsIn(BaseModel):
     decisions: list[PendingDecisionItem]
+
+
+# ---------------------------------------------------------------------------
+# Multi-person review (M6 remainder)
+# ---------------------------------------------------------------------------
+
+class PersonOptionOut(BaseModel):
+    person_id: int
+    person_name: str
+    face_count: int
+    sample_face_id: int  # first face of this person in this file (for thumbnail)
+
+
+class MultiPersonFileOut(BaseModel):
+    file_id: int
+    path: str
+    kind: str
+    persons: list[PersonOptionOut]
+    current_choice: int | None  # person_id from route_choices if already decided
+
+
+class RouteChoiceIn(BaseModel):
+    file_id: int
+    person_id: int
+
+
+class RouteChoicesIn(BaseModel):
+    choices: list[RouteChoiceIn]
