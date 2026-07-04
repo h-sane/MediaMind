@@ -202,6 +202,28 @@ def test_undo_reverses_organize(client, tmp_path):
     assert (lib_dir / "red.jpg").exists()
 
 
+def test_undo_twice_returns_404_second_time(client, tmp_path):
+    """An undo action must not itself be undoable -- otherwise a second call
+    re-applies the original organize instead of reporting nothing to undo.
+    """
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    _make_library(lib_dir)
+    _seed_persons_db(lib_dir, name_alice=True)
+    lib_id = _add_library(client, lib_dir)
+
+    client.post(f"/v1/libraries/{lib_id}/organize/execute", json={"dry_run": False})
+    res = client.post(f"/v1/libraries/{lib_id}/organize/undo")
+    assert res.status_code == 200
+    assert (lib_dir / "red.jpg").exists()
+
+    res2 = client.post(f"/v1/libraries/{lib_id}/organize/undo")
+    assert res2.status_code == 404
+    # And the file must not have been moved back into People/Alice again.
+    assert (lib_dir / "red.jpg").exists()
+    assert not (lib_dir / "People" / "Alice" / "red.jpg").exists()
+
+
 def test_undo_with_no_previous_action_returns_404(client, tmp_path):
     lib_dir = tmp_path / "lib"
     lib_dir.mkdir()

@@ -284,25 +284,29 @@ def persist_face_scan(
             )
             face_db_id = cur.lastrowid
 
-            # M6 pending logic: new file + assigned to a named person → stage as pending
-            # Skip faces the user already rejected (same content_hash + frame_no + person).
+            # M6 pending logic: new file + assigned to a named person → stage as pending.
+            # A face the user already rejected (same content_hash + frame_no +
+            # person) must not be re-asked about, but it must also stay
+            # unassigned rather than silently falling back to assigned_pid —
+            # that person is exactly who the user said this face is NOT.
             was_rejected = (ff.content_hash, cached_face.frame_no, assigned_pid) in rejected_pairs
-            if (
-                pending_for_named
-                and assigned_pid in named_person_ids
-                and ff.file_id in new_file_ids
-                and not was_rejected
-            ):
-                confidence = float(np.dot(cached_face.embedding, cluster_centroids[label]))
-                conn.execute(
-                    "INSERT INTO pending_matches (face_id, person_id, confidence) VALUES (?, ?, ?)",
-                    (face_db_id, assigned_pid, confidence),
-                )
-                conn.execute(
-                    "UPDATE faces SET person_id = NULL WHERE id = ?",
-                    (face_db_id,),
-                )
-                pending_count += 1
+            if pending_for_named and assigned_pid in named_person_ids and ff.file_id in new_file_ids:
+                if was_rejected:
+                    conn.execute(
+                        "UPDATE faces SET person_id = NULL WHERE id = ?",
+                        (face_db_id,),
+                    )
+                else:
+                    confidence = float(np.dot(cached_face.embedding, cluster_centroids[label]))
+                    conn.execute(
+                        "INSERT INTO pending_matches (face_id, person_id, confidence) VALUES (?, ?, ?)",
+                        (face_db_id, assigned_pid, confidence),
+                    )
+                    conn.execute(
+                        "UPDATE faces SET person_id = NULL WHERE id = ?",
+                        (face_db_id,),
+                    )
+                    pending_count += 1
 
             flat_face_idx += 1
 

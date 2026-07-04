@@ -140,4 +140,28 @@ def build_organize_plan(
             )
         )
 
+    # Files that failed to decode never get a `faces` row at all — a failed
+    # decode always yields zero detected faces (engine.extract_file_faces),
+    # and persist_face_scan only inserts a row per detected face. So the
+    # `files JOIN faces` query above can never see them; without this,
+    # undecodable files would silently stay in place forever instead of
+    # routing to the visible _unsorted holding area (safety invariant:
+    # "everything routes somewhere").
+    unsorted_dest = f"{target_rel}/_unsorted"
+    for row in conn.execute("SELECT id, path FROM files WHERE decoded_ok = 0"):
+        fid = int(row["id"])
+        if fid in file_data:
+            continue  # already planned via the faces join above
+        source_rel = row["path"]
+        if PurePosixPath(source_rel).parent.as_posix() == unsorted_dest:
+            continue
+        plans.append(
+            PlannedMove(
+                source_rel=source_rel,
+                dest_folder_rel=unsorted_dest,
+                person_id=None,
+                person_name=None,
+            )
+        )
+
     return sorted(plans, key=lambda m: (m.dest_folder_rel, m.source_rel))

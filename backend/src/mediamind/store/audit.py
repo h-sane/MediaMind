@@ -51,11 +51,18 @@ def record_action(
 
 
 def last_undoable(conn: sqlite3.Connection) -> sqlite3.Row | None:
-    """Return the most recent non-dry-run successful action that hasn't been undone."""
+    """Return the most recent non-dry-run successful action that hasn't been undone.
+
+    Excludes kind='undo' rows: an undo record documents a completed reversal,
+    not a pending one, and there is no redo feature. Without this exclusion,
+    the undo action's own record satisfies undone=0/dry_run=0/ok=1 and a
+    second /organize/undo call would "undo the undo" -- silently re-applying
+    the original move instead of correctly reporting nothing left to undo.
+    """
     return conn.execute(
         """
         SELECT * FROM organize_actions
-        WHERE undone = 0 AND dry_run = 0 AND ok = 1
+        WHERE undone = 0 AND dry_run = 0 AND ok = 1 AND kind != 'undo'
         ORDER BY created_at DESC LIMIT 1
         """
     ).fetchone()

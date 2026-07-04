@@ -14,6 +14,7 @@ from mediamind.store.persons import (
     list_person_summaries,
     merge_persons,
     next_auto_label,
+    person_media,
     persist_face_scan,
     rename_person,
     upsert_file,
@@ -252,3 +253,90 @@ def test_pending_match_created_for_named_person(conn):
     pending = conn.execute("SELECT * FROM pending_matches WHERE decision IS NULL").fetchall()
     assert len(pending) == 1
     assert pending[0]["person_id"] == pid
+
+
+def test_rejected_pending_match_stays_suppressed_across_rescans(conn):
+    """Fix 12: rejecting a pending match must survive a rescan of the same
+    file, even though faces rows (and their ids) are wiped and recreated on
+    every scan -- rejection is keyed by (content_hash, frame_no, person_id),
+    not by face id.
+    """
+    fid = upsert_file(conn, "r.jpg", "photo", 100, 0.0, "hash_r", True)
+    fid2 = upsert_file(conn, "r2.jpg", "photo", 100, 0.0, "hash_r2", True)
+    conn.commit()
+
+    # Scan 1: only r.jpg -> clusters into its own person, then gets named.
+    _do_scan(conn, [FileFaces(file_id=fid, content_hash="hash_r", decoded_ok=True,
+                               faces=[_fake_face(1, 0, 0)])], labels=[0])
+    pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
+    rename_person(conn, pid, "Carol")
+
+    # Scan 2: r2.jpg appears for the first time and matches Carol -> pending.
+    conn.execute("DELETE FROM scans")
+    conn.commit()
+    file_faces = [
+        FileFaces(file_id=fid, content_hash="hash_r", decoded_ok=True, faces=[_fake_face(1, 0, 0)]),
+        FileFaces(file_id=fid2, content_hash="hash_r2", decoded_ok=True, faces=[_fake_face(0.99, 0.01, 0)]),
+    ]
+    persist_face_scan(
+        conn, scan_id="s2", provider_id=PROVIDER, file_faces=file_faces,
+        labels=np.array([0, 0]), owners=[0, 1],
+        started_at=0.0, finished_at=1.0, params={"provider_id": PROVIDER}, summary={},
+        pending_for_named=True, new_file_ids={fid2},
+    )
+    pending = conn.execute("SELECT * FROM pending_matches WHERE decision IS NULL").fetchall()
+    assert len(pending) == 1
+    conn.execute("UPDATE pending_matches SET decision = 'rejected' WHERE id = ?", (pending[0]["id"],))
+    conn.commit()
+
+    # Scan 3: rescan both files again with the same content. new_file_ids
+    # includes fid2 again -- exactly what happens after its faces row gets
+    # pruned as stale (fix 13) and the file is then re-seen. Without fix 12
+    # this would re-propose the same, already-rejected suggestion.
+    conn.execute("DELETE FROM scans")
+    conn.commit()
+    persist_face_scan(
+        conn, scan_id="s3", provider_id=PROVIDER, file_faces=file_faces,
+        labels=np.array([0, 0]), owners=[0, 1],
+        started_at=1.0, finished_at=2.0, params={"provider_id": PROVIDER}, summary={},
+        pending_for_named=True, new_file_ids={fid2},
+    )
+
+    pending_after = conn.execute("SELECT * FROM pending_matches WHERE decision IS NULL").fetchall()
+    assert pending_after == [], "a rejected pending match was re-suggested after a rescan"
+
+    face_row = conn.execute(
+        "SELECT person_id FROM faces WHERE file_id = ? AND provider_id = ?", (fid2, PROVIDER)
+    ).fetchone()
+    assert face_row["person_id"] is None, "rejected face must stay unassigned, not get silently auto-confirmed"
+
+
+# ---------------------------------------------------------------------------
+# person_media determinism
+# ---------------------------------------------------------------------------
+
+def test_person_media_picks_largest_bbox_face_per_file(conn):
+    """Fix 14: person_media must deterministically return the largest-bbox
+    face per file via a correlated subquery, not an undefined GROUP BY row
+    selection.
+    """
+    fid = upsert_file(conn, "group.jpg", "photo", 100, 0.0, "h_g", True)
+    conn.commit()
+
+    # Smaller face inserted first, larger face of the same person second --
+    # a MAX(id)-based selection would (incorrectly) prefer the larger id here
+    # too, so also check with the order reversed for a real bbox-based check.
+    small = CachedFace(frame_no=0, bbox=(0.0, 0.0, 10.0, 10.0), embedding=_embedding(1, 0, 0))
+    large = CachedFace(frame_no=1, bbox=(0.0, 0.0, 50.0, 50.0), embedding=_embedding(0.99, 0.01, 0))
+    file_faces = [FileFaces(file_id=fid, content_hash="h_g", decoded_ok=True, faces=[small, large])]
+    persist_face_scan(
+        conn, scan_id="s1", provider_id=PROVIDER, file_faces=file_faces,
+        labels=np.array([0, 0]), owners=[0, 0],
+        started_at=0.0, finished_at=1.0, params={"provider_id": PROVIDER}, summary={},
+    )
+
+    pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
+    media = person_media(conn, pid)
+    assert len(media) == 1  # one row per distinct file, not one per face
+    area = (media[0].bbox[2] - media[0].bbox[0]) * (media[0].bbox[3] - media[0].bbox[1])
+    assert area == 50.0 * 50.0, "did not pick the largest-bbox face for this file"

@@ -25,6 +25,9 @@ app/release/
 models/downloads/
 *.onnx
 
+# Personal test media (real photos/videos used for manual E2E testing — never commit)
+/test/
+
 # OS / editor
 .DS_Store
 Thumbs.db

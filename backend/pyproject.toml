@@ -42,4 +42,5 @@ testpaths = ["tests"]
 addopts = "-q"
 markers = [
     "integration: tests that need real ML models (deselect with '-m \"not integration\"')",
+    "real_media: manual smoke test against the local test/ folder of real photos/videos (deselect with '-m \"not real_media\"')",
 ]

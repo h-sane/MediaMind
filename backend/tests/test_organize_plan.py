@@ -175,6 +175,67 @@ def test_plan_unreadable_file_goes_to_unsorted(conn):
     assert any("_unsorted" in m.dest_folder_rel for m in moves)
 
 
+def test_plan_routes_real_decode_failure_to_unsorted(conn):
+    """Regression test: a real decode failure never gets a `faces` row at all
+    (extract_file_faces always returns faces=[] when decoded_ok=False, and
+    persist_face_scan only inserts rows for detected faces) — so the file
+    must be picked up via files.decoded_ok directly, not via the faces JOIN.
+
+    Unlike test_plan_unreadable_file_goes_to_unsorted (which manually inserts
+    a faces row that the real pipeline never creates), this exercises the
+    actual persist_face_scan code path for a decode failure.
+    """
+    # Mirrors the real scan runner: phase 1 upserts with decoded_ok=None,
+    # phase 2 upserts again with the actual (failed) decode result.
+    fid = upsert_file(conn, "bad.jpg", "photo", 100, 0.0, "h_bad", None)
+    conn.commit()
+    upsert_file(conn, "bad.jpg", "photo", 100, 0.0, "h_bad", False)
+    conn.commit()
+
+    ff = [FileFaces(file_id=fid, content_hash="h_bad", decoded_ok=False, faces=[])]
+    _do_scan(conn, ff, labels=[])
+
+    # persist_face_scan must not have created any faces row for this file.
+    face_rows = conn.execute("SELECT COUNT(*) FROM faces WHERE file_id = ?", (fid,)).fetchone()[0]
+    assert face_rows == 0
+
+    moves = build_organize_plan(conn, PROVIDER)
+    assert len(moves) == 1
+    assert moves[0].source_rel == "bad.jpg"
+    assert "_unsorted" in moves[0].dest_folder_rel
+
+
+def test_plan_skips_decode_failure_already_in_unsorted(conn):
+    fid = upsert_file(conn, "People/_unsorted/bad.jpg", "photo", 100, 0.0, "h_bad2", None)
+    conn.commit()
+    upsert_file(conn, "People/_unsorted/bad.jpg", "photo", 100, 0.0, "h_bad2", False)
+    conn.commit()
+    ff = [FileFaces(file_id=fid, content_hash="h_bad2", decoded_ok=False, faces=[])]
+    _do_scan(conn, ff, labels=[])
+
+    moves = build_organize_plan(conn, PROVIDER)
+    assert moves == []
+
+
+def test_plan_skips_named_person_file_already_in_place(conn):
+    """Fix 3: a file already sitting in its destination folder must not be
+    re-planned -- otherwise re-running organize on an already-organized
+    library churns out file_1.jpg/file_2.jpg duplicates.
+    """
+    fid = upsert_file(conn, "People/Alice/alice.jpg", "photo", 100, 0.0, "h_a", True)
+    conn.commit()
+
+    ff = [FileFaces(file_id=fid, content_hash="h_a", decoded_ok=True, faces=[_face(1, 0, 0)])]
+    _do_scan(conn, ff, [0])
+
+    pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
+    conn.execute("UPDATE persons SET name = 'Alice' WHERE id = ?", (pid,))
+    conn.commit()
+
+    moves = build_organize_plan(conn, PROVIDER)
+    assert moves == []
+
+
 def test_plan_custom_target_rel(conn):
     fid = upsert_file(conn, "r.jpg", "photo", 100, 0.0, "h_r", True)
     conn.commit()
