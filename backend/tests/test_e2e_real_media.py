@@ -123,16 +123,15 @@ def _stage_library(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def real_provider_manager():
-    """ProviderManager rooted at the real ~/.insightface dir.
+    """ProviderManager using the real ~/.insightface cache.
 
-    buffalo_l is already downloaded there (from earlier prototype work) --
-    root/models/buffalo_l is exactly where InsightFace's own default lookup
-    finds it, so no copy or download is needed. mark_installed() just writes
-    the bookkeeping marker MediaMind's own download flow would have written.
+    buffalo_l is already downloaded there (from earlier prototype work).
+    insightface_pack entries resolve to InsightFace's own cache root by
+    default, and is_installed() checks the real .onnx files — so the pack
+    counts as installed with no marker and no download.
     """
     pm = ProviderManager(INSIGHTFACE_ROOT, catalog=CATALOG)
-    if not pm.is_installed(PROVIDER_ID):
-        pm.mark_installed(PROVIDER_ID)
+    assert pm.is_installed(PROVIDER_ID), "buffalo_l files present but not detected"
     return pm
 
 

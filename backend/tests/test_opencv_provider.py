@@ -89,8 +89,12 @@ def test_manager_creates_opencv_provider(tmp_path):
     )
     pm = ProviderManager(tmp_path, catalog=[entry])
 
-    # Mark as installed so create() doesn't raise
-    pm.mark_installed("opencv-yunet-sface")
+    # "Installed" means the real model files exist on disk (the marker alone
+    # is not enough) — create them so create() doesn't raise.
+    model_dir = tmp_path / "models/opencv-yunet-sface"
+    model_dir.mkdir(parents=True)
+    (model_dir / "face_detection_yunet_2023mar.onnx").write_bytes(b"fake")
+    (model_dir / "face_recognition_sface_2021dec.onnx").write_bytes(b"fake")
 
     provider = pm.create("opencv-yunet-sface")
     assert isinstance(provider, OpenCVYuNetSFaceProvider)

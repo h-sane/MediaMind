@@ -92,6 +92,34 @@ def test_one_running_job_per_library():
     jm.cancel(job.id)
 
 
+def test_running_for_type_filter():
+    """Same-type jobs are reported as active; different types are not."""
+
+    def blocking_runner(ctx):
+        while not ctx.cancelled():
+            time.sleep(0.005)
+        return {}
+
+    jm = _make_manager()
+    job = jm.start("lib1", "dedupe", blocking_runner)
+    _wait_for(job, {"running"})
+    assert jm.running_for("lib1") is not None            # no filter: any type matches
+    assert jm.running_for("lib1", "dedupe") is not None  # same type matches
+    assert jm.running_for("lib1", "faces") is None       # different type does not
+    assert jm.running_for("lib2", "dedupe") is None      # different library
+    jm.cancel(job.id)
+    _wait_for(job, {"cancelled"})
+
+
+def test_running_for_includes_queued_jobs():
+    """A job that has not flipped to 'running' yet still blocks a double-submit."""
+    jm = JobManager()
+    jm._jobs["j1"] = Job(id="j1", library_id="lib1", type="dedupe", state="queued")
+    assert jm.running_for("lib1") is not None
+    assert jm.running_for("lib1", "dedupe") is not None
+    assert jm.running_for("lib1", "faces") is None
+
+
 def test_cancel_idempotent_on_terminal_job():
     jm = _make_manager()
     job = jm.start("lib1", "dedupe", lambda ctx: {})

@@ -75,13 +75,6 @@ def list_duplicates(library_id: str, request: Request):
     if scan is None:
         raise HTTPException(status_code=404, detail="No duplicate scan found — run a scan first")
 
-    summary_data = scan.summary or {}
-    summary = DuplicatesSummary(
-        groups=summary_data.get("groups", len(scan.groups)),
-        files=summary_data.get("files", sum(len(g.files) for g in scan.groups)),
-        reclaimable_bytes=summary_data.get("reclaimable_bytes", 0),
-    )
-
     groups = [
         DuplicateGroupOut(
             id=g.id,
@@ -99,10 +92,24 @@ def list_duplicates(library_id: str, request: Request):
                     resolution=m.resolution,
                 )
                 for m in g.files
+                # Already-executed files are gone from disk — never show them
+                # again, or a re-click on a "gone" tile reports a confusing
+                # "already deleted" error from the execute endpoint.
+                if m.resolution != "trashed"
             ],
         )
         for g in scan.groups
     ]
+    # A group needs 2+ files to still be a "duplicate" — once execute() has
+    # trashed enough members that only the keeper (or nothing) is left, the
+    # group is resolved and drops out of the review list entirely.
+    groups = [g for g in groups if len(g.files) >= 2]
+
+    summary = DuplicatesSummary(
+        groups=len(groups),
+        files=sum(len(g.files) for g in groups),
+        reclaimable_bytes=sum(f.size for g in groups for f in g.files if not f.suggested_keep),
+    )
 
     return DuplicatesOut(
         scan_id=scan.id,

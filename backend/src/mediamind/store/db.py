@@ -171,6 +171,11 @@ def open_db(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    # Concurrent jobs (e.g. a dedupe scan and a face scan) each open their own
+    # connection to this file. WAL lets readers and the single active writer
+    # coexist; the generous busy timeout makes a second writer wait for the
+    # other's transaction instead of failing with "database is locked".
+    conn.execute("PRAGMA busy_timeout = 30000")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(_V1_SCHEMA)

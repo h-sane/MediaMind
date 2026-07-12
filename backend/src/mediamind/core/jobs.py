@@ -2,24 +2,31 @@
 
 One daemon thread per job; cooperative cancellation via threading.Event.
 Jobs are ephemeral (in-memory); results are written to SQLite by the runner.
-Enforce one running job per library — the caller gets 409 otherwise.
+Concurrency policy: at most one active job of a given *type* per library
+(two dedupe scans can't overlap, but a dedupe scan and a face scan can —
+they touch disjoint tables and only read the filesystem). Destructive
+operations (organize, trash) still refuse to start while ANY job is active
+for the library via `running_for(library_id)` with no type filter.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Callable
 
+logger = logging.getLogger("mediamind.jobs")
+
 
 @dataclass
 class Job:
     id: str
     library_id: str
-    type: str   # "dedupe"
+    type: str   # "dedupe" | "faces" | "provider-download"
     state: str  # queued | running | succeeded | failed | cancelled
     phase: str = ""
     done: int = 0
@@ -94,11 +101,24 @@ class JobManager:
     def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)
 
-    def running_for(self, library_id: str) -> Job | None:
+    def running_for(self, library_id: str, job_type: str | None = None) -> Job | None:
+        """Return an active (queued or running) job for this library, if any.
+
+        job_type=None matches any type — used by guards that must block on all
+        activity (organize/trash execute). Pass a type to only match same-type
+        jobs, which lets independent scan types run concurrently. "queued" is
+        included so a double-submit can't slip in before the worker thread
+        flips the state to "running".
+        """
         with self._lock:
             for job in self._jobs.values():
-                if job.library_id == library_id and job.state == "running":
-                    return job
+                if job.library_id != library_id:
+                    continue
+                if job.state not in ("queued", "running"):
+                    continue
+                if job_type is not None and job.type != job_type:
+                    continue
+                return job
         return None
 
     def active_jobs(self) -> list[Job]:
@@ -175,6 +195,7 @@ class JobManager:
         except Exception as exc:
             job.state = "failed"
             job.error = str(exc)
+            logger.exception("Job %s (type=%s, library=%s) failed", job.id, job.type, job.library_id)
         finally:
             job.finished_at = time.time()
             try:

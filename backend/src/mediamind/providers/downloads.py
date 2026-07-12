@@ -150,7 +150,10 @@ def make_download_runner(
     """Build a JobManager runner that downloads, verifies, and extracts a provider."""
 
     def runner(ctx: JobContext) -> dict:
-        models_root = manager._root
+        # insightface_pack entries install into InsightFace's own cache root
+        # (shared, single copy on disk); other kinds into MediaMind's private
+        # models dir. See ProviderManager.root_for.
+        models_root = manager.root_for(entry)
         extract_dir = models_root / entry.extract_subdir
         extract_dir.mkdir(parents=True, exist_ok=True)
 

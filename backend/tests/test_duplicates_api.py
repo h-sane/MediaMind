@@ -258,6 +258,36 @@ def test_vanished_file_produces_error_not_blind_trash(lib_with_dups, client, tmp
 # Execute — manifest written
 # ---------------------------------------------------------------------------
 
+def test_executed_group_disappears_from_list(lib_with_dups, client):
+    """Regression: after a real (non-dry-run) execute, the trashed file and
+    its now-resolved group must never reappear in GET /duplicates — a stale
+    UI can't offer a re-click on a file that's already gone from disk.
+    """
+    lib_id, lib_dir, a, b = lib_with_dups
+    ids = _member_ids(client, lib_id)
+    client.post(
+        f"/v1/libraries/{lib_id}/duplicates/resolutions",
+        json={"resolutions": [
+            {"file_id": ids[0], "action": "keep"},
+            {"file_id": ids[1], "action": "trash"},
+        ]},
+    )
+    res = client.post(
+        f"/v1/libraries/{lib_id}/duplicates/execute",
+        json={"dry_run": False, "expected_trash_count": 1},
+    )
+    assert res.status_code == 200
+    assert res.json()["ok"]
+
+    dups = client.get(f"/v1/libraries/{lib_id}/duplicates").json()
+    all_ids = [f["id"] for g in dups["groups"] for f in g["files"]]
+    assert ids[1] not in all_ids, "trashed file must not reappear in the review list"
+    # Only one file is left in the group (the keeper) — it's no longer a
+    # "duplicate" group at all, so the group itself must be gone too.
+    assert dups["groups"] == []
+    assert dups["summary"]["groups"] == 0
+
+
 def test_manifest_written_on_execute(lib_with_dups, client):
     lib_id, lib_dir, a, b = lib_with_dups
     ids = _member_ids(client, lib_id)

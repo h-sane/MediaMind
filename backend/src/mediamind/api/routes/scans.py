@@ -104,8 +104,14 @@ def start_scan(library_id: str, body: ScanIn, request: Request):
         raise HTTPException(status_code=404, detail="Unknown library")
 
     jm = _job_manager(request)
-    if jm.running_for(library_id) is not None:
-        raise HTTPException(status_code=409, detail="A scan is already running for this library")
+    # Same-type guard only: a dedupe scan and a face scan are independent
+    # (disjoint DB tables, read-only filesystem walks) and may run
+    # concurrently; two scans of the same type may not.
+    if jm.running_for(library_id, body.type) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A {body.type} scan is already running for this library",
+        )
 
     if body.type == "dedupe":
         runner = _make_dedupe_runner(Path(lib.path), body.near_threshold)
