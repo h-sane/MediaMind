@@ -8,6 +8,7 @@
 import { spawn, ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { app } from 'electron'
+import { logLine } from './log'
 
 export interface BackendInfo {
   port: number
@@ -42,6 +43,7 @@ function waitForPort(proc: ChildProcess): Promise<number> {
     )
     let buffer = ''
     proc.stdout!.on('data', (chunk: Buffer) => {
+      logLine('engine:stdout', chunk.toString())
       buffer += chunk.toString()
       const match = buffer.match(/MEDIAMIND_PORT=(\d+)/)
       if (match) {
@@ -88,6 +90,7 @@ export async function startBackend(): Promise<BackendInfo> {
   })
   proc.stderr!.on('data', (chunk: Buffer) => {
     console.log(`[engine] ${chunk.toString().trimEnd()}`)
+    logLine('engine:stderr', chunk.toString())
   })
   child = proc
 
@@ -95,11 +98,13 @@ export async function startBackend(): Promise<BackendInfo> {
   await waitForHealth(port, token)
   info = { port, token }
   console.log(`[engine] ready on 127.0.0.1:${port}`)
+  logLine('main', `engine ready on 127.0.0.1:${port}`)
 
   // Monitor post-startup exit so we don't silently lose the engine.
   proc.on('exit', (code, signal) => {
     if (info) {
       console.error(`[engine] exited unexpectedly (code=${code} signal=${signal})`)
+      logLine('main', `engine exited unexpectedly (code=${code} signal=${signal})`)
       info = null
       child = null
     }
