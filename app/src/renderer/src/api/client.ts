@@ -23,16 +23,26 @@ export async function connectBackend(): Promise<BackendInfo> {
   })
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const { port, token } = await connectBackend()
-  const res = await fetch(`http://127.0.0.1:${port}${path}`, {
-    method,
-    headers: {
-      'X-MediaMind-Token': token,
-      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {})
-    },
-    body: body !== undefined ? JSON.stringify(body) : undefined
-  })
+  let res: Response
+  try {
+    res = await fetch(`http://127.0.0.1:${port}${path}`, {
+      method,
+      headers: {
+        'X-MediaMind-Token': token,
+        ...(body !== undefined ? { 'Content-Type': 'application/json' } : {})
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    window.mediamind.logError(
+      'api',
+      `${method} ${path} (port ${port}): network error — ${message}`
+    )
+    throw err
+  }
   if (!res.ok) {
     let detail = res.statusText
     try {
@@ -40,6 +50,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     } catch {
       /* non-JSON error body */
     }
+    window.mediamind.logError('api', `${method} ${path} -> ${res.status}: ${detail}`)
     throw new Error(detail)
   }
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T)
@@ -119,6 +130,136 @@ export interface ExecutionReport {
   dry_run: boolean
   manifest_path: string | null
   entries: ManifestEntry[]
+}
+
+// ---------------------------------------------------------------------------
+// Library file browser types (live, filesystem-first)
+// ---------------------------------------------------------------------------
+
+export interface FileEntry {
+  path: string // relative to library root, forward-slash
+  kind: 'image' | 'gif' | 'video' | 'audio' | 'other'
+  size: number
+  mtime: number
+}
+
+export interface LibraryFiles {
+  library_id: string
+  root: string
+  total: number
+  files: FileEntry[]
+}
+
+// ---------------------------------------------------------------------------
+// Explorer shell (whole-filesystem browsing, library-free)
+// ---------------------------------------------------------------------------
+
+export interface Drive {
+  path: string // e.g. "C:\\"
+  label: string // e.g. "Local Disk (C:)"
+}
+
+export interface BrowseFolder {
+  name: string
+  path: string // absolute
+  has_media: boolean | null // null = not yet known, checking in background
+  mtime: number
+  created: number | null // epoch seconds; null if the OS can't report it
+  accessed: number | null
+  read_only: boolean | null
+  hidden: boolean | null
+  system: boolean | null
+}
+
+export interface BrowseFile {
+  name: string
+  path: string // absolute
+  kind: 'image' | 'gif' | 'video' | 'audio'
+  size: number
+  mtime: number
+  created: number | null // epoch seconds; null if the OS can't report it
+  accessed: number | null
+  read_only: boolean | null
+  hidden: boolean | null
+  system: boolean | null
+}
+
+export interface BrowseDir {
+  path: string
+  folders: BrowseFolder[]
+  files: BrowseFile[]
+}
+
+// ---------------------------------------------------------------------------
+// Explorer shell — file operations (M12 Phase B)
+// ---------------------------------------------------------------------------
+
+export interface FsUndoResult {
+  ok: boolean
+  kind: string | null
+  message: string
+}
+
+export interface FsRedoResult {
+  ok: boolean
+  kind: string | null
+  message: string
+}
+
+// ---------------------------------------------------------------------------
+// Explorer shell — metadata + Quick Access (M12 Phase C)
+// ---------------------------------------------------------------------------
+
+export interface BrowseMetadata {
+  path: string
+  name: string
+  kind: 'image' | 'gif' | 'video' | 'audio'
+  size: number
+  mtime: number
+  width: number | null
+  height: number | null
+  duration_seconds: number | null // video only; always null for image/gif/audio
+  created: number | null
+  accessed: number | null
+  read_only: boolean | null
+  hidden: boolean | null
+  system: boolean | null
+  owner: string | null
+}
+
+export interface FolderStats {
+  path: string
+  item_count: number | null // null = not yet known, computing in background
+  total_bytes: number | null
+}
+
+export interface DiskUsage {
+  path: string
+  total_bytes: number
+  used_bytes: number
+  free_bytes: number
+}
+
+export interface QuickAccessEntry {
+  path: string
+  name: string
+}
+
+export interface QuickAccessList {
+  pins: QuickAccessEntry[]
+}
+
+export interface RecentFile {
+  path: string
+  name: string
+  kind: string
+  size: number
+  mtime: number
+  opened_at: number
+}
+
+export interface RecentFilesList {
+  files: RecentFile[]
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +386,109 @@ export const api = {
     list: () => request<Library[]>('GET', '/v1/libraries'),
     add: (path: string) => request<Library>('POST', '/v1/libraries', { path }),
     remove: (id: string) => request<void>('DELETE', `/v1/libraries/${id}`)
+  },
+
+  files: {
+    list: (libraryId: string) =>
+      request<LibraryFiles>('GET', `/v1/libraries/${libraryId}/files`),
+
+    thumbnailUrl: async (libraryId: string, path: string, size = 256): Promise<string> => {
+      const { port, token } = await connectBackend()
+      const res = await fetch(
+        `http://127.0.0.1:${port}/v1/libraries/${libraryId}/files/thumbnail?path=${encodeURIComponent(path)}&size=${size}`,
+        { headers: { 'X-MediaMind-Token': token } }
+      )
+      if (!res.ok) throw new Error('Thumbnail unavailable')
+      return URL.createObjectURL(await res.blob())
+    },
+
+    rawUrl: async (libraryId: string, path: string): Promise<string> => {
+      const { port, token } = await connectBackend()
+      const res = await fetch(
+        `http://127.0.0.1:${port}/v1/libraries/${libraryId}/files/raw?path=${encodeURIComponent(path)}`,
+        { headers: { 'X-MediaMind-Token': token } }
+      )
+      if (!res.ok) throw new Error('File unavailable')
+      return URL.createObjectURL(await res.blob())
+    }
+  },
+
+  fs: {
+    drives: () => request<Drive[]>('GET', '/v1/fs/drives'),
+
+    list: (path: string) =>
+      request<BrowseDir>('GET', `/v1/fs/list?path=${encodeURIComponent(path)}`),
+
+    thumbnailUrl: async (path: string, size = 256): Promise<string> => {
+      const { port, token } = await connectBackend()
+      const res = await fetch(
+        `http://127.0.0.1:${port}/v1/fs/thumbnail?path=${encodeURIComponent(path)}&size=${size}`,
+        { headers: { 'X-MediaMind-Token': token } }
+      )
+      if (!res.ok) throw new Error('Thumbnail unavailable')
+      return URL.createObjectURL(await res.blob())
+    },
+
+    rawUrl: async (path: string): Promise<string> => {
+      const { port, token } = await connectBackend()
+      const res = await fetch(
+        `http://127.0.0.1:${port}/v1/fs/raw?path=${encodeURIComponent(path)}`,
+        { headers: { 'X-MediaMind-Token': token } }
+      )
+      if (!res.ok) throw new Error('File unavailable')
+      return URL.createObjectURL(await res.blob())
+    },
+
+    metadata: (path: string) =>
+      request<BrowseMetadata>('GET', `/v1/fs/metadata?path=${encodeURIComponent(path)}`),
+
+    folderStats: (path: string) =>
+      request<FolderStats>('GET', `/v1/fs/folder-stats?path=${encodeURIComponent(path)}`),
+
+    diskUsage: (path: string) =>
+      request<DiskUsage>('GET', `/v1/fs/disk-usage?path=${encodeURIComponent(path)}`),
+
+    quickAccess: {
+      list: () => request<QuickAccessList>('GET', '/v1/fs/quick-access'),
+      pin: (path: string) => request<QuickAccessList>('POST', '/v1/fs/quick-access', { path }),
+      unpin: (path: string) =>
+        request<QuickAccessList>('DELETE', `/v1/fs/quick-access?path=${encodeURIComponent(path)}`),
+      reorder: (paths: string[]) =>
+        request<QuickAccessList>('PUT', '/v1/fs/quick-access/reorder', { paths })
+    },
+
+    recent: {
+      list: () => request<RecentFilesList>('GET', '/v1/fs/recent'),
+      record: (path: string) => request<RecentFilesList>('POST', '/v1/fs/recent', { path })
+    }
+  },
+
+  fsOps: {
+    newFolder: (parent: string, name?: string) =>
+      request<{ path: string }>('POST', '/v1/fs/new-folder', { parent, name: name ?? null }),
+
+    rename: (path: string, newName: string) =>
+      request<{ path: string }>('POST', '/v1/fs/rename', { path, new_name: newName }),
+
+    delete: (paths: string[], permanent = false) =>
+      request<ExecutionReport>('POST', '/v1/fs/delete', { paths, permanent }),
+
+    move: (sources: string[], dest: string) =>
+      request<ExecutionReport>('POST', '/v1/fs/move', { sources, dest }),
+
+    copy: (sources: string[], dest: string) =>
+      request<ExecutionReport>('POST', '/v1/fs/copy', { sources, dest }),
+
+    undo: () => request<FsUndoResult>('POST', '/v1/fs/undo'),
+
+    redo: () => request<FsRedoResult>('POST', '/v1/fs/redo'),
+
+    createShortcut: (target: string, destFolder: string, name?: string) =>
+      request<{ path: string }>('POST', '/v1/fs/create-shortcut', {
+        target,
+        dest_folder: destFolder,
+        name: name ?? null
+      })
   },
 
   scans: {

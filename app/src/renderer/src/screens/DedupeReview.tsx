@@ -35,24 +35,38 @@ function FileTile({
   onToggle: (id: number, current: DuplicateFile['resolution']) => void
 }): React.JSX.Element {
   const res = file.resolution
+  const marked = res === 'trash'
 
   return (
-    <div
-      className={`relative flex flex-col overflow-hidden rounded-xl border transition ${
-        res === 'trash'
-          ? 'border-red-200 bg-red-50 opacity-60'
-          : res === 'keep'
-          ? 'border-emerald-300 bg-emerald-50'
-          : 'border-zinc-200 bg-white'
+    <button
+      type="button"
+      onClick={() => onToggle(file.id, res)}
+      title={marked ? 'Marked for deletion — click to keep' : 'Click to mark for deletion'}
+      className={`relative flex flex-col overflow-hidden rounded-xl border text-left transition ${
+        marked
+          ? 'border-red-300 bg-red-50 opacity-60'
+          : 'border-zinc-200 bg-white hover:border-red-200'
       }`}
     >
       <div className="relative aspect-square w-full">
         <Thumbnail libraryId={libraryId} memberId={file.id} className="h-full w-full" />
-        {file.suggested_keep && !res && (
+        {file.suggested_keep && !marked && (
           <span className="absolute right-1.5 top-1.5 rounded-full bg-zinc-800/80 px-1.5 py-0.5 text-[10px] font-medium text-white">
             Best
           </span>
         )}
+        {/* Selection indicator — click anywhere on the tile to toggle */}
+        <span
+          className={`absolute left-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full border-2 transition ${
+            marked ? 'border-red-500 bg-red-500 text-white' : 'border-white/80 bg-black/20'
+          }`}
+        >
+          {marked && (
+            <svg className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={3} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+            </svg>
+          )}
+        </span>
       </div>
 
       <div className="flex-1 px-3 py-2">
@@ -64,32 +78,11 @@ function FileTile({
           {formatBytes(file.size)}
         </p>
         <p className="text-[10px] text-zinc-400">{formatDate(file.mtime)}</p>
-
-        {/* Keep / Trash toggle */}
-        <div className="mt-2 flex gap-1">
-          <button
-            onClick={() => onToggle(file.id, res)}
-            className={`flex-1 rounded-md py-1 text-[11px] font-medium transition ${
-              res === 'keep'
-                ? 'bg-emerald-600 text-white'
-                : 'border border-zinc-200 text-zinc-500 hover:border-emerald-300 hover:text-emerald-700'
-            }`}
-          >
-            Keep
-          </button>
-          <button
-            onClick={() => onToggle(file.id, res)}
-            className={`flex-1 rounded-md py-1 text-[11px] font-medium transition ${
-              res === 'trash'
-                ? 'bg-red-500 text-white'
-                : 'border border-zinc-200 text-zinc-500 hover:border-red-300 hover:text-red-600'
-            }`}
-          >
-            Trash
-          </button>
-        </div>
+        <p className={`mt-1 text-[11px] font-medium ${marked ? 'text-red-600' : 'text-zinc-300'}`}>
+          {marked ? 'Marked for deletion' : 'Keeping'}
+        </p>
       </div>
-    </div>
+    </button>
   )
 }
 
@@ -287,22 +280,9 @@ export function DedupeReview({ libraryId }: Props): React.JSX.Element {
     : 0
 
   function handleToggle(fileId: number, current: DuplicateFile['resolution']): void {
-    if (!dups) return
-    const group = dups.groups.find((g) => g.files.some((f) => f.id === fileId))
-    if (!group) return
-    const file = group.files.find((f) => f.id === fileId)
-    if (!file) return
-
-    let action: 'keep' | 'trash'
-    if (current === 'trash') {
-      action = 'keep'
-    } else if (current === 'keep') {
-      action = 'trash'
-    } else {
-      // toggling from null: if it's the suggested_keep, mark trash; otherwise keep
-      action = file.suggested_keep ? 'trash' : 'keep'
-    }
-
+    // Single click, single meaning: mark for deletion, or unmark. Whatever
+    // isn't marked stays — no separate "keep" click needed.
+    const action: 'keep' | 'trash' = current === 'trash' ? 'keep' : 'trash'
     resolve.mutate([{ file_id: fileId, action }])
   }
 

@@ -16,12 +16,14 @@ function PersonCard({
   selected,
   selectMode,
   onToggleSelect,
+  onOpen,
 }: {
   person: Person
   libraryId: string
   selected: boolean
   selectMode: boolean
   onToggleSelect: (id: number) => void
+  onOpen: (id: number) => void
 }): React.JSX.Element {
   const rename = useRenamePerson(libraryId)
   const [editing, setEditing] = useState(false)
@@ -46,6 +48,8 @@ function PersonCard({
   const handleClick = () => {
     if (selectMode) {
       onToggleSelect(person.id)
+    } else {
+      onOpen(person.id)
     }
   }
 
@@ -269,6 +273,7 @@ export function PeopleScreen({ libraryId }: Props): React.JSX.Element {
               selected={selected.includes(p.id)}
               selectMode={selectMode}
               onToggleSelect={toggleSelect}
+              onOpen={(id) => navigate({ name: 'person-detail', libraryId, personId: id })}
             />
           ))}
         </div>

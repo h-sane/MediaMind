@@ -1,6 +1,6 @@
 import { useAppStore } from '../stores/app'
 import { useJobsStore, selectJobForLibrary, selectFailedJobForLibrary } from '../stores/jobs'
-import { useStartScan, useDuplicates, usePersons, useProviders } from '../api/hooks'
+import { useStartScan, useDuplicates, usePersons, useProviders, useLibraryFiles } from '../api/hooks'
 import { ScanProgress } from '../components/ScanProgress'
 import { formatBytes } from '../lib/format'
 import type { Library } from '../api/client'
@@ -22,6 +22,7 @@ export function LibraryDetail({ library }: Props): React.JSX.Element {
   const failedFacesJob = selectFailedJobForLibrary(jobs, library.id, 'faces')
 
   const startScan = useStartScan(library.id)
+  const { data: filesData } = useLibraryFiles(library.id)
   const { data: dups, isError: dupsError } = useDuplicates(library.id)
   const { data: providers } = useProviders()
   const { data: personsData, isError: personsError } = usePersons(library.id)
@@ -49,8 +50,32 @@ export function LibraryDetail({ library }: Props): React.JSX.Element {
         <p className="mt-1 text-xs text-zinc-400 truncate">{library.path}</p>
       </div>
 
-      {/* Duplicates action card */}
+      {/* Files card — always available, no scan needed, never blocked */}
       <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+        <div className="mb-4">
+          <h3 className="text-sm font-semibold">Files</h3>
+          <p className="mt-0.5 text-xs text-zinc-500">
+            Everything in this folder, exactly as it is on disk — always available, even while a
+            scan is running.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => navigate({ name: 'files', libraryId: library.id })}
+            className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 active:scale-[0.98]"
+          >
+            Browse files
+          </button>
+          {filesData && (
+            <span className="text-xs text-zinc-400">
+              {filesData.total.toLocaleString()} files
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Duplicates action card */}
+      <div className="mt-4 rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
         <div className="mb-4 flex items-start justify-between">
           <div>
             <h3 className="text-sm font-semibold">Duplicates</h3>

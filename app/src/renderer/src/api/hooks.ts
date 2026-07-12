@@ -38,6 +38,421 @@ export function useRemoveLibrary() {
 }
 
 // ---------------------------------------------------------------------------
+// Library file browser (live, filesystem-first — no scan required)
+// ---------------------------------------------------------------------------
+
+export function useLibraryFiles(libraryId: string) {
+  return useQuery({
+    queryKey: ['files', libraryId],
+    queryFn: () => api.files.list(libraryId)
+  })
+}
+
+/**
+ * Thumbnail for a file by its library-relative path. Fetch is deferred until
+ * `enabled` is true (the grid enables tiles as they approach the viewport so
+ * a large folder doesn't fire thousands of requests at once). `failed` lets
+ * the tile show a static placeholder for undecodable files.
+ */
+export function useFileThumbnailUrl(
+  libraryId: string,
+  path: string,
+  size = 256,
+  enabled = true
+): { url: string | null; failed: boolean } {
+  const [url, setUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  const urlRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!enabled) return
+    let cancelled = false
+    api.files
+      .thumbnailUrl(libraryId, path, size)
+      .then((objectUrl) => {
+        if (!cancelled) {
+          urlRef.current = objectUrl
+          setUrl(objectUrl)
+        } else {
+          URL.revokeObjectURL(objectUrl)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true)
+      })
+
+    return () => {
+      cancelled = true
+      if (urlRef.current) {
+        URL.revokeObjectURL(urlRef.current)
+        urlRef.current = null
+      }
+    }
+  }, [libraryId, path, size, enabled])
+
+  return { url, failed }
+}
+
+/**
+ * Full-resolution file content for the in-app media viewer (image to display,
+ * video to play). Fetched only while `enabled` (the viewer is open for this
+ * file) so browsing the grid never downloads full files.
+ */
+export function useFileRawUrl(
+  libraryId: string,
+  path: string,
+  enabled: boolean
+): { url: string | null; failed: boolean } {
+  const [url, setUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  const urlRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    setUrl(null)
+    setFailed(false)
+    if (!enabled) return
+    let cancelled = false
+    api.files
+      .rawUrl(libraryId, path)
+      .then((objectUrl) => {
+        if (!cancelled) {
+          urlRef.current = objectUrl
+          setUrl(objectUrl)
+        } else {
+          URL.revokeObjectURL(objectUrl)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true)
+      })
+
+    return () => {
+      cancelled = true
+      if (urlRef.current) {
+        URL.revokeObjectURL(urlRef.current)
+        urlRef.current = null
+      }
+    }
+  }, [libraryId, path, enabled])
+
+  return { url, failed }
+}
+
+// ---------------------------------------------------------------------------
+// Explorer shell (whole-filesystem browsing, library-free)
+// ---------------------------------------------------------------------------
+
+export function useDrives() {
+  return useQuery({
+    queryKey: ['drives'],
+    queryFn: api.fs.drives,
+    staleTime: 60_000
+  })
+}
+
+/**
+ * A single directory's contents. Subfolders whose `has_media` is still
+ * unknown (the backend is walking their subtree in the background) trigger a
+ * short poll until every entry has resolved to true/false, then it stops.
+ */
+export function useBrowseDir(path: string | null) {
+  return useQuery({
+    queryKey: ['browse', path],
+    queryFn: () => api.fs.list(path as string),
+    enabled: !!path,
+    refetchInterval: (query) => {
+      const data = query.state.data
+      const stillChecking = data?.folders.some((f) => f.has_media === null)
+      return stillChecking ? 1500 : false
+    }
+  })
+}
+
+/** Thumbnail for a file by absolute filesystem path (no library needed). */
+export function useBrowseThumbnailUrl(
+  path: string,
+  size = 256,
+  enabled = true
+): { url: string | null; failed: boolean } {
+  const [url, setUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  const urlRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!enabled) return
+    let cancelled = false
+    api.fs
+      .thumbnailUrl(path, size)
+      .then((objectUrl) => {
+        if (!cancelled) {
+          urlRef.current = objectUrl
+          setUrl(objectUrl)
+        } else {
+          URL.revokeObjectURL(objectUrl)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true)
+      })
+
+    return () => {
+      cancelled = true
+      if (urlRef.current) {
+        URL.revokeObjectURL(urlRef.current)
+        urlRef.current = null
+      }
+    }
+  }, [path, size, enabled])
+
+  return { url, failed }
+}
+
+/** Full-resolution file content by absolute path, for the in-app viewer. */
+export function useBrowseRawUrl(
+  path: string,
+  enabled: boolean
+): { url: string | null; failed: boolean } {
+  const [url, setUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  const urlRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    setUrl(null)
+    setFailed(false)
+    if (!enabled) return
+    let cancelled = false
+    api.fs
+      .rawUrl(path)
+      .then((objectUrl) => {
+        if (!cancelled) {
+          urlRef.current = objectUrl
+          setUrl(objectUrl)
+        } else {
+          URL.revokeObjectURL(objectUrl)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true)
+      })
+
+    return () => {
+      cancelled = true
+      if (urlRef.current) {
+        URL.revokeObjectURL(urlRef.current)
+        urlRef.current = null
+      }
+    }
+  }, [path, enabled])
+
+  return { url, failed }
+}
+
+// ---------------------------------------------------------------------------
+// Explorer shell — file operations (M12 Phase B)
+// ---------------------------------------------------------------------------
+
+/** Every mutation below takes the folder(s) it affects explicitly, so the
+ * calling component (which already knows the current path) decides what to
+ * invalidate rather than this module reaching into the explorer store. */
+
+export function useFsNewFolder() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ parent, name }: { parent: string; name?: string }) =>
+      api.fsOps.newFolder(parent, name),
+    onSuccess: (_data, { parent }) => {
+      qc.invalidateQueries({ queryKey: ['browse', parent] })
+      // Gallery view (Phase O) walks the same folder recursively under a
+      // separate query key — every folder-scoped browse invalidation below
+      // has a matching gallery one so a folder open in Gallery view doesn't
+      // go stale after a write.
+      qc.invalidateQueries({ queryKey: ['fs-gallery', parent] })
+    }
+  })
+}
+
+export function useFsRename() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ path, newName }: { path: string; newName: string; folder: string }) =>
+      api.fsOps.rename(path, newName),
+    onSuccess: (_data, { folder }) => {
+      qc.invalidateQueries({ queryKey: ['browse', folder] })
+      qc.invalidateQueries({ queryKey: ['fs-gallery', folder] })
+    }
+  })
+}
+
+export function useFsDelete() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ paths, permanent }: { paths: string[]; permanent?: boolean; folder: string }) =>
+      api.fsOps.delete(paths, permanent),
+    onSuccess: (_data, { folder }) => {
+      qc.invalidateQueries({ queryKey: ['browse', folder] })
+      qc.invalidateQueries({ queryKey: ['fs-gallery', folder] })
+      // Keeps the "Recent deletions" panel (Phase P item 4) fresh if it's
+      // open — a cheap invalidate even when it isn't, since that query is
+      // only ever enabled while the panel is mounted.
+      qc.invalidateQueries({ queryKey: ['fs-recent-deletions'] })
+    }
+  })
+}
+
+export function useFsMove() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ sources, dest }: { sources: string[]; dest: string; sourceFolder: string }) =>
+      api.fsOps.move(sources, dest),
+    onSuccess: (_data, { dest, sourceFolder }) => {
+      qc.invalidateQueries({ queryKey: ['browse', dest] })
+      qc.invalidateQueries({ queryKey: ['fs-gallery', dest] })
+      if (sourceFolder !== dest) {
+        qc.invalidateQueries({ queryKey: ['browse', sourceFolder] })
+        qc.invalidateQueries({ queryKey: ['fs-gallery', sourceFolder] })
+      }
+    }
+  })
+}
+
+export function useFsCopy() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ sources, dest }: { sources: string[]; dest: string }) =>
+      api.fsOps.copy(sources, dest),
+    onSuccess: (_data, { dest }) => {
+      qc.invalidateQueries({ queryKey: ['browse', dest] })
+      qc.invalidateQueries({ queryKey: ['fs-gallery', dest] })
+    }
+  })
+}
+
+/** Undo can reverse a move/copy/rename/new-folder touching folders this
+ * component has no direct handle on — invalidate every open browse (and
+ * gallery) query rather than trying to track exactly which ones changed. */
+export function useFsUndo() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.fsOps.undo(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['browse'] })
+      qc.invalidateQueries({ queryKey: ['fs-gallery'] })
+    }
+  })
+}
+
+/** Mirrors `useFsUndo` — redo can touch the same folders undo could have. */
+export function useFsRedo() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.fsOps.redo(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['browse'] })
+      qc.invalidateQueries({ queryKey: ['fs-gallery'] })
+    }
+  })
+}
+
+export function useFsCreateShortcut() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      target,
+      destFolder,
+      name
+    }: {
+      target: string
+      destFolder: string
+      name?: string
+    }) => api.fsOps.createShortcut(target, destFolder, name),
+    onSuccess: (_data, { destFolder }) => {
+      qc.invalidateQueries({ queryKey: ['browse', destFolder] })
+      qc.invalidateQueries({ queryKey: ['fs-gallery', destFolder] })
+    }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Explorer shell — metadata + Quick Access (M12 Phase C)
+// ---------------------------------------------------------------------------
+
+/** Dimensions/duration for the preview pane. Only fetched while `enabled`
+ * (the preview pane is open and a single file is selected). */
+export function useFileMetadata(path: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ['metadata', path],
+    queryFn: () => api.fs.metadata(path as string),
+    enabled: enabled && !!path
+  })
+}
+
+/**
+ * Recursive item-count/total-bytes for a folder, for the Properties panel.
+ * Same lazy-resolve-then-poll shape as `useBrowseDir`'s has_media polling —
+ * the backend answers "unknown, computing" on first look.
+ */
+export function useFolderStats(path: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ['folder-stats', path],
+    queryFn: () => api.fs.folderStats(path as string),
+    enabled: enabled && !!path,
+    refetchInterval: (query) => (query.state.data?.item_count === null ? 1500 : false)
+  })
+}
+
+export function useDiskUsage(path: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ['disk-usage', path],
+    queryFn: () => api.fs.diskUsage(path as string),
+    enabled: enabled && !!path,
+    staleTime: 30_000
+  })
+}
+
+export function useQuickAccess() {
+  return useQuery({ queryKey: ['quick-access'], queryFn: api.fs.quickAccess.list })
+}
+
+export function usePinQuickAccess() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (path: string) => api.fs.quickAccess.pin(path),
+    onSuccess: (data) => qc.setQueryData(['quick-access'], data)
+  })
+}
+
+export function useUnpinQuickAccess() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (path: string) => api.fs.quickAccess.unpin(path),
+    onSuccess: (data) => qc.setQueryData(['quick-access'], data)
+  })
+}
+
+export function useReorderQuickAccess() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (paths: string[]) => api.fs.quickAccess.reorder(paths),
+    onSuccess: (data) => qc.setQueryData(['quick-access'], data)
+  })
+}
+
+export function useRecentFiles() {
+  return useQuery({ queryKey: ['recent-files'], queryFn: api.fs.recent.list })
+}
+
+/** Records a file as just-opened for the Home page's Recent files list.
+ * Call this at the point a file is actually opened (double-click / Enter),
+ * not on hover or selection. */
+export function useRecordRecentFile() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (path: string) => api.fs.recent.record(path),
+    onSuccess: (data) => qc.setQueryData(['recent-files'], data)
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Scans
 // ---------------------------------------------------------------------------
 

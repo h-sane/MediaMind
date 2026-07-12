@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import type { JobSnapshot } from '../api/client'
 import { useCancelScan } from '../api/hooks'
 
@@ -13,12 +14,37 @@ function formatBytes(b: number): string {
   return `${(b / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
 
+function formatDuration(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ${s % 60}s`
+  const h = Math.floor(m / 60)
+  return `${h}h ${m % 60}m`
+}
+
 export function ScanProgress({ libraryId, job }: Props): React.JSX.Element {
   const cancel = useCancelScan(libraryId, job.id)
   const isCancelling = cancel.isPending || job.state === 'cancelled'
 
   const pct = job.total > 0 ? Math.round((job.done / job.total) * 100) : 0
   const phase = job.phase || 'starting'
+
+  // Re-render every second while running so the ETA keeps counting down
+  // between the backend's throttled progress events (~5/sec at most).
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (job.state !== 'running') return
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [job.state])
+
+  const elapsed = now / 1000 - job.created_at
+  const rate = job.done > 0 && elapsed > 0 ? job.done / elapsed : 0
+  const remaining = job.total > 0 && rate > 0 ? (job.total - job.done) / rate : null
+  const eta = job.state === 'running' && remaining !== null ? formatDuration(remaining) : null
+  const finishedIn =
+    job.state !== 'running' && job.finished_at ? formatDuration(job.finished_at - job.created_at) : null
 
   return (
     <div className="rounded-xl border border-zinc-200 bg-white px-5 py-4 shadow-sm">
@@ -28,6 +54,8 @@ export function ScanProgress({ libraryId, job }: Props): React.JSX.Element {
           {job.total > 0 && (
             <p className="mt-0.5 text-xs text-zinc-400">
               {job.done.toLocaleString()} / {job.total.toLocaleString()} files
+              {eta && ` · ~${eta} left`}
+              {finishedIn && ` · finished in ${finishedIn}`}
             </p>
           )}
         </div>
