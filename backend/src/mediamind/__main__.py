@@ -16,6 +16,7 @@ import socket
 import uvicorn
 
 from mediamind.api.app import create_app
+from mediamind.logging_setup import configure_logging
 
 
 def _free_port(host: str) -> int:
@@ -25,6 +26,8 @@ def _free_port(host: str) -> int:
 
 
 def main() -> None:
+    configure_logging()
+
     parser = argparse.ArgumentParser(prog="mediamind-server")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0, help="0 = pick a free port")

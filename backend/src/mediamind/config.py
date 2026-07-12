@@ -37,8 +37,51 @@ def models_dir() -> Path:
     return d
 
 
+def logs_dir() -> Path:
+    d = app_data_dir() / "logs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def library_data_dir(library_root: Path) -> Path:
     """`.mediamind/` inside a library (created on demand)."""
     d = library_root / LIBRARY_DATA_DIRNAME
     d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def browse_index_db_path() -> Path:
+    """SQLite cache of "does this folder contain media below it" for the
+    Explorer shell. Lives in the app data dir, not on the user's drives —
+    whole-filesystem browsing must never write anything to the folders it
+    looks at."""
+    return app_data_dir() / "browse_index.sqlite3"
+
+
+def folder_stats_db_path() -> Path:
+    """SQLite cache of recursive item-count/total-bytes per folder, for the
+    Explorer shell's Properties panel. Same reasoning as `browse_index_db_path`
+    — lives in the app data dir, never on the user's drives."""
+    return app_data_dir() / "folder_stats.sqlite3"
+
+
+def quick_access_path() -> Path:
+    """JSON store of the Explorer shell's pinned Quick Access folders. Lives
+    in the app data dir, same reasoning as `browse_index_db_path`."""
+    return app_data_dir() / "quick_access.json"
+
+
+def recent_files_path() -> Path:
+    """JSON store of the Explorer shell's recently-opened files (Home page).
+    Lives in the app data dir, same reasoning as `browse_index_db_path`."""
+    return app_data_dir() / "recent_files.json"
+
+
+def fs_ops_dir() -> Path:
+    """Manifests + op-log for the Explorer shell's file operations (rename/
+    move/copy/delete/new-folder). Library-free browsing has no `.mediamind`
+    folder to write into, so this lives in the app data dir instead —
+    mirrors `browse_index_db_path`'s reasoning."""
+    d = app_data_dir() / "fs_ops"
+    (d / "manifests").mkdir(parents=True, exist_ok=True)
     return d

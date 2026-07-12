@@ -36,6 +36,136 @@ class ScanIn(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Library file browser (live, filesystem-first)
+# ---------------------------------------------------------------------------
+
+class FileEntryOut(BaseModel):
+    path: str    # relative to library root, forward-slash
+    kind: str    # "image" | "gif" | "video" | "audio" | "other"
+    size: int
+    mtime: float
+
+
+class LibraryFilesOut(BaseModel):
+    library_id: str
+    root: str    # absolute library root path (display only)
+    total: int
+    files: list[FileEntryOut]
+
+
+# ---------------------------------------------------------------------------
+# Explorer shell (whole-filesystem browsing, library-free)
+# ---------------------------------------------------------------------------
+
+class DriveOut(BaseModel):
+    path: str    # e.g. "C:\\"
+    label: str   # e.g. "Local Disk (C:)"
+
+
+class BrowseFolderOut(BaseModel):
+    name: str
+    path: str            # absolute
+    has_media: bool | None    # None = not yet known, checking in background
+    mtime: float              # from the same stat() the attribute facts below use
+    created: float | None            # epoch seconds; None if the OS can't report it
+    accessed: float | None
+    read_only: bool | None
+    hidden: bool | None
+    system: bool | None
+
+
+class BrowseFileOut(BaseModel):
+    name: str
+    path: str            # absolute
+    kind: str             # "image" | "gif" | "video" | "audio"
+    size: int
+    mtime: float
+    created: float | None            # epoch seconds; None if the OS can't report it
+    accessed: float | None
+    read_only: bool | None
+    hidden: bool | None
+    system: bool | None
+
+
+class BrowseDirOut(BaseModel):
+    path: str             # absolute, the listed directory
+    folders: list[BrowseFolderOut]
+    files: list[BrowseFileOut]
+
+
+# ---------------------------------------------------------------------------
+# Explorer shell — file operations (M12 Phase B): see api/models_fs_ops.py
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Explorer shell — metadata + Quick Access (M12 Phase C)
+# ---------------------------------------------------------------------------
+
+class BrowseMetadataOut(BaseModel):
+    path: str
+    name: str
+    kind: str              # "image" | "gif" | "video" | "audio"
+    size: int
+    mtime: float
+    width: int | None      # None if dimensions could not be read (always None for audio)
+    height: int | None
+    duration_seconds: float | None   # video only; always None for image/gif/audio
+    created: float | None            # epoch seconds; None if the OS can't report it
+    accessed: float | None
+    read_only: bool | None
+    hidden: bool | None
+    system: bool | None
+    owner: str | None                # "DOMAIN\\user" on Windows, None if lookup fails
+
+
+class FolderStatsOut(BaseModel):
+    path: str
+    item_count: int | None    # None = not yet known, computing in background
+    total_bytes: int | None
+
+
+class DiskUsageOut(BaseModel):
+    path: str
+    total_bytes: int
+    used_bytes: int
+    free_bytes: int
+
+
+class QuickAccessEntryOut(BaseModel):
+    path: str
+    name: str
+
+
+class QuickAccessOut(BaseModel):
+    pins: list[QuickAccessEntryOut]
+
+
+class QuickAccessPinIn(BaseModel):
+    path: str
+
+
+class QuickAccessReorderIn(BaseModel):
+    paths: list[str]  # full desired pin order
+
+
+class RecentFileEntryOut(BaseModel):
+    path: str
+    name: str
+    kind: str          # "image" | "gif" | "video" | "audio"
+    size: int
+    mtime: float
+    opened_at: float    # epoch seconds, when MediaMind last opened it
+
+
+class RecentFilesOut(BaseModel):
+    files: list[RecentFileEntryOut]
+
+
+class RecentFileRecordIn(BaseModel):
+    path: str
+
+
+# ---------------------------------------------------------------------------
 # Duplicates
 # ---------------------------------------------------------------------------
 
