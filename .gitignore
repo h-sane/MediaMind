@@ -28,6 +28,14 @@ models/downloads/
 # Personal test media (real photos/videos used for manual E2E testing — never commit)
 /test/
 
+# Raw gathered datasets (read-only source material — never commit, never edit
+# directly; curated fixtures get copied from here into /test/<feature>/
+# subfolders instead). Includes Datasets/final_dataset/ — a generated test
+# fixture corpus (LFW, dedupe fixtures, synthetic video/GIF clips, real
+# people's face images) — see Datasets/final_dataset/PROVENANCE.md for
+# contents and licensing.
+/Datasets/
+
 # OS / editor
 .DS_Store
 Thumbs.db
@@ -47,3 +55,12 @@ logs/
 
 # electron-vite build output
 app/out/
+
+# Session handoffs (working notes for continuing across Claude Code sessions —
+# see CLAUDE.md's Persistent Handoff Rule). Not committed: these are internal
+# continuity notes, not project documentation. Sessions 01-08 predate this
+# rule and remain committed under docs/handoffs/ as historical record.
+.claude/handoffs/
+
+# Screenshots taken by the run-desktop skill's Playwright driver
+app/.driver-shots/
