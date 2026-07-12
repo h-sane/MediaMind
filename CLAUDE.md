@@ -26,8 +26,25 @@ for organizing it.
   single-file CLI that face-sorts a folder of mixed media.
   `prototype/sort_faces.py` is the earlier images-only version (reference
   only). See `prototype/HANDOFF.md` for the full prototype context.
-- **Version 1 (in planning):** the desktop application. Requirements live in
-  `docs/PRD.md`; the build plan lives in `docs/IMPLEMENTATION_PLAN.md`.
+- **Version 1 (main framework built):** the desktop application's primary UI
+  is a full **Windows Explorer clone** (`app/src/renderer/src/explorer/`) —
+  navigation pane, tabs, address bar, six view modes including a recursive
+  Gallery view, search/filter, drag-and-drop, full context menus, Properties,
+  compress/extract, and a Recent Deletions history — scoped to real drives
+  and folders and filtered to media. This supersedes the original
+  scan/select workflow described in `docs/PRD.md` §5 as V1's UI: the vision
+  is now filesystem-first browsing as the primary layer, with duplicate
+  detection, face recognition, and organize-by-person layered on top as
+  actions inside that shell. The duplicate-detection and face-recognition
+  **engine** (backend `core/`, `providers/`) and their original screens
+  (`DedupeReview.tsx`, `PeopleScreen.tsx`, etc.) are fully built and tested
+  but not yet wired into the Explorer shell — that integration is a
+  deliberately deferred, separate effort. `docs/PRD.md` and
+  `docs/IMPLEMENTATION_PLAN.md` still describe the target feature set and
+  backend architecture accurately; their UI-flow descriptions predate the
+  Explorer-clone pivot. See `docs/USER_GUIDE.md` for the current, accurate
+  feature list and `.claude/handoffs/` for the session-by-session history of
+  how the Explorer clone was built.
 
 ## Repository map
 
@@ -40,7 +57,8 @@ for organizing it.
 | `prototype/HANDOFF.md` | Original prototype handoff (context, decisions, limitations). |
 | `docs/PRD.md` | Product requirements for Version 1. |
 | `docs/IMPLEMENTATION_PLAN.md` | Architecture, stack, milestones for Version 1. |
-| `docs/handoffs/` | Session handoff documents (see Persistent Handoff Rule). |
+| `docs/handoffs/` | Historical session handoffs (sessions 01-08, committed, pre-dates the rule change below). |
+| `.claude/handoffs/` | Current session handoffs (session 09+, gitignored — see Persistent Handoff Rule). |
 
 **Dev environment:** the Python venv is `C:\Users\husai\faces-env`
 (Python 3.11, InsightFace/ONNX/OpenCV preinstalled). Use
@@ -55,22 +73,46 @@ pin mentioned in the V0 handoff is obsolete for this environment.
 This project is developed across many Claude Code sessions. Context must never
 be lost between sessions.
 
-**Triggers.** Whenever the user says any of:
+**Triggers — explicit.** Whenever the user says any of:
 
 - "create a handoff"
 - "update the handoff"
 - "end today's session"
 - "continue next session"
+- "continue where we left off" / "continue where we left off through the handoff"
 
 automatically follow this workflow — do not ask for permission to do so.
 
-**1. Create a detailed handoff document.**
+**Triggers — proactive (no phrase required).** Also create or update a
+handoff, without being asked, whenever:
 
-**2. Save it in** `docs/handoffs/`.
+- You complete one phase of a larger, explicitly phased plan (e.g. finishing
+  "Phase A" of a multi-phase architectural rebuild), and phases remain.
+- You are about to end a turn on a big architectural change, a multi-file
+  rewrite, or any effort where it is plausible the user will pick this up in
+  a future session rather than the same one.
+
+Judgment call: a small bug fix or a single-file tweak doesn't need one. A
+change that took multiple hours of agent work, touched many files, or is
+explicitly one step of a longer plan does.
+
+**1. Create a detailed handoff document.** State the exact date **and
+   timestamp** (not just the date) at the top of the document, e.g.
+   `Session date: 2026-07-12, 14:32 local`. The filename date alone is not
+   enough — a session can span hours and a future session needs to know how
+   fresh the state is.
+
+**2. Save it in** `.claude/handoffs/` **(gitignored — not committed).**
+   Handoffs are internal continuity notes for the agent, not project
+   documentation; they are not part of the public repo history. (Sessions
+   01-08 predate this rule and remain committed under `docs/handoffs/` as
+   historical record — leave those where they are. All handoffs from session
+   09 onward live in `.claude/handoffs/`.)
 
 **3. File naming format:** `YYYY-MM-DD_session_<number>.md`
    (e.g., `2026-07-02_session_01.md`). The session number increments across the
-   whole project, zero-padded to two digits.
+   whole project (continuing the same sequence `docs/handoffs/` started),
+   zero-padded to two digits.
 
 **4. Every handoff MUST contain all of these sections:**
 
@@ -91,13 +133,15 @@ automatically follow this workflow — do not ask for permission to do so.
 **5. Every new handoff must link/reference the previous handoffs** (at minimum
 the immediately preceding one, by relative path).
 
-**6. Resuming.** When the user says **"continue from the latest handoff"**:
+**6. Resuming.** When the user says **"continue from the latest handoff"**,
+**"continue where we left off"**, or similar:
 
-1. List `docs/handoffs/` and locate the newest handoff (by filename date, then
+1. List `.claude/handoffs/` (fall back to `docs/handoffs/` only if the former
+   doesn't exist yet) and locate the newest handoff (by filename date, then
    session number).
 2. Read it completely.
-3. Understand the full state it describes (follow links to earlier handoffs if
-   needed).
+3. Understand the full state it describes (follow links to earlier handoffs,
+   and to any referenced plan documents, if needed).
 4. Continue working from exactly that state.
 
 Do **not** ask the user which handoff to use unless multiple files genuinely

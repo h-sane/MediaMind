@@ -5,6 +5,17 @@
 **Scope:** Version 1 only. Everything else is listed in [Future Scope](#10-future-scope) and must not influence V1 design.
 **Related docs:** [`../CLAUDE.md`](../CLAUDE.md) (project rules), [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (how V1 gets built), [`../prototype/HANDOFF.md`](../prototype/HANDOFF.md) (Version 0 prototype context)
 
+> **UI architecture update (2026-07-13):** since this document was written,
+> the primary UI layer was redirected to a full Windows Explorer clone (see
+> `CLAUDE.md`'s Current State and `docs/USER_GUIDE.md`) rather than the
+> library/scan-select flow implied below. This does not change any feature
+> requirement in this document — duplicate detection, face recognition, and
+> the review/naming/matching flows in §5 are still the target feature set —
+> it changes *how the user reaches them*: as actions inside the Explorer
+> shell rather than a dedicated app screen. That reintegration work has not
+> started yet; treat every "user opens/clicks X screen" phrasing below as
+> describing the feature's required behavior, not its final UI location.
+
 ---
 
 ## 1. Vision
@@ -74,6 +85,12 @@ ML knowledge required.
   - GIFs (animated; analyzed by frame sampling)
   - Videos: mp4, mov, avi, mkv, webm, m4v, 3gp/3g2, mpg/mpeg, wmv, flv, ts,
     mts, m2ts, ogv (analyzed by frame sampling)
+  - Audio: mp3, wav, flac, m4a, aac, ogg, wma, opus, aiff. Audio is a
+    first-class media type — browsable, searchable, and playable everywhere
+    files are listed (Library file browser and the whole-filesystem
+    Explorer). It does not yet participate in duplicate detection or face
+    clustering, since those pipelines are visual (perceptual hashing, face
+    embeddings); audio-specific duplicate detection is Future Scope (§10).
 - Files that cannot be decoded are never lost or skipped silently — they are
   reported and routed to a visible holding area (V0 invariant).
 
@@ -330,6 +347,10 @@ Recorded so ideas aren't lost; **none of this constrains V1**.
 - Large-library scale-out: approximate nearest-neighbor search (e.g., hnswlib),
   incremental clustering, batched processing (per `prototype/HANDOFF.md` §5).
 - Smarter video sampling (scene-change or face-track based, per `prototype/HANDOFF.md` §5).
+- **Audio duplicate detection:** matching duplicate/near-duplicate audio files
+  (exact hash today only catches byte-identical files; content-based matching
+  — e.g. audio fingerprinting — would catch re-encodes, same as image/video
+  perceptual hashing does visually).
 - Cluster splitting UI; per-face reassignment between people.
 - Additional community model providers; GPU acceleration UX.
 - Optional headless CLI mode that exposes the V1 engine (spiritual successor to

@@ -4,6 +4,19 @@
 **Date:** 2026-07-02
 **Related docs:** [`PRD.md`](PRD.md) (what we're building), [`../CLAUDE.md`](../CLAUDE.md) (project rules), [`../prototype/HANDOFF.md`](../prototype/HANDOFF.md) (Version 0 context)
 
+> **UI architecture update (2026-07-13):** the renderer's UI layer is no
+> longer the "libraries · scans · duplicate review · people" screen set
+> shown in the diagram below — it was rebuilt as a full Windows Explorer
+> clone (`app/src/renderer/src/explorer/`; see `CLAUDE.md`'s Current State
+> and `docs/USER_GUIDE.md`). The **backend architecture** (process split,
+> HTTP/WS transport, localhost hardening, `core`/`providers`/`store` layout)
+> described in this document is still accurate and still how the Explorer
+> shell's own file operations, thumbnails, and metadata are served — only
+> the renderer's top-level screen list is stale. The original screens still
+> exist and still work; they're just not reachable from the Explorer shell
+> yet (deliberately deferred, see `docs/USER_GUIDE.md`'s "Where the older
+> features went").
+
 ---
 
 ## 1. Architecture overview
@@ -15,8 +28,9 @@ Two cooperating processes, one desktop app:
 │ Electron shell                                            │
 │  ┌─────────────────────────────────────────────────────┐  │
 │  │ React + TypeScript UI (renderer)                    │  │
-│  │  libraries · scans · duplicate review · people ·    │  │
-│  │  pending review · organize preview · settings       │  │
+│  │  Explorer shell (nav/tabs/views/search/file ops) ·  │  │
+│  │  legacy libraries/scans/duplicate review/people      │  │
+│  │  screens (built, not yet wired into the shell)       │  │
 │  └───────────────▲─────────────────────────────────────┘  │
 │                  │ HTTP (REST) + WebSocket (progress)     │
 │  main process: window mgmt, native folder picker,         │
@@ -27,12 +41,15 @@ Two cooperating processes, one desktop app:
 │ Python backend — package `mediamind` (FastAPI)            │
 │  api/        REST routes + WebSocket progress             │
 │  core/       scanner · dedupe · faces · organizer · safety│
-│  providers/  face-model plugin system (ONNX)              │
+│             · explorer fs ops/search/gallery/oplog        │
+│  providers/  face-model plugin system (ONNX)               │
 │  store/      per-library SQLite index + embedding cache   │
 └──────────────────┬────────────────────────────────────────┘
                    │
         User's real folders (source of truth)
         └── <library>/.mediamind/   index.db, manifests, undo data
+        (Explorer file ops instead use an app-wide data dir —
+         see docs/USER_GUIDE.md's "Where MediaMind stores its own data")
 ```
 
 **Why this shape** (decisions and rationale):
