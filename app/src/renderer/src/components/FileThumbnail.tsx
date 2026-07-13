@@ -11,6 +11,8 @@ interface Props {
   path: string
   kind: string
   className?: string
+  size?: number
+  fit?: 'cover' | 'contain'
 }
 
 /**
@@ -69,12 +71,19 @@ function AudioIcon({ label }: { label: string }): React.JSX.Element {
  * icon; undecodable media gets a static "unreadable" tile — one bad file
  * never breaks the grid.
  */
-export function FileThumbnail({ libraryId, path, kind, className = '' }: Props): React.JSX.Element {
+export function FileThumbnail({
+  libraryId,
+  path,
+  kind,
+  className = '',
+  size = 256,
+  fit = 'cover'
+}: Props): React.JSX.Element {
   const [ref, visible] = useNearViewport<HTMLDivElement>()
   const isMedia = MEDIA_KINDS.has(kind)
   const wantFetch = visible && isMedia
-  const libraryResult = useFileThumbnailUrl(libraryId ?? '', path, 256, !!libraryId && wantFetch)
-  const browseResult = useBrowseThumbnailUrl(path, 256, !libraryId && wantFetch)
+  const libraryResult = useFileThumbnailUrl(libraryId ?? '', path, size, !!libraryId && wantFetch)
+  const browseResult = useBrowseThumbnailUrl(path, size, !libraryId && wantFetch)
   const { url, failed } = libraryId ? libraryResult : browseResult
 
   const ext = path.includes('.') ? path.slice(path.lastIndexOf('.') + 1) : 'file'
@@ -82,7 +91,12 @@ export function FileThumbnail({ libraryId, path, kind, className = '' }: Props):
   return (
     <div ref={ref} className={`relative overflow-hidden rounded-lg bg-zinc-100 ${className}`}>
       {url ? (
-        <img src={url} alt="" draggable={false} className="h-full w-full object-cover" />
+        <img
+          src={url}
+          alt=""
+          draggable={false}
+          className={`h-full w-full ${fit === 'cover' ? 'object-cover' : 'object-contain'}`}
+        />
       ) : kind === 'audio' ? (
         <AudioIcon label={ext} />
       ) : !isMedia ? (

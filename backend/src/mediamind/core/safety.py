@@ -12,7 +12,9 @@ Invariants (see CLAUDE.md — these are non-negotiable):
 from __future__ import annotations
 
 import csv
+import os
 import shutil
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -121,21 +123,128 @@ def execute(
     return report
 
 
-def trash(paths: list[Path], manifest_path: Path | None = None, dry_run: bool = False) -> ExecutionReport:
-    """Send files to the OS recycle bin (recoverable). Never hard-deletes."""
+def is_network_location(path: Path) -> bool:
+    """True if `path` lives on a network share (UNC path, mapped network
+    drive, or WebDAV/virtual-vault mount like Cryptomator) — locations the
+    Windows Recycle Bin fundamentally cannot use, the same way real Explorer
+    can only offer "permanently delete" for these paths, never "move to
+    Recycle Bin"."""
+    text = str(path)
+    if text.startswith("\\\\") or text.startswith("//"):
+        return True
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        drive = os.path.splitdrive(text)[0]
+        if not drive:
+            return False
+        DRIVE_REMOTE = 4
+        return ctypes.windll.kernel32.GetDriveTypeW(f"{drive}\\") == DRIVE_REMOTE
+    except Exception:
+        return False
+
+
+_RECYCLE_SAFE_FILESYSTEMS = {"NTFS", "REFS", "FAT32", "EXFAT", "FAT", "CDFS"}
+
+
+def filesystem_name(path: Path) -> str | None:
+    """Volume filesystem name (e.g. "NTFS") for `path`'s drive, or None if it
+    can't be determined. WinFsp/Dokan-style virtual mounts (encrypted vaults
+    like Cryptomator) commonly report a custom filesystem name here even
+    though `GetDriveTypeW` calls them DRIVE_FIXED like a normal local disk —
+    this is how `recycle_bin_supported` catches them."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        drive = os.path.splitdrive(str(path))[0]
+        if not drive:
+            return None
+        fs_buf = ctypes.create_unicode_buffer(261)
+        ok = ctypes.windll.kernel32.GetVolumeInformationW(
+            ctypes.c_wchar_p(f"{drive}\\"),
+            None, 0, None, None, None,
+            fs_buf, ctypes.sizeof(fs_buf) // ctypes.sizeof(ctypes.c_wchar),
+        )
+        return fs_buf.value if ok else None
+    except Exception:
+        return None
+
+
+def recycle_bin_supported(path: Path) -> bool:
+    """True only when the Recycle Bin can reliably accept files at `path`.
+
+    Used to decide *before* attempting a delete whether to ask for a normal
+    "move to Recycle Bin" confirmation or a "this will be permanently
+    deleted" one — replacing a reactive try-then-fallback flow. False for
+    network locations (see `is_network_location`) and any filesystem outside
+    a known-good allow-list (catches WinFsp/Dokan virtual-vault mounts, which
+    report as DRIVE_FIXED but often aren't NTFS). An allow-list rather than
+    "NTFS-only" avoids wrongly flagging ordinary FAT32/exFAT removable
+    drives, which do support the Recycle Bin. Unknown filesystem names stay
+    optimistic (True) — `_friendly_trash_error`'s reactive fallback remains
+    the backstop for anything this heuristic misses.
+    """
+    if is_network_location(path):
+        return False
+    if sys.platform != "win32":
+        return True
+    fs = filesystem_name(path)
+    if fs is None:
+        return True
+    return fs.upper() in _RECYCLE_SAFE_FILESYSTEMS
+
+
+def _friendly_trash_error(path: Path, exc: Exception) -> str:
+    """`send2trash`'s Windows backend raises a bare `OSError` wrapping a COM
+    HRESULT with little to no human-readable text. On a network/virtual
+    drive that failure is not a transient per-file glitch — the Recycle Bin
+    API categorically does not work there, exactly like double-clicking
+    Delete on the same file in real Explorer would skip the Recycle Bin and
+    ask to permanently delete instead. Surface that as an explanation, not
+    the raw HRESULT."""
+    if is_network_location(path):
+        return (
+            "This file is on a network or virtual drive — Windows' Recycle Bin "
+            "does not support these locations, so it could not be trashed. "
+            "The file was not changed."
+        )
+    return str(exc) or "Could not move this file to the Recycle Bin"
+
+
+def trash(
+    paths: list[Path],
+    manifest_path: Path | None = None,
+    dry_run: bool = False,
+    permanent: bool = False,
+) -> ExecutionReport:
+    """Send files to the OS recycle bin (recoverable). Never hard-deletes
+    unless `permanent=True` — an explicit, separately-confirmed fallback for
+    locations (network/virtual drives) where the Recycle Bin is unavailable."""
     from send2trash import send2trash
 
     report = ExecutionReport(planned=len(paths))
     for path in paths:
         try:
             if dry_run:
-                report.entries.append(ManifestEntry(str(path), "dry-run-trashed", ""))
+                action = "dry-run-deleted" if permanent else "dry-run-trashed"
+                report.entries.append(ManifestEntry(str(path), action, ""))
+            elif permanent:
+                if path.is_dir() and not os.path.islink(path):
+                    shutil.rmtree(path)
+                else:
+                    os.remove(path)
+                report.entries.append(ManifestEntry(str(path), "deleted", ""))
             else:
                 send2trash(str(path))
                 report.entries.append(ManifestEntry(str(path), "trashed", ""))
             report.handled += 1
         except Exception as exc:
-            entry = ManifestEntry(str(path), "error", "", error=str(exc))
+            message = str(exc) if permanent else _friendly_trash_error(path, exc)
+            entry = ManifestEntry(str(path), "error", "", error=message)
             report.entries.append(entry)
             report.errors.append(entry)
     if manifest_path is not None:

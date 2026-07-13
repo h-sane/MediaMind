@@ -3,6 +3,10 @@ import { persist } from 'zustand/middleware'
 import { useFolderViewPrefsStore } from './folderViewPrefs'
 
 export type ViewMode = 'icons' | 'list' | 'details' | 'tiles' | 'content' | 'gallery'
+/** Tool state (dedupe/faces review panels), triggered from the `ToolRail`
+ * section of `NavigationPane` — orthogonal to `ViewMode`. `'none'` = plain
+ * browsing. */
+export type ToolMode = 'none' | 'dedupe' | 'faces'
 export type SortKey = 'name' | 'date' | 'size' | 'type' | 'created' | 'accessed' | 'attributes'
 export type SortDir = 'asc' | 'desc'
 export type FilterType = 'all' | 'image' | 'gif' | 'video' | 'audio'
@@ -98,6 +102,13 @@ interface TabFields {
    * up/down can jump by a full row instead of one entry. Pure transient UI
    * geometry, not persisted. */
   contentColumns: number
+
+  /** Right-sidebar tool (dedupe/faces) active for this tab, if any — see
+   * `explorer/tools/`. Transient per-tab state, same category as
+   * `recursiveSearchActive`: reset on navigate (CLEARED_NAV_STATE) and not
+   * persisted, since a tool's results are scoped to the folder they were
+   * run against. */
+  toolMode: ToolMode
 }
 
 /** One Explorer tab — `TabFields` plus a stable identity. */
@@ -111,7 +122,10 @@ const CLEARED_NAV_STATE: Partial<TabFields> = {
   filterDate: 'any',
   filterSize: 'any',
   recursiveSearchActive: false,
-  recursiveSearchRoot: null
+  recursiveSearchRoot: null,
+  // A tool's results are scoped to the folder they were run against —
+  // leaving that folder implicitly exits tool mode back to plain browsing.
+  toolMode: 'none'
 }
 
 /** A folder with a saved pref (Phase D) applies it; one without falls back
@@ -147,6 +161,7 @@ function makeTab(path: string | null = HOME_PATH): Tab {
     groupBy: 'none',
     iconSize: 'large',
     contentColumns: 1,
+    toolMode: 'none',
     ...folderPrefState(path)
   }
 }
@@ -176,6 +191,7 @@ interface ExplorerStore extends TabFields {
   setGroupBy: (key: GroupKey) => void
   setIconSize: (size: IconSize) => void
   setContentColumns: (columns: number) => void
+  setToolMode: (mode: ToolMode) => void
 
   /** Opens a new tab — defaults to duplicating the active tab's current
    * folder, matching Explorer's own `Ctrl+T` — and makes it active. */
@@ -296,6 +312,7 @@ export const useExplorerStore = create<ExplorerStore>()(
       setGroupBy: (groupBy) => syncActiveTab(set, get, { groupBy }),
       setIconSize: (iconSize) => syncActiveTab(set, get, { iconSize }),
       setContentColumns: (contentColumns) => syncActiveTab(set, get, { contentColumns }),
+      setToolMode: (toolMode) => syncActiveTab(set, get, { toolMode }),
 
       newTab: (path) => {
         const tab = makeTab(path === undefined ? get().currentPath : path)

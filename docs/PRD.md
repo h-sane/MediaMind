@@ -355,3 +355,39 @@ Recorded so ideas aren't lost; **none of this constrains V1**.
 - Additional community model providers; GPU acceleration UX.
 - Optional headless CLI mode that exposes the V1 engine (spiritual successor to
   `sort_media.py`).
+- **Background/always-on duplicate detection.** Today, duplicate review is
+  entirely on-demand: a user opens a folder in the Explorer clone and
+  explicitly triggers a dedupe scan before anything is found (see the
+  `dedupe` tool in `app/src/renderer/src/explorer/tools/dedupe/`, and the
+  scan trigger in `backend/src/mediamind/api/routes/scans.py`). The idea for
+  a future version is to make this proactive instead:
+  - A background watcher observes each registered library for new media
+    files (OS file-watch APIs preferred over polling — needs a Windows/Linux
+    comparison; polling is the fallback where a native watcher isn't
+    available).
+  - When a new file appears, run an **incremental** dedupe check — compare
+    just the new file's content hash / perceptual hash against the existing
+    index — rather than a full-library rescan. This needs a persisted
+    per-file hash index outside of a single scan's scope (today,
+    `duplicate_members`/hashes only exist for the lifetime of one dedupe
+    scan); an efficient near-duplicate lookup structure (e.g. a BK-tree over
+    perceptual hashes) would matter once libraries grow past a few thousand
+    files, per the existing scale-out note above.
+  - A detected duplicate becomes a **staged suggestion** rather than a modal
+    interruption — the user reviews it whenever they next open the
+    Duplicates tool, not the moment it's found.
+  - The Duplicates tool becomes **always populated** from staged suggestions
+    across the whole library, instead of being gated on the user first
+    opening/selecting a specific folder and clicking "scan." This is a
+    meaningful change to the current per-folder-scan model and needs its own
+    design pass.
+  - The review UI itself (category tabs, bulk actions, per-group
+    confirm/dismiss) built for the on-demand flow is meant to be reused as-is
+    — the lift here is entirely in the detection trigger and suggestion
+    storage, not the review experience.
+  - Open questions for whoever picks this up: how suggestions surface to the
+    user (a badge count on the tool-rail icon? a system notification?); how
+    "incremental" avoids re-hashing an entire library on every file add for
+    libraries with many near-duplicate candidates; whether the watcher runs
+    as part of the Electron main process or a separate background service.
+    None of this is decided — this entry is scoping only.

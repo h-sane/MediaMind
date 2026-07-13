@@ -12,7 +12,9 @@ from mediamind.core.safety import (
     ExecutionReport,
     FileOp,
     execute,
+    is_network_location,
     new_manifest_path,
+    recycle_bin_supported,
     trash,
     unique_destination,
 )
@@ -139,3 +141,69 @@ def test_manifest_path_layout(tmp_path: Path):
     assert p.parent == tmp_path / "manifests"
     assert p.suffix == ".csv"
     assert "organize" in p.name
+
+
+def test_unc_path_is_a_network_location():
+    """The Cryptomator-vault case from the bug report: a UNC path can never
+    use the Windows Recycle Bin, no matter the drive-type lookup result."""
+    assert is_network_location(Path(r"\\cryptomator-vault\vault\file.jpg"))
+
+
+def test_local_path_is_not_a_network_location(tmp_path: Path):
+    assert not is_network_location(tmp_path / "file.jpg")
+
+
+def test_trash_permanent_deletes_the_file(tmp_path: Path):
+    """permanent=True is the explicit, separately-confirmed fallback for
+    locations where the Recycle Bin isn't available — it should actually
+    remove the file and label the action "deleted", not "trashed"."""
+    src = _mk(tmp_path / "a.jpg")
+    report = trash([src], permanent=True)
+    assert report.ok
+    assert not src.exists()
+    assert report.entries[0].action == "deleted"
+
+
+def test_recycle_bin_unsupported_on_network_path():
+    assert not recycle_bin_supported(Path(r"\\cryptomator-vault\vault\file.jpg"))
+
+
+def test_recycle_bin_supported_on_ntfs(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("mediamind.core.safety.filesystem_name", lambda _p: "NTFS")
+    assert recycle_bin_supported(tmp_path)
+
+
+def test_recycle_bin_supported_on_exfat_removable(tmp_path: Path, monkeypatch):
+    """FAT32/exFAT removable drives do support the Recycle Bin — an
+    allow-list (not "NTFS-only") must not wrongly flag them."""
+    monkeypatch.setattr("mediamind.core.safety.filesystem_name", lambda _p: "exFAT")
+    assert recycle_bin_supported(tmp_path)
+
+
+def test_recycle_bin_unsupported_on_unrecognized_virtual_filesystem(tmp_path: Path, monkeypatch):
+    """A WinFsp/Dokan virtual-vault mount reports DRIVE_FIXED (so
+    is_network_location misses it) but often a non-standard filesystem name —
+    that's the signal recycle_bin_supported must catch."""
+    monkeypatch.setattr("mediamind.core.safety.filesystem_name", lambda _p: "FUSE-Cryptomator")
+    assert not recycle_bin_supported(tmp_path)
+
+
+def test_recycle_bin_supported_when_filesystem_unknown(tmp_path: Path, monkeypatch):
+    """Unknown filesystem name stays optimistic — the reactive
+    _friendly_trash_error fallback is the backstop for anything missed here."""
+    monkeypatch.setattr("mediamind.core.safety.filesystem_name", lambda _p: None)
+    assert recycle_bin_supported(tmp_path)
+
+
+def test_trash_error_on_network_path_is_friendly(tmp_path: Path, monkeypatch):
+    """A send2trash failure on a network/virtual path should explain *why*
+    instead of surfacing the bare COM HRESULT text."""
+
+    def _raise(_path):
+        raise OSError(None, None, _path, -2147024809)
+
+    monkeypatch.setattr("send2trash.send2trash", _raise)
+    unc_path = Path(r"\\cryptomator-vault\vault\file.jpg")
+    report = trash([unc_path])
+    assert not report.ok
+    assert "network or virtual drive" in report.errors[0].error

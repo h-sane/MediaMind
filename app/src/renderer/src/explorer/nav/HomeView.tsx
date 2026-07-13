@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Folder } from 'lucide-react'
 import { FileThumbnail } from '../../components/FileThumbnail'
 import { MediaViewer } from '../../components/MediaViewer'
-import { useQuickAccess, useRecentFiles, useRecordRecentFile } from '../../api/hooks'
+import { useQuickAccess, useRecentFiles, useRecordRecentFile, useSettings } from '../../api/hooks'
 import { useExplorerStore } from '../../stores/explorer'
 import { useFolderDropTarget } from '../dnd/useFolderDropTarget'
 import { formatDate, formatSize } from '../format'
@@ -60,11 +60,13 @@ function RecentTile({ file, onOpen }: { file: RecentFile; onOpen: (path: string)
 export function HomeView(): React.JSX.Element {
   const { data: quickAccess } = useQuickAccess()
   const { data: recent } = useRecentFiles()
+  const { data: settings } = useSettings()
   const navigate = useExplorerStore((s) => s.navigate)
   const recordRecent = useRecordRecentFile()
   const [viewerIndex, setViewerIndex] = useState<number | null>(null)
 
   const pins = quickAccess?.pins ?? []
+  const recentFilesEnabled = settings?.recent_files_enabled ?? true
   const recentFiles = recent?.files ?? []
   const viewerFiles = recentFiles.map((f) => ({ path: f.path, kind: f.kind }))
 
@@ -94,7 +96,11 @@ export function HomeView(): React.JSX.Element {
 
       <section className="mt-6">
         <h2 className="mb-2 text-sm font-medium text-zinc-500">Recent files</h2>
-        {recentFiles.length === 0 ? (
+        {!recentFilesEnabled ? (
+          <p className="text-sm text-zinc-400">
+            Recent files is turned off — enable it in Folder Options to see files you open here.
+          </p>
+        ) : recentFiles.length === 0 ? (
           <p className="text-sm text-zinc-400">Files you open will show up here.</p>
         ) : (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-3">

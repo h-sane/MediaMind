@@ -17,12 +17,14 @@ from mediamind import __version__
 from mediamind.api.security import TokenAuthMiddleware
 from mediamind.api.ws import ConnectionManager
 from mediamind.config import browse_index_db_path, folder_stats_db_path, models_dir
+from mediamind.logging_setup import attach_websocket_handler, detach_websocket_handler
 from mediamind.core.folder_stats import FolderStatsIndex
 from mediamind.core.jobs import JobManager
 from mediamind.core.libraries import LibraryRegistry
 from mediamind.core.media_index import MediaIndex
 from mediamind.core.quick_access import QuickAccessStore
 from mediamind.core.recent import RecentFilesStore
+from mediamind.core.settings import SettingsStore
 from mediamind.providers.manager import ProviderManager
 
 logger = logging.getLogger("mediamind.api")
@@ -36,17 +38,27 @@ async def _lifespan(app: FastAPI):
     app.state.folder_stats = FolderStatsIndex(folder_stats_db_path())
     app.state.quick_access = QuickAccessStore()
     app.state.recent_files = RecentFilesStore()
+    app.state.settings = SettingsStore()
     app.state.job_manager = JobManager()
     app.state.job_manager.set_event_loop(asyncio.get_event_loop())
     app.state.connection_manager = ConnectionManager()
     app.state.job_manager.set_broadcast(app.state.connection_manager.broadcast_job)
+    # Fans every log record out to the in-app dev log console over the same
+    # WS channel — a no-op in practice unless a client has it open (see
+    # ConnectionManager.broadcast_log).
+    log_handler = attach_websocket_handler(asyncio.get_event_loop(), app.state.connection_manager.broadcast_log)
 
     # Provider manager (injected in tests; created from config in production).
     if not hasattr(app.state, "providers") or app.state.providers is None:
         app.state.providers = ProviderManager(models_dir())
 
     yield
-    # Nothing to clean up — daemon threads die with the process.
+    # Daemon threads die with the process, nothing to join. The log handler
+    # is the one thing that must be detached — it's registered on the root
+    # logger, a global singleton outside this app instance's lifetime, so
+    # leaving it attached after shutdown would accumulate one per app
+    # instance created (e.g. once per test in the test suite).
+    detach_websocket_handler(log_handler)
 
 
 def create_app(

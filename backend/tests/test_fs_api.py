@@ -788,6 +788,53 @@ def test_fs_recent_hides_deleted_file(client: TestClient, tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# /v1/fs/settings — Folder Options (Privacy: Recent files toggle)
+# ---------------------------------------------------------------------------
+
+def test_fs_settings_recent_files_enabled_by_default(client: TestClient):
+    res = client.get("/v1/fs/settings")
+    assert res.status_code == 200
+    assert res.json() == {"recent_files_enabled": True}
+
+
+def test_fs_settings_disable_recent_files_hides_and_stops_tracking(client: TestClient, tmp_path: Path):
+    folder = tmp_path / "settings_target"
+    folder.mkdir()
+    photo = folder / "photo.jpg"
+    Image.new("RGB", (8, 8), (255, 0, 0)).save(photo)
+    client.post("/v1/fs/recent", json={"path": str(photo)})
+
+    res = client.patch("/v1/fs/settings", json={"recent_files_enabled": False})
+    assert res.status_code == 200
+    assert res.json() == {"recent_files_enabled": False}
+
+    # Existing history is cleared, not just hidden.
+    res = client.get("/v1/fs/recent")
+    assert res.json()["files"] == []
+
+    # New opens aren't tracked while disabled either.
+    client.post("/v1/fs/recent", json={"path": str(photo)})
+    res = client.patch("/v1/fs/settings", json={"recent_files_enabled": True})
+    assert res.json() == {"recent_files_enabled": True}
+    res = client.get("/v1/fs/recent")
+    assert res.json()["files"] == []
+
+
+def test_fs_settings_reenable_recent_files_tracks_again(client: TestClient, tmp_path: Path):
+    folder = tmp_path / "settings_reenable"
+    folder.mkdir()
+    photo = folder / "photo.jpg"
+    Image.new("RGB", (8, 8), (255, 0, 0)).save(photo)
+
+    client.patch("/v1/fs/settings", json={"recent_files_enabled": False})
+    client.patch("/v1/fs/settings", json={"recent_files_enabled": True})
+    client.post("/v1/fs/recent", json={"path": str(photo)})
+
+    res = client.get("/v1/fs/recent")
+    assert len(res.json()["files"]) == 1
+
+
+# ---------------------------------------------------------------------------
 # /v1/fs/search — recursive / cross-subfolder search (Phase I)
 # ---------------------------------------------------------------------------
 

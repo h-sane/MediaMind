@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Folder, HardDrive, Music } from 'lucide-react'
 import { useBrowseRawUrl, useFileMetadata } from '../../api/hooks'
 import { FileThumbnail } from '../../components/FileThumbnail'
+import { usePaneLayoutStore } from '../../stores/paneLayout'
 import { useSelectionStore } from '../../stores/selection'
 import { formatAttributes, formatDate, formatDuration, formatSize } from '../format'
 import { useDirectoryListing } from '../content/useDirectoryListing'
@@ -19,6 +20,7 @@ export function PreviewPane(): React.JSX.Element {
   const [tab, setTab] = useState<Tab>('preview')
   const selected = useSelectionStore((s) => s.selected)
   const { entries } = useDirectoryListing()
+  const previewPaneWidth = usePaneLayoutStore((s) => s.previewPaneWidth)
 
   const singlePath = selected.size === 1 ? Array.from(selected)[0] : null
   const entry = singlePath ? entries.find((e) => e.path === singlePath) : undefined
@@ -31,7 +33,10 @@ export function PreviewPane(): React.JSX.Element {
 
   if (selected.size === 0) {
     return (
-      <aside className="flex h-full w-72 shrink-0 flex-col items-center justify-center border-l border-zinc-200 bg-zinc-50 p-4 text-center">
+      <aside
+        style={{ width: previewPaneWidth }}
+        className="flex h-full shrink-0 flex-col items-center justify-center border-l border-zinc-200 bg-zinc-50 p-4 text-center"
+      >
         <p className="text-sm text-zinc-400">Select an item to see details.</p>
       </aside>
     )
@@ -39,18 +44,24 @@ export function PreviewPane(): React.JSX.Element {
 
   if (selected.size > 1) {
     return (
-      <aside className="flex h-full w-72 shrink-0 flex-col items-center justify-center border-l border-zinc-200 bg-zinc-50 p-4 text-center">
+      <aside
+        style={{ width: previewPaneWidth }}
+        className="flex h-full shrink-0 flex-col items-center justify-center border-l border-zinc-200 bg-zinc-50 p-4 text-center"
+      >
         <p className="text-sm text-zinc-400">{selected.size} items selected.</p>
       </aside>
     )
   }
 
   if (!entry) {
-    return <aside className="h-full w-72 shrink-0 border-l border-zinc-200 bg-zinc-50" />
+    return <aside style={{ width: previewPaneWidth }} className="h-full shrink-0 border-l border-zinc-200 bg-zinc-50" />
   }
 
   return (
-    <aside className="flex h-full w-72 shrink-0 flex-col border-l border-zinc-200 bg-zinc-50">
+    <aside
+      style={{ width: previewPaneWidth }}
+      className="flex h-full shrink-0 flex-col border-l border-zinc-200 bg-zinc-50"
+    >
       <div className="flex border-b border-zinc-200 px-2 pt-2">
         {(['preview', 'details'] as Tab[]).map((t) => (
           <button

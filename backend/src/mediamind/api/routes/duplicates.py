@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from mediamind.api.models import (
+    ConfirmOut,
     DuplicateFileOut,
     DuplicateGroupOut,
     DuplicatesOut,
@@ -21,17 +22,23 @@ from mediamind.api.models import (
     ExecuteIn,
     ExecutionReportOut,
     ManifestEntryOut,
+    ResetConfigOut,
     ResolutionsIn,
 )
 from mediamind.config import library_data_dir
+from mediamind.core.dedupe import group_signature
 from mediamind.core.jobs import JobManager
 from mediamind.core.libraries import LibraryRegistry
-from mediamind.core.safety import new_manifest_path, trash
+from mediamind.core.safety import new_manifest_path, recycle_bin_supported, trash
 from mediamind.store.db import library_db_path, open_db
 from mediamind.store.duplicates import (
+    add_dismissals,
+    clear_dismissals,
     get_trash_set,
     load_scan,
+    mark_groups_ignored,
     mark_members_trashed,
+    unignore_all_groups,
     upsert_resolution,
     validate_no_empty_groups,
 )
@@ -120,6 +127,20 @@ def list_duplicates(library_id: str, request: Request):
 
 
 # ---------------------------------------------------------------------------
+# Recycle Bin support check (B7 — pre-emptive, so the delete confirm dialog
+# never has to try-then-fall-back)
+# ---------------------------------------------------------------------------
+
+@router.get("/libraries/{library_id}/duplicates/recycle-bin-check")
+def recycle_bin_check(library_id: str, request: Request):
+    """Whether the library's drive supports the Recycle Bin, checked once for
+    the library root — every execute_duplicates() target is `library_root /
+    rel` (see below), so all trash targets share the root's volume."""
+    _, library_root = _get_library_and_root(request, library_id)
+    return {"recycle_bin_supported": recycle_bin_supported(library_root)}
+
+
+# ---------------------------------------------------------------------------
 # Set resolutions
 # ---------------------------------------------------------------------------
 
@@ -151,6 +172,87 @@ def set_resolutions(library_id: str, body: ResolutionsIn, request: Request):
         conn.close()
 
     return {"updated": updated}
+
+
+# ---------------------------------------------------------------------------
+# Confirm (Save configuration — dismiss reviewed groups across rescans)
+# ---------------------------------------------------------------------------
+
+@router.post("/libraries/{library_id}/duplicates/confirm", response_model=ConfirmOut)
+def confirm_duplicates(library_id: str, request: Request):
+    """Record every fully-reviewed group's member signature so a future
+    rescan of this library won't surface it again, unless its membership
+    changes (see core.dedupe.group_signature and routes/scans.py's dedupe
+    runner, which filters against these signatures)."""
+    running = _job_manager(request).running_for(library_id)
+    if running:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A {running.type} scan is still running — wait for it to finish",
+        )
+
+    _, library_root = _get_library_and_root(request, library_id)
+    conn = _open_library_db(library_root)
+    try:
+        scan = load_scan(conn)
+        if scan is None:
+            raise HTTPException(status_code=404, detail="No duplicate scan found — run a scan first")
+
+        dismissal_rows: list[tuple[str, str, int]] = []
+        group_ids: list[int] = []
+        skipped_pending = 0
+
+        for g in scan.groups:
+            pending = [m for m in g.files if m.resolution == "trash"]
+            if pending:
+                # Unexecuted deletions — those files are still on disk, so
+                # dismissing now would either be undone by the next scan or
+                # wrongly hide files the user meant to delete. Execute first.
+                skipped_pending += 1
+                continue
+
+            survivors = [m for m in g.files if m.resolution != "trashed"]
+            if len(survivors) < 2:
+                continue  # already resolved down to a single keeper
+
+            sig = group_signature([m.content_hash for m in survivors])
+            dismissal_rows.append((sig, g.match, len(survivors)))
+            group_ids.append(g.id)
+
+        add_dismissals(conn, dismissal_rows)
+        mark_groups_ignored(conn, group_ids)
+    finally:
+        conn.close()
+
+    return ConfirmOut(confirmed_groups=len(group_ids), skipped_pending=skipped_pending)
+
+
+# ---------------------------------------------------------------------------
+# Reset configuration (undo every "Save configuration" for this library)
+# ---------------------------------------------------------------------------
+
+@router.delete("/libraries/{library_id}/duplicates/dismissals", response_model=ResetConfigOut)
+def reset_dismissals(library_id: str, request: Request):
+    """Clear every dismissal signature recorded via confirm_duplicates() and
+    un-hide the groups they were hiding, so a user who saved the wrong
+    configuration (or just wants a clean slate) can start review over —
+    takes effect immediately, no rescan required."""
+    running = _job_manager(request).running_for(library_id)
+    if running:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A {running.type} scan is still running — wait for it to finish",
+        )
+
+    _, library_root = _get_library_and_root(request, library_id)
+    conn = _open_library_db(library_root)
+    try:
+        cleared = clear_dismissals(conn)
+        restored = unignore_all_groups(conn)
+    finally:
+        conn.close()
+
+    return ResetConfigOut(cleared_dismissals=cleared, restored_groups=restored)
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +322,12 @@ def execute_duplicates(library_id: str, body: ExecuteIn, request: Request):
 
         data_dir = library_data_dir(library_root)
         manifest_path = new_manifest_path(data_dir, "dedupe")
-        report = trash(paths_to_trash, manifest_path=manifest_path, dry_run=body.dry_run)
+        report = trash(
+            paths_to_trash,
+            manifest_path=manifest_path,
+            dry_run=body.dry_run,
+            permanent=body.permanent,
+        )
 
         if not body.dry_run:
             trashed_ids = [
@@ -264,12 +371,15 @@ def get_thumbnail(
 
     Keyed by row id (not by path) so the endpoint cannot be used to read
     arbitrary files — only files that were part of a dedupe scan are accessible.
+    Delegates to `core.thumbnails.media_thumbnail_jpeg`, the same decode chain
+    Explorer's own file thumbnails use, so video/GIF duplicates (not just
+    images) get a real preview frame instead of a permanent blank tile.
     """
     _, library_root = _get_library_and_root(request, library_id)
     conn = _open_library_db(library_root)
     try:
         row = conn.execute(
-            "SELECT path FROM duplicate_members WHERE id = ?", (member_id,)
+            "SELECT path, kind FROM duplicate_members WHERE id = ?", (member_id,)
         ).fetchone()
     finally:
         conn.close()
@@ -279,25 +389,10 @@ def get_thumbnail(
 
     abs_path = library_root / row["path"]
 
-    try:
-        # Register HEIF/HEIC support if available (soft dependency).
-        try:
-            from pillow_heif import register_heif_opener
-            register_heif_opener()
-        except ImportError:
-            pass
+    from mediamind.core.thumbnails import media_thumbnail_jpeg
 
-        from PIL import Image, ImageOps
+    jpeg_bytes = media_thumbnail_jpeg(abs_path, row["kind"] or "image", size)
+    if jpeg_bytes is None:
+        raise HTTPException(status_code=422, detail="Cannot decode file")
 
-        with Image.open(str(abs_path)) as im:
-            im = ImageOps.exif_transpose(im)  # correct EXIF orientation
-            im.thumbnail((size, size), Image.LANCZOS)
-            if im.mode not in ("RGB", "L"):
-                im = im.convert("RGB")
-            buf = io.BytesIO()
-            im.save(buf, format="JPEG", quality=85)
-            buf.seek(0)
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Cannot decode image: {exc}")
-
-    return StreamingResponse(buf, media_type="image/jpeg")
+    return StreamingResponse(io.BytesIO(jpeg_bytes), media_type="image/jpeg")

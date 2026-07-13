@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { logDevError } from './stores/devLog'
 
 interface Props {
   children: ReactNode
@@ -16,7 +17,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
-    window.mediamind.logError('render', `${error.stack ?? error.message}\n${info.componentStack ?? ''}`)
+    logDevError('render', `${error.stack ?? error.message}\n${info.componentStack ?? ''}`)
   }
 
   render(): ReactNode {

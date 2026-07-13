@@ -5,10 +5,19 @@ interface Props {
   memberId: number
   alt?: string
   className?: string
+  size?: number
+  fit?: 'cover' | 'contain'
 }
 
-export function Thumbnail({ libraryId, memberId, alt = '', className = '' }: Props): React.JSX.Element {
-  const url = useThumbnailUrl(libraryId, memberId)
+export function Thumbnail({
+  libraryId,
+  memberId,
+  alt = '',
+  className = '',
+  size = 256,
+  fit = 'cover'
+}: Props): React.JSX.Element {
+  const url = useThumbnailUrl(libraryId, memberId, size)
 
   if (!url) {
     return (
@@ -24,7 +33,7 @@ export function Thumbnail({ libraryId, memberId, alt = '', className = '' }: Pro
       src={url}
       alt={alt}
       draggable={false}
-      className={`rounded-lg object-cover ${className}`}
+      className={`rounded-lg ${fit === 'cover' ? 'object-cover' : 'object-contain'} ${className}`}
     />
   )
 }

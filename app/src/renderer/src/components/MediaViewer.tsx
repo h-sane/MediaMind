@@ -67,13 +67,13 @@ export function MediaViewer({ libraryId, files, index, onClose, onIndexChange }:
         </button>
       </div>
 
-      <div
-        className="relative flex flex-1 items-center justify-center overflow-hidden px-4 pb-6"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="relative flex flex-1 items-center justify-center overflow-hidden px-4 pb-6">
         {hasPrev && (
           <button
-            onClick={() => onIndexChange(index - 1)}
+            onClick={(e) => {
+              e.stopPropagation()
+              onIndexChange(index - 1)
+            }}
             className="absolute left-2 z-10 rounded-full bg-black/40 p-3 text-white transition hover:bg-black/60"
             aria-label="Previous"
           >
@@ -86,16 +86,38 @@ export function MediaViewer({ libraryId, files, index, onClose, onIndexChange }:
         {failed && <p className="text-sm text-red-400">Could not load this file.</p>}
         {!url && !failed && <p className="text-sm text-zinc-400">Loading…</p>}
         {url && file.kind === 'video' && (
-          <video src={url} controls autoPlay className="max-h-full max-w-full" />
+          <video
+            src={url}
+            controls
+            autoPlay
+            className="max-h-full max-w-full"
+            onClick={(e) => e.stopPropagation()}
+          />
         )}
-        {url && file.kind === 'audio' && <audio src={url} controls autoPlay className="w-full max-w-md" />}
+        {url && file.kind === 'audio' && (
+          <audio
+            src={url}
+            controls
+            autoPlay
+            className="w-full max-w-md"
+            onClick={(e) => e.stopPropagation()}
+          />
+        )}
         {url && file.kind !== 'video' && file.kind !== 'audio' && (
-          <img src={url} alt="" className="max-h-full max-w-full object-contain" />
+          <img
+            src={url}
+            alt=""
+            className="max-h-full max-w-full object-contain"
+            onClick={(e) => e.stopPropagation()}
+          />
         )}
 
         {hasNext && (
           <button
-            onClick={() => onIndexChange(index + 1)}
+            onClick={(e) => {
+              e.stopPropagation()
+              onIndexChange(index + 1)
+            }}
             className="absolute right-2 z-10 rounded-full bg-black/40 p-3 text-white transition hover:bg-black/60"
             aria-label="Next"
           >

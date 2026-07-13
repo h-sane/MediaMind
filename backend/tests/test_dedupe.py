@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from mediamind.core.dedupe import find_duplicates
+from mediamind.core.dedupe import find_duplicates, group_signature
 from mediamind.core.scanner import scan_folder
 
 
@@ -84,6 +84,105 @@ def test_detection_is_read_only(dup_library: Path):
     _groups(dup_library)
     after = {p: p.stat().st_mtime for p in dup_library.rglob("*") if p.is_file()}
     assert before == after
+
+
+def test_unique_size_files_skip_content_hash(dup_library: Path, monkeypatch):
+    """Perf guard: a file whose size is unique in the library can never be a
+    byte-exact duplicate, so it must never trigger a full-file hash read."""
+    import mediamind.core.dedupe as dedupe_mod
+
+    files = list(scan_folder(dup_library))
+    sizes: dict[int, int] = {}
+    for f in files:
+        if f.is_media:
+            sizes[f.size] = sizes.get(f.size, 0) + 1
+    unique_size_paths = {f.path for f in files if f.is_media and sizes[f.size] == 1}
+    assert unique_size_paths  # sanity: the fixture does contain a unique-size file (photo_small.jpg)
+
+    real_hash_file = dedupe_mod.hash_file
+
+    def guarded_hash_file(path: Path) -> str:
+        assert path not in unique_size_paths, f"hash_file() called on unique-size file {path}"
+        return real_hash_file(path)
+
+    monkeypatch.setattr(dedupe_mod, "hash_file", guarded_hash_file)
+    groups = find_duplicates(files)
+    # Results must be unchanged by the optimization.
+    photo_group = next(g for g in groups if any(f.path.name == "photo.png" for f in g.files))
+    assert {f.path.name for f in photo_group.files} == {"photo.png", "photo_copy.png", "photo_small.jpg"}
+
+
+def test_many_same_size_files_group_correctly(tmp_path: Path):
+    """Alignment guard: every file shares one byte size, so all of them are
+    hashed concurrently on the thread pool — each pair must still resolve to
+    exactly its own group (a completion-order bug would mismatch path/hash
+    pairs and scramble the groups)."""
+    for n in range(10):
+        payload = bytes([n]) * 4096
+        (tmp_path / f"clip{n}.mp4").write_bytes(payload)
+        (tmp_path / f"clip{n}_copy.mp4").write_bytes(payload)
+
+    groups = _groups(tmp_path)
+    got = {frozenset(f.path.name for f in g.files) for g in groups}
+    want = {frozenset({f"clip{n}.mp4", f"clip{n}_copy.mp4"}) for n in range(10)}
+    assert got == want
+
+
+def test_stalled_file_is_skipped_not_hung(dup_library: Path, monkeypatch):
+    """Bug reproduction: a single blocking read (cloud-sync placeholder,
+    stalled network/encrypted-drive mount) must not freeze the whole scan.
+    hash_file() only runs for files sharing a size, so make clip.mp4's
+    "read" hang forever and confirm find_duplicates() still returns promptly
+    by skipping it, instead of hanging forever."""
+    import time
+
+    import mediamind.core.dedupe as dedupe_mod
+
+    real_hash_file = dedupe_mod.hash_file
+
+    def hanging_hash_file(path: Path) -> str:
+        if path.name == "clip.mp4":
+            time.sleep(10)  # far longer than the test's tiny file_timeout_seconds
+        return real_hash_file(path)
+
+    monkeypatch.setattr(dedupe_mod, "hash_file", hanging_hash_file)
+
+    files = list(scan_folder(dup_library))
+    groups = find_duplicates(files, file_timeout_seconds=0.2)
+
+    # The stalled file never joins a group (skipped, not waited-for-forever).
+    for g in groups:
+        assert "clip.mp4" not in {f.path.name for f in g.files}
+    # Its (unaffected) duplicate pair partner is also absent — a group needs 2+.
+    for g in groups:
+        assert "clip_copy.mp4" not in {f.path.name for f in g.files}
+    # Everything else still resolved normally in the same call.
+    photo_group = next(g for g in groups if any(f.path.name == "photo.png" for f in g.files))
+    assert {f.path.name for f in photo_group.files} == {"photo.png", "photo_copy.png", "photo_small.jpg"}
+
+
+def test_group_signature_stable_across_scans_with_unrelated_file_churn(dup_library: Path):
+    """Regression: photo_small.jpg is unique-size (a sentinel-hash member,
+    since it joins the group only via a phash edge) — its group_signature()
+    must stay identical across scans even when unrelated files are
+    added/removed elsewhere, since the sentinel hash is only guaranteed
+    unique *within* one scan's positional ordering, not across scans."""
+
+    def photo_signature() -> str:
+        groups = _groups(dup_library)
+        photo_group = next(g for g in groups if any(f.path.name == "photo.png" for f in g.files))
+        assert photo_group.match == "near"
+        assert any(f.content_hash.startswith("\x00uniq:") for f in photo_group.files)
+        return group_signature([f.identity for f in photo_group.files])
+
+    sig_before = photo_signature()
+
+    extra = dup_library / "aaa_unrelated_extra.bin"
+    extra.write_bytes(b"unrelated churn bytes")
+    assert photo_signature() == sig_before
+
+    extra.unlink()
+    assert photo_signature() == sig_before
 
 
 def test_cancel_stops_cleanly(dup_library: Path):

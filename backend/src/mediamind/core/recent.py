@@ -63,3 +63,11 @@ class RecentFilesStore:
         del self._entries[MAX_RECENT:]
         self._save()
         return self.list_raw()
+
+    def clear(self) -> None:
+        """Wipes all tracked history — used when the user turns Recent files
+        off (Folder Options), mirroring Explorer's "Clear File Explorer
+        history" behavior so nothing already tracked lingers once disabled."""
+        if self._entries:
+            self._entries = []
+            self._save()

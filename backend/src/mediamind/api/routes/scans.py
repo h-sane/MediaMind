@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 
@@ -9,14 +10,21 @@ from fastapi import APIRouter, HTTPException, Request
 
 from mediamind.api.models import JobSnapshot, ScanIn
 from mediamind.config import library_data_dir
-from mediamind.core.dedupe import DEFAULT_NEAR_THRESHOLD, find_duplicates
+from mediamind.core.dedupe import DEFAULT_NEAR_THRESHOLD, find_duplicates, group_signature
 from mediamind.core.jobs import JobContext, JobManager
 from mediamind.core.libraries import LibraryRegistry
 from mediamind.core.scanner import scan_folder
 from mediamind.store.db import library_db_path, open_db
-from mediamind.store.duplicates import persist_scan
+from mediamind.store.duplicates import get_dismissed_signatures, persist_scan
 
 router = APIRouter(tags=["scans"])
+logger = logging.getLogger("mediamind.scans")
+
+# Coarser than JobContext's 0.2s progress-broadcast throttle — logging every
+# tick would flood the in-app dev log console on a large scan. This only
+# needs to be frequent enough that a user watching the log can tell a scan is
+# actually moving, not frozen.
+_LOG_INTERVAL_SECONDS = 2.0
 
 
 def _registry(request: Request) -> LibraryRegistry:
@@ -49,12 +57,46 @@ def _make_dedupe_runner(library_root: Path, threshold: int):
     def runner(ctx: JobContext) -> dict:
         started_at = time.time()
         ctx.report_progress(0, 0, "scanning")
+        logger.info("Dedupe scan: walking %s", library_root)
 
-        files = list(scan_folder(library_root))
+        last_log = 0.0
+
+        def _throttled_log(msg: str, *args: object) -> None:
+            nonlocal last_log
+            now = time.monotonic()
+            if now - last_log >= _LOG_INTERVAL_SECONDS:
+                last_log = now
+                logger.info(msg, *args)
+
+        def on_walk(n: int) -> None:
+            if ctx.cancelled():
+                return
+            ctx.report_progress(n, 0, "scanning")
+            _throttled_log("Dedupe scan: %d files found so far…", n)
+
+        def on_stat(done: int, total: int) -> None:
+            if ctx.cancelled():
+                return
+            # A real total (not 0) here — the previously-invisible "reading
+            # file info" step now shows an actual percentage and ETA instead
+            # of a progress bar frozen on the last walk count.
+            ctx.report_progress(done, total, "reading")
+            _throttled_log("Dedupe scan: read details for %d/%d files…", done, total)
+
+        files = list(scan_folder(library_root, on_walk=on_walk, on_stat=on_stat))
+        if ctx.cancelled():
+            return {}
+
+        media_count = sum(1 for f in files if f.is_media)
+        logger.info(
+            "Dedupe scan: %d files found (%d media) — comparing for duplicates",
+            len(files), media_count,
+        )
 
         def progress(done: int, total: int) -> None:
             if not ctx.cancelled():
                 ctx.report_progress(done, total, "hashing")
+                _throttled_log("Dedupe scan: compared %d/%d files…", done, total)
 
         groups = find_duplicates(
             files,
@@ -68,17 +110,26 @@ def _make_dedupe_runner(library_root: Path, threshold: int):
         if ctx.cancelled():
             return {}
 
-        reclaimable = sum(f.size for g in groups for f in g.files if not f.is_best)
-        total_files = sum(len(g.files) for g in groups)
-        summary = {
-            "groups": len(groups),
-            "files": total_files,
-            "reclaimable_bytes": reclaimable,
-        }
-
         data_dir = library_data_dir(library_root)
         conn = open_db(library_db_path(data_dir))
         try:
+            # A group the user already reviewed and confirmed via "Save
+            # configuration" must not resurface on a rescan unless its
+            # membership actually changed (e.g. a new duplicate file joined).
+            dismissed = get_dismissed_signatures(conn)
+            groups = [
+                g for g in groups
+                if group_signature([f.identity for f in g.files]) not in dismissed
+            ]
+
+            reclaimable = sum(f.size for g in groups for f in g.files if not f.is_best)
+            total_files = sum(len(g.files) for g in groups)
+            summary = {
+                "groups": len(groups),
+                "files": total_files,
+                "reclaimable_bytes": reclaimable,
+            }
+
             persist_scan(
                 conn,
                 scan_id=ctx.job_id,
@@ -92,6 +143,10 @@ def _make_dedupe_runner(library_root: Path, threshold: int):
         finally:
             conn.close()
 
+        logger.info(
+            "Dedupe scan complete: %d groups, %d files, %d bytes reclaimable",
+            summary["groups"], summary["files"], summary["reclaimable_bytes"],
+        )
         return summary
 
     return runner

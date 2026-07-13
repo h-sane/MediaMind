@@ -6,11 +6,16 @@ read-only: it never moves, modifies, or deletes anything.
 
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 from mediamind.config import LIBRARY_DATA_DIRNAME
+from mediamind.core.concurrency import TIMED_OUT, run_with_timeout
+
+logger = logging.getLogger("mediamind.scanner")
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".jfif", ".png", ".bmp", ".webp",
               ".tiff", ".tif", ".heic", ".heif", ".avif"}
@@ -24,6 +29,16 @@ KIND_VIDEO = "video"
 KIND_OTHER = "other"
 
 MEDIA_KINDS = (KIND_IMAGE, KIND_GIF, KIND_VIDEO)
+
+# A single unreachable directory or file must never freeze an entire scan:
+# listing a directory or stat-ing a file is a blocking syscall with no other
+# bound on its I/O time. Seen in practice with cloud-sync placeholder folders
+# (OneDrive/Google Drive Files-On-Demand) and stalled network/encrypted-drive
+# mounts — mirrors the same pattern used for the per-file hash read in
+# core.dedupe. A directory listing is a single syscall regardless of size, so
+# it gets the longer budget; a per-file stat is cheaper and gets a shorter one.
+DEFAULT_WALK_TIMEOUT_SECONDS = 30.0
+DEFAULT_STAT_TIMEOUT_SECONDS = 15.0
 
 
 @dataclass(frozen=True)
@@ -49,26 +64,133 @@ def kind_of(path: Path) -> str:
     return KIND_OTHER
 
 
+def _list_dir(path: Path, timeout: float) -> list[os.DirEntry]:
+    def _list() -> list[os.DirEntry]:
+        try:
+            return list(os.scandir(path))
+        except OSError:
+            return []
+
+    outcome = run_with_timeout(_list, timeout)
+    if outcome is TIMED_OUT:
+        logger.warning(
+            "scan: skipping directory %s - timed out after %.0fs listing it "
+            "(likely a cloud-sync placeholder or a stalled network/encrypted-drive mount)",
+            path, timeout,
+        )
+        return []
+    return outcome  # type: ignore[return-value]
+
+
 def scan_folder(
     root: Path,
     recursive: bool = True,
     exclude_dirs: tuple[str, ...] = (LIBRARY_DATA_DIRNAME,),
+    on_walk: Callable[[int], None] | None = None,
+    on_stat: Callable[[int, int], None] | None = None,
+    walk_timeout_seconds: float = DEFAULT_WALK_TIMEOUT_SECONDS,
+    stat_timeout_seconds: float = DEFAULT_STAT_TIMEOUT_SECONDS,
 ) -> Iterator[ScannedFile]:
     """Yield every file under `root`, classified, in stable sorted order.
 
     Directories named in `exclude_dirs` (MediaMind's own data folder by
-    default) are skipped entirely. Files that vanish mid-scan are skipped
-    rather than raising — a scan must survive a changing folder.
+    default) are pruned before descending into them. Files that vanish
+    mid-scan are skipped rather than raising — a scan must survive a
+    changing folder. A directory whose listing doesn't return within
+    `walk_timeout_seconds`, or a file whose metadata read doesn't return
+    within `stat_timeout_seconds`, is skipped with a logged warning instead
+    of hanging the whole scan forever.
+
+    Walking is collected into a list before the first file is yielded, so on
+    a large tree this can take a while with no feedback. `on_walk`, if
+    given, is called periodically during the walk with a running count of
+    files found so far (no known total yet) so a caller can surface
+    "N files found so far" progress. Once the walk finishes and the total is
+    known, every file's metadata is read (a `stat()` call each) before it can
+    be yielded — on a slow disk or network share this was previously
+    invisible to the caller (no progress, no timeout) and could look
+    identical to a genuinely hung scan. `on_stat`, if given, is called with
+    (done, total) as each file's metadata is read.
+
+    Directories are listed manually via `os.scandir` (not `os.walk` or
+    `Path.rglob`) so each directory's listing can be individually
+    timeout-guarded, and so a symlink or Windows junction/reparse point that
+    loops back into an ancestor directory is pruned — neither recursed into
+    nor listed as a file — the same protection `os.walk(followlinks=False)`
+    gave: an unguarded walk over such a loop can run indefinitely on a
+    "many nested folders" tree and looks identical to a hung scan from the
+    caller's side.
     """
     root = root.expanduser().resolve()
-    walker = root.rglob("*") if recursive else root.glob("*")
-    for path in sorted(walker):
-        if any(part in exclude_dirs for part in path.relative_to(root).parts):
-            continue
-        try:
-            if not path.is_file():
+    collected: list[Path] = []
+    found = 0
+
+    def _emit_progress() -> None:
+        if on_walk is not None and found % 200 == 0:
+            on_walk(found)
+
+    if not recursive:
+        for entry in _list_dir(root, walk_timeout_seconds):
+            if entry.name in exclude_dirs:
                 continue
+            collected.append(Path(entry.path))
+            found += 1
+            _emit_progress()
+    else:
+        stack = [root]
+        while stack:
+            current = stack.pop()
+            subdirs: list[Path] = []
+            for entry in _list_dir(current, walk_timeout_seconds):
+                try:
+                    is_dir = entry.is_dir()  # follows symlinks, matches os.walk's classification
+                except OSError:
+                    continue
+                if is_dir:
+                    if entry.name in exclude_dirs:
+                        continue
+                    try:
+                        is_link = entry.is_symlink()
+                    except OSError:
+                        is_link = False
+                    if is_link:
+                        continue  # symlink/junction to a directory — pruned, never recursed
+                    subdirs.append(Path(entry.path))
+                else:
+                    collected.append(Path(entry.path))
+                    found += 1
+                    _emit_progress()
+            stack.extend(subdirs)
+
+    if on_walk is not None:
+        on_walk(found)
+
+    total = len(collected)
+    for i, path in enumerate(sorted(collected), 1):
+        def _read(path: Path = path) -> tuple[int, float] | None:
+            if not path.is_file():
+                return None
             stat = path.stat()
+            return stat.st_size, stat.st_mtime
+
+        try:
+            outcome = run_with_timeout(_read, stat_timeout_seconds)
         except OSError:
+            outcome = None
+
+        if outcome is TIMED_OUT:
+            logger.warning(
+                "scan: skipping %s - timed out after %.0fs reading its file info "
+                "(likely a cloud-sync placeholder or a stalled network/encrypted-drive read)",
+                path, stat_timeout_seconds,
+            )
+            outcome = None
+
+        if on_stat is not None:
+            on_stat(i, total)
+
+        if outcome is None:
             continue
-        yield ScannedFile(path=path, kind=kind_of(path), size=stat.st_size, mtime=stat.st_mtime)
+
+        size, mtime = outcome  # type: ignore[misc]
+        yield ScannedFile(path=path, kind=kind_of(path), size=size, mtime=mtime)

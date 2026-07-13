@@ -9,6 +9,7 @@ import { useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { connectBackend } from './client'
 import { useJobsStore } from '../stores/jobs'
+import { useDevLogStore, type LogLevel } from '../stores/devLog'
 
 export function useProgressSocket(): void {
   const qc = useQueryClient()
@@ -68,6 +69,13 @@ export function useProgressSocket(): void {
               qc.invalidateQueries({ queryKey: ['multi-person', snap.library_id] })
               qc.invalidateQueries({ queryKey: ['providers'] })
             }
+          } else if (msg.msg_type === 'log') {
+            useDevLogStore.getState().push({
+              ts: (msg.ts ?? Date.now() / 1000) as number,
+              level: (msg.level ?? 'INFO') as LogLevel,
+              logger: (msg.logger ?? '') as string,
+              message: (msg.message ?? '') as string
+            })
           }
         } catch {
           /* malformed message — ignore */

@@ -77,6 +77,13 @@ def recent_files_path() -> Path:
     return app_data_dir() / "recent_files.json"
 
 
+def settings_path() -> Path:
+    """JSON store of the Explorer shell's user-facing app settings (e.g.
+    whether Recent files is tracked at all). Lives in the app data dir, same
+    reasoning as `browse_index_db_path`."""
+    return app_data_dir() / "settings.json"
+
+
 def fs_ops_dir() -> Path:
     """Manifests + op-log for the Explorer shell's file operations (rename/
     move/copy/delete/new-folder). Library-free browsing has no `.mediamind`

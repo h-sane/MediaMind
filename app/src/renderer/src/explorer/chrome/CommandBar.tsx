@@ -14,6 +14,7 @@ import {
   PanelRight,
   PenLine,
   Scissors,
+  Settings,
   Share2,
   SlidersHorizontal,
   SquareDashedMousePointer,
@@ -21,6 +22,7 @@ import {
 } from 'lucide-react'
 import { isRealFolder, useExplorerStore } from '../../stores/explorer'
 import type { GroupKey, SortKey } from '../../stores/explorer'
+import { useFolderOptionsDialogStore } from '../../stores/folderOptionsDialog'
 import { useRecentDeletionsDialogStore } from '../../stores/recentDeletionsDialog'
 import { useSelectionStore } from '../../stores/selection'
 import { useDirectoryListing } from '../content/useDirectoryListing'
@@ -70,6 +72,7 @@ export function CommandBar(): React.JSX.Element {
   const fileOps = useFileOps()
   const { entries } = useDirectoryListing()
   const openRecentDeletions = useRecentDeletionsDialogStore((s) => s.open)
+  const openFolderOptions = useFolderOptionsDialogStore((s) => s.open)
   const selectAll = useSelectionStore((s) => s.selectAll)
   const invertSelection = useSelectionStore((s) => s.invertSelection)
   const clearSelection = useSelectionStore((s) => s.clear)
@@ -275,6 +278,14 @@ export function CommandBar(): React.JSX.Element {
           className="flex items-center px-1.5 py-1.5 text-zinc-500 hover:text-zinc-700"
         >
           <History className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={openFolderOptions}
+          title="Folder Options"
+          className="flex items-center px-1.5 py-1.5 text-zinc-500 hover:text-zinc-700"
+        >
+          <Settings className="h-4 w-4" />
         </button>
       </div>
     </div>

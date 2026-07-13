@@ -26,6 +26,11 @@ files:
   - out/**/*
   - "!out/**/*.map"
 
+# koffi's native .node binary (used for the "Open with" dialog's
+# SHOpenWithDialog call) must be extractable from the asar at runtime.
+asarUnpack:
+  - "**/node_modules/koffi/**"
+
 extraResources:
   - from: "../backend/dist/mediamind"
     to: "engine"

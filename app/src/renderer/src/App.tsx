@@ -1,9 +1,11 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useHealth } from './api/hooks'
 import { useProgressSocket } from './api/progress'
 import { useJobsStore } from './stores/jobs'
 import { ExplorerShell } from './explorer/ExplorerShell'
+import { DevLogPanel } from './components/DevLogPanel'
+import { DEV_LOG_PANEL_ENABLED } from './devLogConfig'
 
 // ---------------------------------------------------------------------------
 // Invalidate TanStack queries when jobs complete
@@ -50,6 +52,29 @@ function EngineStatusBanner(): React.JSX.Element | null {
 }
 
 // ---------------------------------------------------------------------------
+// Dev log console — gated by both the code-level DEV_LOG_PANEL_ENABLED
+// switch (devLogConfig.ts) and the main process's own app.isPackaged, so a
+// packaged build never shows it even if the switch was left on.
+// ---------------------------------------------------------------------------
+
+function DevLogGate(): React.JSX.Element | null {
+  const [show, setShow] = useState(false)
+
+  useEffect(() => {
+    if (!DEV_LOG_PANEL_ENABLED) return
+    let cancelled = false
+    void window.mediamind.isPackaged().then((packaged) => {
+      if (!cancelled && !packaged) setShow(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  return show ? <DevLogPanel /> : null
+}
+
+// ---------------------------------------------------------------------------
 // Root app
 // ---------------------------------------------------------------------------
 
@@ -62,6 +87,7 @@ export default function App(): React.JSX.Element {
       <JobInvalidator />
       <EngineStatusBanner />
       <ExplorerShell />
+      <DevLogGate />
     </div>
   )
 }

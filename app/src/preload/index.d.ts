@@ -2,6 +2,7 @@ import type { BackendInfo, ShellOpenResult } from '../shared/types'
 
 interface MediaMindBridge {
   getBackendInfo: () => Promise<BackendInfo | null>
+  isPackaged: () => Promise<boolean>
   onBackendReady: (cb: (info: BackendInfo) => void) => void
   pickFolder: () => Promise<string | null>
   logError: (source: string, message: string) => void

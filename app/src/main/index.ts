@@ -6,6 +6,108 @@ import { startBackend, stopBackend, getBackendInfo } from './backend'
 import { logLine, logPath } from './log'
 import type { ShellOpenResult } from '../shared/types'
 
+// ---------------------------------------------------------------------------
+// Native "Open with" dialog (SHOpenWithDialog via COM), window-owned so it
+// behaves as a proper modal instead of a floating orphan window — the same
+// way real Explorer's own "Open with" dialog is parented to Explorer. Also
+// sidesteps the fragile `rundll32.exe shell32.dll,OpenAs_RunDLLW <path>`
+// hand-off (kept below only as a fallback): that entry point re-parses the
+// path out of a raw command-line string it builds itself, rather than
+// receiving it as a structured API parameter, which is a known source of
+// corruption for some paths. `koffi` is a pure-npm FFI library (prebuilt
+// binaries, no compiler toolchain) used only for this one COM call.
+// ---------------------------------------------------------------------------
+
+interface Win32Bridge {
+  ensureCom: () => void
+  openWith: (hwnd: unknown, path: string) => number
+  toPointer: (buf: Buffer) => unknown
+}
+
+let win32: Win32Bridge | null = null
+let win32LoadFailed = false
+
+function loadWin32(): Win32Bridge | null {
+  if (win32 || win32LoadFailed) return win32
+  try {
+    // require, not import: a missing/unsupported native binary must degrade
+    // to the rundll32 fallback, not crash the app at startup.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const koffi = require('koffi')
+    const shell32 = koffi.load('shell32.dll')
+    const ole32 = koffi.load('ole32.dll')
+
+    koffi.struct('OPENASINFO', {
+      pcszFile: 'str16',
+      pcszClass: 'str16',
+      oaifInFlags: 'uint32'
+    })
+
+    const SHOpenWithDialog = shell32.func(
+      'int32 __stdcall SHOpenWithDialog(void *hwndParent, _Inout_ OPENASINFO *poainfo)'
+    )
+    const CoInitializeEx = ole32.func(
+      'int32 __stdcall CoInitializeEx(void *pvReserved, uint32 dwCoInit)'
+    )
+
+    let comReady = false
+    win32 = {
+      ensureCom: () => {
+        if (comReady) return
+        // HRESULT ignored on purpose: S_OK, S_FALSE (already initialized),
+        // and RPC_E_CHANGED_MODE (Chromium already initialized this thread
+        // in a different apartment) all mean COM is usable here.
+        CoInitializeEx(null, 0x2 /* COINIT_APARTMENTTHREADED */)
+        comReady = true
+      },
+      openWith: (hwnd, path) =>
+        SHOpenWithDialog(hwnd, {
+          pcszFile: path,
+          pcszClass: null,
+          oaifInFlags: 0x1 | 0x2 | 0x4 // OAIF_ALLOW_REGISTRATION | OAIF_REGISTER_EXT | OAIF_EXEC
+        }),
+      // Electron's getNativeWindowHandle() returns the HWND's raw bytes, not
+      // a buffer we want the address of — koffi.as() reinterprets those
+      // bytes as the pointer value itself.
+      toPointer: (buf) => koffi.as(buf, 'void *')
+    }
+  } catch (err) {
+    win32LoadFailed = true
+    logLine('shell:open-with', `koffi unavailable, will use rundll32 fallback: ${err instanceof Error ? err.message : err}`)
+  }
+  return win32
+}
+
+const HRESULT_ERROR_CANCELLED = -2147023673 // HRESULT_FROM_WIN32(ERROR_CANCELLED)
+
+// Deliberately synchronous: SHOpenWithDialog is modal and blocks until the
+// user picks an app or cancels, same as Electron's own dialog.showOpenDialogSync
+// — an accepted pattern for "wait on a modal OS dialog" IPC calls. It blocks
+// only the main process's *other* IPC handlers for that span; the renderer's
+// own data traffic (fs/dedupe/etc.) goes straight to the Python backend over
+// HTTP/WS, bypassing the main process entirely, so browsing/progress bars are
+// unaffected. Running it on koffi's async thread pool instead was considered
+// and rejected: SHOpenWithDialog requires STA COM initialized on its exact
+// calling thread, and koffi's pool doesn't guarantee CoInitializeEx and the
+// dialog call land on the same OS thread — that would be a same-class bug to
+// the one this change is fixing, just harder to notice.
+function openWithNative(win: BrowserWindow, path: string): boolean {
+  const bridge = loadWin32()
+  if (!bridge) return false
+  try {
+    bridge.ensureCom()
+    const hwnd = bridge.toPointer(win.getNativeWindowHandle())
+    const hr = bridge.openWith(hwnd, path)
+    if (hr >= 0) return true // succeeded — dialog was shown and handled
+    if (hr === HRESULT_ERROR_CANCELLED) return true // user cancelled — not an error
+    logLine('shell:open-with', `SHOpenWithDialog failed hr=0x${(hr >>> 0).toString(16)} path="${path}"`)
+    return false
+  } catch (err) {
+    logLine('shell:open-with', `SHOpenWithDialog threw: ${err instanceof Error ? err.message : err}`)
+    return false
+  }
+}
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1280,
@@ -68,6 +170,11 @@ function buildCfHdrop(paths: string[]): Buffer {
 function registerIpc(): void {
   ipcMain.handle('backend:info', () => getBackendInfo())
 
+  // Lets the renderer gate dev-only UI (the in-app log console) so it has
+  // zero footprint in a packaged build regardless of the renderer-side
+  // feature flag also being left on.
+  ipcMain.handle('app:is-packaged', () => app.isPackaged)
+
   ipcMain.handle('dialog:pick-folder', async () => {
     const result = await dialog.showOpenDialog({
       title: 'Choose a folder for MediaMind to manage',
@@ -92,11 +199,23 @@ function registerIpc(): void {
     return error || null
   })
 
-  ipcMain.handle('shell:open-with', (_event, path: string): boolean => {
+  ipcMain.handle('shell:open-with', (event, path: string): boolean => {
     if (!existsSync(path) || process.platform !== 'win32') return false
-    // Invokes the native "Open with" chooser dialog — same DLL entry point
-    // Explorer itself uses; no custom app-picker UI needed.
-    spawn('rundll32.exe', ['shell32.dll,OpenAs_RunDLL', path], { detached: true, stdio: 'ignore' }).unref()
+    logLine('shell:open-with', `invoke path="${path}" len=${path.length}`)
+
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (win && openWithNative(win, path)) return true
+
+    // Fallback: the wide-char `OpenAs_RunDLLW` entry point, not the ANSI
+    // `OpenAs_RunDLL` one — on current Windows builds the ANSI entry point
+    // spawns a dead rundll32 host with no visible window (verified: ~16 MB,
+    // no top-level window at all), while the W variant launches the real
+    // modern picker (`OpenWith.exe`, ~140 MB) that Explorer itself uses.
+    // Unlike the SHOpenWithDialog path above, this spawns a detached,
+    // parentless process — kept only as a safety net so "Open with" never
+    // fully breaks (e.g. koffi's native binary missing on this machine).
+    logLine('shell:open-with', 'fallback -> rundll32 OpenAs_RunDLLW')
+    spawn('rundll32.exe', ['shell32.dll,OpenAs_RunDLLW', path], { detached: true, stdio: 'ignore' }).unref()
     return true
   })
 

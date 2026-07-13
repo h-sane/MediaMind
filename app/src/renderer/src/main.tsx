@@ -3,15 +3,16 @@ import ReactDOM from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import App from './App'
 import { ErrorBoundary } from './ErrorBoundary'
+import { logDevError } from './stores/devLog'
 import './assets/main.css'
 
 window.addEventListener('error', (event) => {
-  window.mediamind.logError('window', event.error?.stack ?? event.message)
+  logDevError('window', event.error?.stack ?? event.message)
 })
 
 window.addEventListener('unhandledrejection', (event) => {
   const reason = event.reason
-  window.mediamind.logError(
+  logDevError(
     'unhandledrejection',
     reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)
   )

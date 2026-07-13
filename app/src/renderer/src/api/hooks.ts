@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './client'
+import { isRealFolder } from '../stores/explorer'
 import type { DuplicateFile, Person } from './client'
 
 // ---------------------------------------------------------------------------
@@ -136,6 +137,29 @@ export function useFileRawUrl(
   }, [libraryId, path, enabled])
 
   return { url, failed }
+}
+
+// ---------------------------------------------------------------------------
+// Explorer shell — right-sidebar tools bridge
+// ---------------------------------------------------------------------------
+
+/**
+ * Registers (or reuses) the currently-open real folder as a "library" —
+ * the dedupe/faces engine's only requirement, a lightweight pointer plus an
+ * empty `.mediamind/` metadata folder, not a scan. `api.libraries.add` is
+ * idempotent by resolved path server-side, and this query's `path` key plus
+ * `staleTime: Infinity` mean it's requested at most once per folder per
+ * session — safe against rapid folder/tab switching. Disabled for "This PC"
+ * / Home (`isRealFolder`), which have nothing to register.
+ */
+export function useEnsureLibrary(path: string | null) {
+  return useQuery({
+    queryKey: ['ensure-library', path],
+    queryFn: () => api.libraries.add(path as string),
+    enabled: isRealFolder(path),
+    staleTime: Infinity,
+    retry: false
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -452,6 +476,23 @@ export function useRecordRecentFile() {
   })
 }
 
+/** Folder Options settings (currently just the Recent files privacy
+ * toggle) — mirrors real Explorer's "Show recently used files" checkbox. */
+export function useSettings() {
+  return useQuery({ queryKey: ['settings'], queryFn: api.fs.settings.get })
+}
+
+export function useUpdateSettings() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (recentFilesEnabled: boolean) => api.fs.settings.update(recentFilesEnabled),
+    onSuccess: (data) => {
+      qc.setQueryData(['settings'], data)
+      qc.invalidateQueries({ queryKey: ['recent-files'] })
+    }
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Scans
 // ---------------------------------------------------------------------------
@@ -491,6 +532,14 @@ export function useDuplicates(libraryId: string) {
   })
 }
 
+export function useRecycleBinCheck(libraryId: string) {
+  return useQuery({
+    queryKey: ['recycle-bin-check', libraryId],
+    queryFn: () => api.duplicates.recycleBinCheck(libraryId),
+    retry: false
+  })
+}
+
 export function useResolve(libraryId: string) {
   const qc = useQueryClient()
   return useMutation({
@@ -524,11 +573,34 @@ export function useResolve(libraryId: string) {
 export function useExecute(libraryId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ dryRun, expectedTrashCount }: { dryRun: boolean; expectedTrashCount: number }) =>
-      api.duplicates.execute(libraryId, dryRun, expectedTrashCount),
+    mutationFn: ({
+      dryRun,
+      expectedTrashCount,
+      permanent
+    }: {
+      dryRun: boolean
+      expectedTrashCount: number
+      permanent?: boolean
+    }) => api.duplicates.execute(libraryId, dryRun, expectedTrashCount, permanent),
     onSuccess: (_data, { dryRun }) => {
       if (!dryRun) qc.invalidateQueries({ queryKey: ['duplicates', libraryId] })
     }
+  })
+}
+
+export function useConfirmReviewed(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.duplicates.confirm(libraryId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['duplicates', libraryId] })
+  })
+}
+
+export function useResetDismissals(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.duplicates.resetDismissals(libraryId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['duplicates', libraryId] })
   })
 }
 
@@ -611,14 +683,14 @@ export function usePersonMedia(libraryId: string, personId: number) {
 // Thumbnails (fetch with auth header → object URL, revoked on unmount)
 // ---------------------------------------------------------------------------
 
-export function useThumbnailUrl(libraryId: string, memberId: number): string | null {
+export function useThumbnailUrl(libraryId: string, memberId: number, size = 256): string | null {
   const [url, setUrl] = useState<string | null>(null)
   const urlRef = useRef<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     api.duplicates
-      .thumbnailUrl(libraryId, memberId)
+      .thumbnailUrl(libraryId, memberId, size)
       .then((objectUrl) => {
         if (!cancelled) {
           urlRef.current = objectUrl
@@ -636,7 +708,7 @@ export function useThumbnailUrl(libraryId: string, memberId: number): string | n
         urlRef.current = null
       }
     }
-  }, [libraryId, memberId])
+  }, [libraryId, memberId, size])
 
   return url
 }

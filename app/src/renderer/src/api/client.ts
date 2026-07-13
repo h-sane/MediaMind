@@ -5,6 +5,7 @@
  * process via the preload bridge; every request carries the token header.
  */
 import type { BackendInfo } from '../../../shared/types'
+import { logDevError } from '../stores/devLog'
 
 let backend: BackendInfo | null = null
 
@@ -37,10 +38,7 @@ export async function request<T>(method: string, path: string, body?: unknown): 
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    window.mediamind.logError(
-      'api',
-      `${method} ${path} (port ${port}): network error — ${message}`
-    )
+    logDevError('api', `${method} ${path} (port ${port}): network error — ${message}`)
     throw err
   }
   if (!res.ok) {
@@ -50,7 +48,7 @@ export async function request<T>(method: string, path: string, body?: unknown): 
     } catch {
       /* non-JSON error body */
     }
-    window.mediamind.logError('api', `${method} ${path} -> ${res.status}: ${detail}`)
+    logDevError('api', `${method} ${path} -> ${res.status}: ${detail}`)
     throw new Error(detail)
   }
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T)
@@ -262,6 +260,10 @@ export interface RecentFilesList {
   files: RecentFile[]
 }
 
+export interface Settings {
+  recent_files_enabled: boolean
+}
+
 // ---------------------------------------------------------------------------
 // Provider types (M5)
 // ---------------------------------------------------------------------------
@@ -460,6 +462,12 @@ export const api = {
     recent: {
       list: () => request<RecentFilesList>('GET', '/v1/fs/recent'),
       record: (path: string) => request<RecentFilesList>('POST', '/v1/fs/recent', { path })
+    },
+
+    settings: {
+      get: () => request<Settings>('GET', '/v1/fs/settings'),
+      update: (recentFilesEnabled: boolean) =>
+        request<Settings>('PATCH', '/v1/fs/settings', { recent_files_enabled: recentFilesEnabled })
     }
   },
 
@@ -516,16 +524,35 @@ export const api = {
     list: (libraryId: string) =>
       request<DuplicatesOut>('GET', `/v1/libraries/${libraryId}/duplicates`),
 
+    recycleBinCheck: (libraryId: string) =>
+      request<{ recycle_bin_supported: boolean }>(
+        'GET',
+        `/v1/libraries/${libraryId}/duplicates/recycle-bin-check`
+      ),
+
     resolve: (libraryId: string, resolutions: { file_id: number; action: 'keep' | 'trash' }[]) =>
       request<{ updated: number }>('POST', `/v1/libraries/${libraryId}/duplicates/resolutions`, {
         resolutions
       }),
 
-    execute: (libraryId: string, dryRun: boolean, expectedTrashCount: number) =>
+    execute: (libraryId: string, dryRun: boolean, expectedTrashCount: number, permanent = false) =>
       request<ExecutionReport>('POST', `/v1/libraries/${libraryId}/duplicates/execute`, {
         dry_run: dryRun,
-        expected_trash_count: expectedTrashCount
+        expected_trash_count: expectedTrashCount,
+        permanent
       }),
+
+    confirm: (libraryId: string) =>
+      request<{ confirmed_groups: number; skipped_pending: number }>(
+        'POST',
+        `/v1/libraries/${libraryId}/duplicates/confirm`
+      ),
+
+    resetDismissals: (libraryId: string) =>
+      request<{ cleared_dismissals: number; restored_groups: number }>(
+        'DELETE',
+        `/v1/libraries/${libraryId}/duplicates/dismissals`
+      ),
 
     thumbnailUrl: async (libraryId: string, memberId: number, size = 256): Promise<string> => {
       const { port, token } = await connectBackend()

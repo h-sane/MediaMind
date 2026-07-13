@@ -11,7 +11,7 @@ import sqlite3
 from pathlib import Path
 from typing import Callable
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _V1_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -143,10 +143,34 @@ CREATE INDEX IF NOT EXISTS idx_manifest_action ON manifest_entries(action_id);
     conn.commit()
 
 
-# v2 is a string; v3 is a callable (ALTER TABLE requires special handling).
+def _v4_migration(conn: sqlite3.Connection) -> None:
+    """Schema v4: cross-scan duplicate-group dismissals (Save configuration)."""
+    for col, ddl in (
+        ("content_hash", "ALTER TABLE duplicate_members ADD COLUMN content_hash TEXT"),
+        ("ignored_at", "ALTER TABLE duplicate_groups ADD COLUMN ignored_at REAL"),
+    ):
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
+    conn.executescript("""
+CREATE TABLE IF NOT EXISTS dedupe_dismissals (
+    id INTEGER PRIMARY KEY,
+    signature TEXT NOT NULL UNIQUE,
+    match TEXT NOT NULL,
+    file_count INTEGER NOT NULL,
+    dismissed_at REAL NOT NULL
+);
+""")
+    conn.commit()
+
+
+# v2 is a string; v3/v4 are callables (ALTER TABLE requires special handling).
 _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (2, _V2_ADDITIONS),
     (3, _v3_migration),
+    (4, _v4_migration),
 ]
 
 

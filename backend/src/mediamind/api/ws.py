@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import logging
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -38,6 +39,16 @@ def _job_to_msg(job: Job) -> str:
     })
 
 
+def _log_to_msg(record: logging.LogRecord) -> str:
+    return json.dumps({
+        "msg_type": "log",  # envelope discriminator, sibling to "job" above
+        "level": record.levelname,
+        "logger": record.name,
+        "message": record.getMessage(),
+        "ts": record.created,
+    })
+
+
 class ConnectionManager:
     """Manages active WebSocket connections and broadcasts job updates."""
 
@@ -47,6 +58,21 @@ class ConnectionManager:
     def broadcast_job(self, job: Job) -> None:
         """Called from the asyncio event loop (via call_soon_threadsafe)."""
         msg = _job_to_msg(job)
+        for ws in list(self._clients):
+            asyncio.ensure_future(ws.send_text(msg))
+
+    def broadcast_log(self, record: logging.LogRecord) -> None:
+        """Called from the asyncio event loop (via call_soon_threadsafe, see
+        logging_setup.WebSocketLogHandler) — feeds the in-app dev log console.
+        No-op with zero clients connected, which is the common case (the
+        panel is opt-in), so this never does real work unless someone has it
+        open."""
+        if not self._clients:
+            return
+        try:
+            msg = _log_to_msg(record)
+        except Exception:
+            return  # never let a malformed log record break logging itself
         for ws in list(self._clients):
             asyncio.ensure_future(ws.send_text(msg))
 

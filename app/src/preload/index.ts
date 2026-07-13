@@ -4,6 +4,9 @@ import type { BackendInfo, ShellOpenResult } from '../shared/types'
 const api = {
   /** Engine connection details; null until the backend is up. */
   getBackendInfo: (): Promise<BackendInfo | null> => ipcRenderer.invoke('backend:info'),
+  /** True in a built/installed app, false under `npm run dev` — used to keep
+   * dev-only UI (the in-app log console) out of packaged builds. */
+  isPackaged: (): Promise<boolean> => ipcRenderer.invoke('app:is-packaged'),
   /** Resolves when the main process reports the engine is ready. */
   onBackendReady: (cb: (info: BackendInfo) => void): void => {
     ipcRenderer.on('backend:ready', (_event, info: BackendInfo) => cb(info))

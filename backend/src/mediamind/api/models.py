@@ -165,6 +165,14 @@ class RecentFileRecordIn(BaseModel):
     path: str
 
 
+class SettingsOut(BaseModel):
+    recent_files_enabled: bool
+
+
+class SettingsUpdateIn(BaseModel):
+    recent_files_enabled: bool
+
+
 # ---------------------------------------------------------------------------
 # Duplicates
 # ---------------------------------------------------------------------------
@@ -216,6 +224,7 @@ class ResolutionsIn(BaseModel):
 class ExecuteIn(BaseModel):
     dry_run: bool = False
     expected_trash_count: int
+    permanent: bool = False
 
 
 class ManifestEntryOut(BaseModel):
@@ -232,6 +241,16 @@ class ExecutionReportOut(BaseModel):
     dry_run: bool
     manifest_path: str | None
     entries: list[ManifestEntryOut]
+
+
+class ConfirmOut(BaseModel):
+    confirmed_groups: int
+    skipped_pending: int
+
+
+class ResetConfigOut(BaseModel):
+    cleared_dismissals: int
+    restored_groups: int
 
 
 # ---------------------------------------------------------------------------

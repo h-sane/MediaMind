@@ -39,6 +39,8 @@ from mediamind.api.models import (
     RecentFileEntryOut,
     RecentFileRecordIn,
     RecentFilesOut,
+    SettingsOut,
+    SettingsUpdateIn,
 )
 from mediamind.api.models_gallery import GalleryItemOut, GalleryResponseOut
 from mediamind.api.models_search import SearchResponseOut, SearchResultOut
@@ -52,6 +54,7 @@ from mediamind.core.pathsafe import resolve_os_path
 from mediamind.core.quick_access import QuickAccessStore
 from mediamind.core.recent import RecentFilesStore
 from mediamind.core.scanner import MEDIA_KINDS, kind_of
+from mediamind.core.settings import SettingsStore
 from mediamind.core.search import DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT, iter_search_hits
 from mediamind.core.thumbnails import media_metadata, media_thumbnail_jpeg
 
@@ -418,6 +421,10 @@ def reorder_quick_access(body: QuickAccessReorderIn, request: Request) -> QuickA
 # ---------------------------------------------------------------------------
 
 def _list_valid_recent(request: Request) -> RecentFilesOut:
+    settings: SettingsStore = request.app.state.settings
+    if not settings.recent_files_enabled:
+        return RecentFilesOut(files=[])
+
     store: RecentFilesStore = request.app.state.recent_files
     entries: list[RecentFileEntryOut] = []
     for raw_path, opened_at in store.list_raw():
@@ -458,6 +465,31 @@ def record_recent_file(body: RecentFileRecordIn, request: Request) -> RecentFile
     kind = explorer_kind_of(resolved)
     if kind not in EXPLORER_KINDS:
         raise HTTPException(status_code=422, detail="Not a media file")
-    store: RecentFilesStore = request.app.state.recent_files
-    store.record(str(resolved))
+    settings: SettingsStore = request.app.state.settings
+    if settings.recent_files_enabled:
+        store: RecentFilesStore = request.app.state.recent_files
+        store.record(str(resolved))
     return _list_valid_recent(request)
+
+
+# ---------------------------------------------------------------------------
+# Settings (Folder Options — Privacy)
+# ---------------------------------------------------------------------------
+
+@router.get("/settings", response_model=SettingsOut)
+def get_settings(request: Request) -> SettingsOut:
+    settings: SettingsStore = request.app.state.settings
+    return SettingsOut(recent_files_enabled=settings.recent_files_enabled)
+
+
+@router.patch("/settings", response_model=SettingsOut)
+def update_settings(body: SettingsUpdateIn, request: Request) -> SettingsOut:
+    settings: SettingsStore = request.app.state.settings
+    enabled = settings.set_recent_files_enabled(body.recent_files_enabled)
+    if not enabled:
+        # Turning tracking off also clears what's already tracked — matches
+        # Explorer's "Clear File Explorer history" so nothing lingers that
+        # could resurface if the setting is switched back on later.
+        recent_store: RecentFilesStore = request.app.state.recent_files
+        recent_store.clear()
+    return SettingsOut(recent_files_enabled=enabled)
