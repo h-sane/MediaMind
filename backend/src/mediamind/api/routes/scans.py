@@ -83,7 +83,9 @@ def _make_dedupe_runner(library_root: Path, threshold: int):
             ctx.report_progress(done, total, "reading")
             _throttled_log("Dedupe scan: read details for %d/%d files…", done, total)
 
-        files = list(scan_folder(library_root, on_walk=on_walk, on_stat=on_stat))
+        files = list(
+            scan_folder(library_root, on_walk=on_walk, on_stat=on_stat, should_cancel=ctx.cancelled)
+        )
         if ctx.cancelled():
             return {}
 

@@ -13,6 +13,7 @@ import { useMarqueeSelect } from '../selection/useMarqueeSelect'
 import { useFileOps } from '../useFileOps'
 import { useSelectionModel } from '../selection/useSelectionModel'
 import { groupEntries } from './grouping'
+import { useIconSizeZoom } from './useIconSizeZoom'
 import type { DirEntry } from './useDirectoryListing'
 
 /** The four Explorer icon-size tiers (`Ctrl+Shift+1-4`). `large` matches
@@ -118,6 +119,7 @@ export function IconGridView({ entries, onOpenFile }: Props): React.JSX.Element 
   const scrollRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const [columns, setColumns] = useState(6)
+  useIconSizeZoom(scrollRef)
 
   const orderedPaths = entries.map((e) => e.path)
   const { onItemClick, isSelected, setSelected, clear } = useSelectionModel(orderedPaths)

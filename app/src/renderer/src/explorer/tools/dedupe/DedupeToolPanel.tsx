@@ -3,18 +3,20 @@ import { Folder, Maximize2, RefreshCw, RotateCcw, Save, X } from 'lucide-react'
 import {
   useDuplicates,
   useResolve,
-  useExecute,
+  useExecuteJob,
   useStartScan,
   useRecycleBinCheck,
   useConfirmReviewed,
   useResetDismissals
 } from '../../../api/hooks'
 import { selectJobForLibrary, useJobsStore } from '../../../stores/jobs'
+import { useZoomScale } from '../../../hooks/useZoomScale'
+import { MediaViewer } from '../../../components/MediaViewer'
 import { Thumbnail } from '../../../components/Thumbnail'
 import { ScanProgress } from '../../../components/ScanProgress'
 import { DuplicateGalleryModal } from './DuplicateGalleryModal'
 import { formatBytes, formatDate, subfolderOf } from './format'
-import type { DuplicateFile, DuplicateGroup, ExecutionReport } from '../../../api/client'
+import type { DuplicateFile, DuplicateGroup } from '../../../api/client'
 
 // ---------------------------------------------------------------------------
 // FileTile
@@ -25,13 +27,15 @@ function FileTile({
   libraryId,
   folderName,
   onToggle,
-  onExpand
+  onExpand,
+  onOpenSingle
 }: {
   file: DuplicateFile
   libraryId: string
   folderName: string
   onToggle: (id: number, current: DuplicateFile['resolution']) => void
   onExpand: () => void
+  onOpenSingle: (file: DuplicateFile) => void
 }): React.JSX.Element {
   const res = file.resolution
   const marked = res === 'trash'
@@ -46,8 +50,20 @@ function FileTile({
       <div className="relative aspect-square w-full">
         <button
           type="button"
-          onClick={() => onToggle(file.id, res)}
-          title={marked ? 'Marked for deletion — click to keep' : 'Click to mark for deletion'}
+          onClick={(e) => {
+            // A double-click fires two click events (detail 1, then 2)
+            // followed by dblclick — skip the second so double-clicking
+            // doesn't toggle the trash mark twice on its way to opening the
+            // single-file view below.
+            if (e.detail > 1) return
+            onToggle(file.id, res)
+          }}
+          onDoubleClick={() => onOpenSingle(file)}
+          title={
+            marked
+              ? 'Marked for deletion — click to keep, double-click for full screen'
+              : 'Click to mark for deletion, double-click for full screen'
+          }
           className="block h-full w-full text-left"
         >
           <Thumbnail libraryId={libraryId} memberId={file.id} className="h-full w-full" />
@@ -110,14 +126,18 @@ function DuplicateGroupCard({
   group,
   libraryId,
   folderName,
+  zoom,
   onToggle,
-  onExpand
+  onExpand,
+  onOpenSingle
 }: {
   group: DuplicateGroup
   libraryId: string
   folderName: string
+  zoom: number
   onToggle: (fileId: number, current: DuplicateFile['resolution']) => void
   onExpand: () => void
+  onOpenSingle: (file: DuplicateFile) => void
 }): React.JSX.Element {
   const allResolved = group.files.every((f) => f.resolution !== null)
 
@@ -143,7 +163,10 @@ function DuplicateGroupCard({
         </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+      <div
+        className="grid gap-3"
+        style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${Math.round(140 * zoom)}px, 1fr))` }}
+      >
         {group.files.map((f) => (
           <FileTile
             key={f.id}
@@ -152,6 +175,7 @@ function DuplicateGroupCard({
             folderName={folderName}
             onToggle={onToggle}
             onExpand={onExpand}
+            onOpenSingle={onOpenSingle}
           />
         ))}
       </div>
@@ -163,15 +187,9 @@ function DuplicateGroupCard({
 // ConfirmTrashDialog
 // ---------------------------------------------------------------------------
 
-/** True when every failed entry is the "Recycle Bin unavailable on this
- * drive" case (network/virtual mounts) rather than a genuine per-file
- * problem — the only case where offering a permanent-delete fallback makes
- * sense, since it means retrying won't help. */
-function allErrorsAreNetworkDrive(report: ExecutionReport): boolean {
-  const errors = report.entries.filter((e) => e.action === 'error')
-  return errors.length > 0 && errors.every((e) => e.error.includes('network or virtual drive'))
-}
-
+/** A static "are you sure?" — the real deletion runs as a background job
+ * (useExecuteJob) that a DeleteProgressBubble tracks to completion, so this
+ * dialog fires the mutation and closes immediately instead of waiting on it. */
 function ConfirmTrashDialog({
   libraryId,
   trashCount,
@@ -186,168 +204,44 @@ function ConfirmTrashDialog({
   permanentOnly?: boolean
   onClose: () => void
 }): React.JSX.Element {
-  const execute = useExecute(libraryId)
-  const [report, setReport] = useState<ExecutionReport | null>(null)
-  const [dryRunResult, setDryRunResult] = useState<ExecutionReport | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [confirmingPermanent, setConfirmingPermanent] = useState(false)
-
-  const runDryRun = async (): Promise<void> => {
-    setLoading(true)
-    setError(null)
-    try {
-      const r = await execute.mutateAsync({
-        dryRun: true,
-        expectedTrashCount: trashCount,
-        permanent: permanentOnly
-      })
-      setDryRunResult(r)
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Unknown error')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const runExecute = async (permanent = permanentOnly): Promise<void> => {
-    setLoading(true)
-    setError(null)
-    try {
-      // A permanent-delete retry only targets files still unresolved from the
-      // first pass (successfully-trashed ones were already marked consumed
-      // server-side), so the expected count must match what's actually left,
-      // not the original full trashCount.
-      const remaining = permanent && report
-        ? report.entries.filter((e) => e.action === 'error').length
-        : trashCount
-      const r = await execute.mutateAsync({ dryRun: false, expectedTrashCount: remaining, permanent })
-      setReport(r)
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Unknown error')
-    } finally {
-      setLoading(false)
-      setConfirmingPermanent(false)
-    }
-  }
-
-  if (!dryRunResult && !loading && !error) {
-    void runDryRun()
-  }
+  const executeJob = useExecuteJob(libraryId)
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center">
       <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
-        {report ? (
-          <>
-            <h2 className="mb-2 text-base font-semibold">{report.ok ? 'Done' : 'Completed with errors'}</h2>
-            <p className="mb-4 text-sm text-zinc-500">
-              {report.handled}/{report.planned} files{' '}
-              {report.entries.some((e) => e.action === 'deleted') ? 'permanently deleted' : 'moved to Recycle Bin'}.
-              {report.manifest_path && (
-                <> Manifest: <code className="break-all text-[11px]">{report.manifest_path}</code></>
-              )}
-            </p>
-            {!report.ok && (
-              <div className="mb-4 max-h-40 overflow-y-auto rounded-lg border border-red-100 bg-red-50 p-3 text-xs text-red-700">
-                {report.entries.filter((e) => e.action === 'error').map((e, i) => (
-                  <p key={i} className="mb-1">{e.source}: {e.error}</p>
-                ))}
-              </div>
-            )}
-            {!report.ok && !permanentOnly && allErrorsAreNetworkDrive(report) && !confirmingPermanent && (
-              <button
-                onClick={() => setConfirmingPermanent(true)}
-                className="mb-3 w-full rounded-xl border border-red-200 py-2.5 text-sm font-medium text-red-700 hover:bg-red-50"
-              >
-                Permanently delete these files instead
-              </button>
-            )}
-            {confirmingPermanent && (
-              <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3">
-                <p className="mb-2 text-xs text-red-700">
-                  This drive doesn&apos;t support the Recycle Bin, so this cannot be undone. Permanently
-                  delete the {report.entries.filter((e) => e.action === 'error').length} file(s) that
-                  failed?
-                </p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setConfirmingPermanent(false)}
-                    className="flex-1 rounded-lg border border-zinc-200 bg-white py-1.5 text-xs text-zinc-600 hover:bg-zinc-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={() => void runExecute(true)}
-                    disabled={loading}
-                    className="flex-1 rounded-lg bg-red-600 py-1.5 text-xs font-medium text-white hover:bg-red-500 disabled:opacity-50"
-                  >
-                    {loading ? 'Deleting…' : 'Permanently delete'}
-                  </button>
-                </div>
-              </div>
-            )}
-            <button
-              onClick={onClose}
-              className="w-full rounded-xl bg-zinc-900 py-2.5 text-sm font-medium text-white hover:bg-zinc-700"
-            >
-              Close
-            </button>
-          </>
+        <h2 className="mb-1 text-base font-semibold">
+          {permanentOnly ? 'Permanently delete files' : 'Move to Recycle Bin'}
+        </h2>
+        {permanentOnly ? (
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            This location doesn&apos;t support the Recycle Bin — {trashCount} file
+            {trashCount !== 1 ? 's' : ''} will be <strong>permanently deleted</strong> and cannot be
+            recovered.
+          </div>
         ) : (
-          <>
-            <h2 className="mb-1 text-base font-semibold">
-              {permanentOnly ? 'Permanently delete files' : 'Move to Recycle Bin'}
-            </h2>
-            {permanentOnly ? (
-              <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                This location doesn&apos;t support the Recycle Bin — {trashCount} file
-                {trashCount !== 1 ? 's' : ''} will be <strong>permanently deleted</strong> and cannot be
-                recovered.
-              </div>
-            ) : (
-              <p className="mb-4 text-sm text-zinc-500">
-                {trashCount} file{trashCount !== 1 ? 's' : ''} will be moved to the Recycle Bin. You can restore
-                them from there.
-              </p>
-            )}
-
-            {loading && <p className="mb-4 text-sm text-zinc-400">Checking plan…</p>}
-
-            {error && (
-              <p className="mb-4 rounded-lg border border-red-100 bg-red-50 px-4 py-2 text-sm text-red-700">
-                {error}
-              </p>
-            )}
-
-            {dryRunResult && !error && (
-              <div className="mb-4 rounded-lg border border-zinc-100 bg-zinc-50 px-4 py-3 text-xs text-zinc-600">
-                <p className="font-medium">Plan preview</p>
-                <p className="mt-1">
-                  {dryRunResult.planned} file{dryRunResult.planned !== 1 ? 's' : ''} will be{' '}
-                  {permanentOnly ? 'permanently deleted' : 'trashed'}.
-                </p>
-              </div>
-            )}
-
-            <div className="flex gap-2">
-              <button
-                onClick={onClose}
-                disabled={loading}
-                className="flex-1 rounded-xl border border-zinc-200 py-2.5 text-sm text-zinc-600 hover:bg-zinc-50 disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => void runExecute(permanentOnly)}
-                disabled={loading || !!error || !dryRunResult}
-                className="flex-1 rounded-xl bg-red-600 py-2.5 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-50"
-              >
-                {loading ? 'Working…' : permanentOnly ? 'Permanently delete' : 'Confirm'}
-              </button>
-            </div>
-          </>
+          <p className="mb-4 text-sm text-zinc-500">
+            {trashCount} file{trashCount !== 1 ? 's' : ''} will be moved to the Recycle Bin. You can restore
+            them from there.
+          </p>
         )}
+
+        <div className="flex gap-2">
+          <button
+            onClick={onClose}
+            className="flex-1 rounded-xl border border-zinc-200 py-2.5 text-sm text-zinc-600 hover:bg-zinc-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => {
+              executeJob.mutate({ expectedTrashCount: trashCount, permanent: permanentOnly })
+              onClose()
+            }}
+            className="flex-1 rounded-xl bg-red-600 py-2.5 text-sm font-medium text-white hover:bg-red-500"
+          >
+            {permanentOnly ? 'Permanently delete' : 'Confirm'}
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -497,11 +391,14 @@ export function DedupeToolPanel({ libraryId, folderPath }: Props): React.JSX.Ele
   const activeJob = selectJobForLibrary(jobs, libraryId, 'dedupe')
   const [dialogMode, setDialogMode] = useState<'trash' | 'permanent' | null>(null)
   const [galleryGroupId, setGalleryGroupId] = useState<number | null>(null)
+  const [singleViewFile, setSingleViewFile] = useState<DuplicateFile | null>(null)
   const [tab, setTab] = useState<CategoryTab>('all')
   const [showSaveDialog, setShowSaveDialog] = useState(false)
   const [showResetDialog, setShowResetDialog] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const autoScanTriggered = useRef<string | null>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [zoom] = useZoomScale(scrollRef, { min: 0.5, max: 2 })
 
   // First-run: a folder with no prior dedupe scan starts one automatically —
   // clicking the tool IS the action, no separate "start" click needed. Armed
@@ -574,7 +471,7 @@ export function DedupeToolPanel({ libraryId, folderPath }: Props): React.JSX.Ele
   const folderName = folderPath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || folderPath
 
   return (
-    <div className="h-full overflow-y-auto p-6 pb-32">
+    <div ref={scrollRef} className="h-full overflow-y-auto p-6 pb-32">
       <div className="mb-6 flex items-start justify-between">
         <div>
           <h2 className="text-lg font-semibold tracking-tight">Duplicate Review</h2>
@@ -727,8 +624,10 @@ export function DedupeToolPanel({ libraryId, folderPath }: Props): React.JSX.Ele
               group={group}
               libraryId={libraryId}
               folderName={folderName}
+              zoom={zoom}
               onToggle={handleToggle}
               onExpand={() => setGalleryGroupId(group.id)}
+              onOpenSingle={setSingleViewFile}
             />
           ))}
 
@@ -789,6 +688,16 @@ export function DedupeToolPanel({ libraryId, folderPath }: Props): React.JSX.Ele
               initialGroupId={galleryGroupId}
               onToggle={handleToggle}
               onClose={() => setGalleryGroupId(null)}
+            />
+          )}
+
+          {singleViewFile && (
+            <MediaViewer
+              libraryId={libraryId}
+              files={[{ path: singleViewFile.path, kind: singleViewFile.kind }]}
+              index={0}
+              onClose={() => setSingleViewFile(null)}
+              onIndexChange={() => {}}
             />
           )}
         </>

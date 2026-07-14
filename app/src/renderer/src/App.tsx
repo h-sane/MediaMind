@@ -4,6 +4,7 @@ import { useHealth } from './api/hooks'
 import { useProgressSocket } from './api/progress'
 import { useJobsStore } from './stores/jobs'
 import { ExplorerShell } from './explorer/ExplorerShell'
+import { DeleteProgressBubble } from './components/DeleteProgressBubble'
 import { DevLogPanel } from './components/DevLogPanel'
 import { DEV_LOG_PANEL_ENABLED } from './devLogConfig'
 
@@ -18,7 +19,7 @@ function JobInvalidator(): null {
   useEffect(() => {
     for (const job of Object.values(jobs)) {
       if (job.state === 'succeeded') {
-        if (job.type === 'dedupe') {
+        if (job.type === 'dedupe' || job.type === 'dedupe-execute') {
           qc.invalidateQueries({ queryKey: ['duplicates', job.library_id] })
         } else if (job.type === 'faces') {
           qc.invalidateQueries({ queryKey: ['persons', job.library_id] })
@@ -87,6 +88,7 @@ export default function App(): React.JSX.Element {
       <JobInvalidator />
       <EngineStatusBanner />
       <ExplorerShell />
+      <DeleteProgressBubble />
       <DevLogGate />
     </div>
   )

@@ -21,7 +21,7 @@ from typing import Iterator
 
 from mediamind.config import LIBRARY_DATA_DIRNAME
 from mediamind.core.explorer_media import EXPLORER_KINDS, explorer_kind_of
-from mediamind.core.media_index import is_noise_dir
+from mediamind.core.scanner import is_noise_dir
 
 # How many filesystem entries to examine between heartbeats — same rationale
 # as `core/search.py::HEARTBEAT_ENTRIES`.

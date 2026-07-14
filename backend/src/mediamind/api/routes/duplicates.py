@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from typing import Callable
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -20,16 +21,18 @@ from mediamind.api.models import (
     DuplicatesOut,
     DuplicatesSummary,
     ExecuteIn,
+    ExecuteJobIn,
     ExecutionReportOut,
+    JobSnapshot,
     ManifestEntryOut,
     ResetConfigOut,
     ResolutionsIn,
 )
 from mediamind.config import library_data_dir
 from mediamind.core.dedupe import group_signature
-from mediamind.core.jobs import JobManager
+from mediamind.core.jobs import JobContext, JobManager
 from mediamind.core.libraries import LibraryRegistry
-from mediamind.core.safety import new_manifest_path, recycle_bin_supported, trash
+from mediamind.core.safety import ExecutionReport, new_manifest_path, recycle_bin_supported, trash
 from mediamind.store.db import library_db_path, open_db
 from mediamind.store.duplicates import (
     add_dismissals,
@@ -40,10 +43,15 @@ from mediamind.store.duplicates import (
     mark_members_trashed,
     unignore_all_groups,
     upsert_resolution,
-    validate_no_empty_groups,
 )
 
 router = APIRouter(tags=["duplicates"])
+
+# Max per-file error entries embedded directly in a job's result payload —
+# broadcast over the WS to every connected client on completion, so this
+# stays small even for a batch of thousands of files. Full detail always
+# lives in the manifest CSV (`result["manifest_path"]`).
+_MAX_RESULT_ERRORS = 50
 
 
 def _registry(request: Request) -> LibraryRegistry:
@@ -64,6 +72,22 @@ def _get_library_and_root(request: Request, library_id: str) -> tuple:
 def _open_library_db(library_root: Path):
     data_dir = library_data_dir(library_root)
     return open_db(library_db_path(data_dir))
+
+
+def _snapshot(job) -> JobSnapshot:
+    return JobSnapshot(
+        id=job.id,
+        library_id=job.library_id,
+        type=job.type,
+        state=job.state,
+        phase=job.phase,
+        done=job.done,
+        total=job.total,
+        error=job.error,
+        result=job.result,
+        created_at=job.created_at,
+        finished_at=job.finished_at,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -159,15 +183,6 @@ def set_resolutions(library_id: str, body: ResolutionsIn, request: Request):
         for item in body.resolutions:
             if upsert_resolution(conn, item.file_id, item.action):
                 updated += 1
-
-        bad_groups = validate_no_empty_groups(conn)
-        if bad_groups:
-            # Roll back the entire batch — don't commit a state with no keeper.
-            conn.rollback()
-            raise HTTPException(
-                status_code=422,
-                detail=f"Resolutions would leave {len(bad_groups)} group(s) with no keeper",
-            )
     finally:
         conn.close()
 
@@ -256,8 +271,69 @@ def reset_dismissals(library_id: str, request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Execute (dry-run + real)
+# Execute (dry-run + real) — shared stat-check-then-trash logic
 # ---------------------------------------------------------------------------
+
+def _run_trash(
+    library_root: Path,
+    member_ids: list[int],
+    rel_paths: list[str],
+    dry_run: bool,
+    permanent: bool,
+    on_progress: Callable[[int, int], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> tuple[ExecutionReport, list[int], list[ManifestEntryOut], list[tuple[int, Path]]]:
+    """Stat-check each target then trash the ones that are actually reachable.
+
+    Returns (report, skipped_ids, skip_entries, attempted) — `attempted` is
+    the (member_id, abs_path) pairs actually handed to `trash()`, which
+    callers need to work out which ids really got trashed vs. errored.
+    Never touches the DB; callers persist results themselves.
+    """
+    paths_to_trash: list[Path] = []
+    attempted: list[tuple[int, Path]] = []
+    skipped_ids: list[int] = []
+    skip_entries: list[ManifestEntryOut] = []
+
+    for mid, rel in zip(member_ids, rel_paths):
+        abs_path = library_root / rel
+        try:
+            stat = abs_path.stat()
+            _ = stat.st_size  # ensures the file is reachable
+        except OSError:
+            # Vanished or inaccessible — skip with an error entry, never trash blind.
+            skipped_ids.append(mid)
+            skip_entries.append(ManifestEntryOut(
+                source=str(abs_path),
+                action="error",
+                destination="",
+                error="file not found or inaccessible at execute time",
+            ))
+            continue
+        paths_to_trash.append(abs_path)
+        attempted.append((mid, abs_path))
+
+    data_dir = library_data_dir(library_root)
+    manifest_path = new_manifest_path(data_dir, "dedupe")
+    report = trash(
+        paths_to_trash,
+        manifest_path=manifest_path,
+        dry_run=dry_run,
+        permanent=permanent,
+        on_progress=on_progress,
+        should_cancel=should_cancel,
+    )
+    return report, skipped_ids, skip_entries, attempted
+
+
+def _trashed_ids(report: ExecutionReport, attempted: list[tuple[int, Path]]) -> list[int]:
+    """Which attempted member ids actually got trashed/deleted — checked
+    against report.entries directly so this is correct whether the batch ran
+    to completion, hit per-file errors, or was cancelled partway through
+    (paths never reached by `trash()` just have no entry at all)."""
+    success_paths = {e.source for e in report.entries if e.action in ("trashed", "deleted")}
+    return [mid for mid, p in attempted if str(p) in success_paths]
+
 
 @router.post("/libraries/{library_id}/duplicates/execute", response_model=ExecutionReportOut)
 def execute_duplicates(library_id: str, body: ExecuteIn, request: Request):
@@ -275,7 +351,7 @@ def execute_duplicates(library_id: str, body: ExecuteIn, request: Request):
         member_ids = [mid for mid, _ in trash_set]
         rel_paths = [rp for _, rp in trash_set]
 
-        # Safety check 1: expected count guards against a stale UI trashing more
+        # Safety check: expected count guards against a stale UI trashing more
         # than the user approved (Fable plan §2.4, safety rule 6).
         if len(member_ids) != body.expected_trash_count:
             raise HTTPException(
@@ -286,57 +362,12 @@ def execute_duplicates(library_id: str, body: ExecuteIn, request: Request):
                 ),
             )
 
-        # Safety check 2: no group may be left with zero keepers.
-        bad_groups = validate_no_empty_groups(conn)
-        if bad_groups:
-            raise HTTPException(
-                status_code=422,
-                detail=f"{len(bad_groups)} group(s) would have no keeper after execution",
-            )
-
-        # Safety check 3: files with resolution=NULL are never in the trash set
-        # (get_trash_set only returns resolution='trash' rows), so the invariant
-        # is guaranteed by the query — no additional check needed here.
-
-        # Build absolute paths and verify each file's stat before touching anything.
-        paths_to_trash: list[Path] = []
-        skipped_ids: list[int] = []
-        skip_entries: list[ManifestEntryOut] = []
-
-        for mid, rel in zip(member_ids, rel_paths):
-            abs_path = library_root / rel
-            try:
-                stat = abs_path.stat()
-                _ = stat.st_size  # ensures the file is reachable
-            except OSError:
-                # Vanished or inaccessible — skip with an error entry, never trash blind.
-                skipped_ids.append(mid)
-                skip_entries.append(ManifestEntryOut(
-                    source=str(abs_path),
-                    action="error",
-                    destination="",
-                    error="file not found or inaccessible at execute time",
-                ))
-                continue
-            paths_to_trash.append(abs_path)
-
-        data_dir = library_data_dir(library_root)
-        manifest_path = new_manifest_path(data_dir, "dedupe")
-        report = trash(
-            paths_to_trash,
-            manifest_path=manifest_path,
-            dry_run=body.dry_run,
-            permanent=body.permanent,
+        report, skipped_ids, skip_entries, attempted = _run_trash(
+            library_root, member_ids, rel_paths, body.dry_run, body.permanent,
         )
 
         if not body.dry_run:
-            trashed_ids = [
-                mid
-                for mid, rel in zip(member_ids, rel_paths)
-                if library_root / rel in paths_to_trash
-                and not any(e.source == str(library_root / rel) and e.action == "error" for e in report.errors)
-            ]
-            mark_members_trashed(conn, trashed_ids)
+            mark_members_trashed(conn, _trashed_ids(report, attempted))
 
     finally:
         conn.close()
@@ -354,6 +385,90 @@ def execute_duplicates(library_id: str, body: ExecuteIn, request: Request):
         manifest_path=str(report.manifest_path) if report.manifest_path else None,
         entries=all_entries,
     )
+
+
+# ---------------------------------------------------------------------------
+# Execute as a background job (real deletion only) — the same real-delete
+# work as execute_duplicates(dry_run=False), but run on a JobManager thread
+# so a large batch (hundreds of files, minutes of send2trash calls) never
+# blocks the request/UI. /execute above stays synchronous and unchanged for
+# dry-run previews and the legacy DedupeReview screen.
+# ---------------------------------------------------------------------------
+
+def _make_execute_runner(
+    library_root: Path, member_ids: list[int], rel_paths: list[str], permanent: bool
+) -> Callable[[JobContext], dict]:
+    def runner(ctx: JobContext) -> dict:
+        ctx.report_progress(0, len(member_ids), "checking")
+
+        report, skipped_ids, skip_entries, attempted = _run_trash(
+            library_root, member_ids, rel_paths, dry_run=False, permanent=permanent,
+            on_progress=lambda done, total: ctx.report_progress(done, total, "deleting"),
+            should_cancel=ctx.cancelled,
+        )
+
+        conn = _open_library_db(library_root)
+        try:
+            mark_members_trashed(conn, _trashed_ids(report, attempted))
+        finally:
+            conn.close()
+
+        errors = skip_entries + [e for e in report.entries if e.action == "error"]
+        network_only = len(errors) > 0 and all(
+            "network or virtual drive" in e.error for e in errors
+        )
+
+        return {
+            "planned": report.planned + len(skipped_ids),
+            "handled": report.handled,
+            "ok": report.ok and not skipped_ids,
+            "manifest_path": str(report.manifest_path) if report.manifest_path else None,
+            "permanent": permanent,
+            "error_count": len(errors),
+            "network_errors_only": network_only,
+            "errors": [
+                {"source": e.source, "error": e.error} for e in errors[:_MAX_RESULT_ERRORS]
+            ],
+        }
+
+    return runner
+
+
+@router.post(
+    "/libraries/{library_id}/duplicates/execute-job",
+    response_model=JobSnapshot,
+    status_code=202,
+)
+def start_execute_job(library_id: str, body: ExecuteJobIn, request: Request):
+    jm = _job_manager(request)
+    running = jm.running_for(library_id)
+    if running:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A {running.type} job is still running — wait for it to finish",
+        )
+
+    _, library_root = _get_library_and_root(request, library_id)
+    conn = _open_library_db(library_root)
+    try:
+        trash_set = get_trash_set(conn)
+    finally:
+        conn.close()
+    member_ids = [mid for mid, _ in trash_set]
+    rel_paths = [rp for _, rp in trash_set]
+
+    if len(member_ids) != body.expected_trash_count:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Expected {body.expected_trash_count} files to trash but "
+                f"server has {len(member_ids)}. Refresh and re-confirm."
+            ),
+        )
+
+    runner = _make_execute_runner(library_root, member_ids, rel_paths, body.permanent)
+    job = jm.start(library_id, "dedupe-execute", runner)
+    return _snapshot(job)
 
 
 # ---------------------------------------------------------------------------

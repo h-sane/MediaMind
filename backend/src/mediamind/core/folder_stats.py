@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from mediamind.core.explorer_media import EXPLORER_KINDS, explorer_kind_of
-from mediamind.core.media_index import is_noise_dir
+from mediamind.core.scanner import is_noise_dir
 
 CACHE_TTL_SECONDS = 15 * 60
 

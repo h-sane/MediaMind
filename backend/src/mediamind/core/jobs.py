@@ -26,7 +26,7 @@ logger = logging.getLogger("mediamind.jobs")
 class Job:
     id: str
     library_id: str
-    type: str   # "dedupe" | "faces" | "provider-download"
+    type: str   # "dedupe" | "faces" | "provider-download" | "dedupe-execute"
     state: str  # queued | running | succeeded | failed | cancelled
     phase: str = ""
     done: int = 0

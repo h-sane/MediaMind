@@ -3,7 +3,7 @@
 Every test here corresponds to a safety invariant from the Fable plan §2.4:
 - dry_run changes nothing on disk
 - count-mismatch → 409
-- zero-keeper group → 422 on resolutions and execute
+- zero-keeper groups are permitted — deleting every copy is the user's call
 - NULL-resolution files are never trashed
 - vanished file → error entry, not blind trash
 - manifest always written on real execution
@@ -117,8 +117,8 @@ def test_set_resolution_keep_and_trash(lib_with_dups, client):
     assert res.json()["updated"] == 2
 
 
-def test_zero_keeper_resolution_rejected(lib_with_dups, client):
-    """Marking every member of a group as 'trash' must return 422."""
+def test_zero_keeper_resolution_allowed(lib_with_dups, client):
+    """Marking every member of a group as 'trash' is a valid user choice."""
     lib_id, lib_dir, a, b = lib_with_dups
     ids = _member_ids(client, lib_id)
     res = client.post(
@@ -128,7 +128,8 @@ def test_zero_keeper_resolution_rejected(lib_with_dups, client):
             {"file_id": ids[1], "action": "trash"},
         ]},
     )
-    assert res.status_code == 422
+    assert res.status_code == 200
+    assert res.json()["updated"] == 2
 
 
 def test_invalid_action_rejected(lib_with_dups, client):
@@ -306,6 +307,143 @@ def test_manifest_written_on_execute(lib_with_dups, client):
     manifest_path = res.json()["manifest_path"]
     assert manifest_path is not None
     assert Path(manifest_path).exists()
+
+
+# ---------------------------------------------------------------------------
+# Execute as a background job (async — the "no keeper" removal's other half:
+# a large delete must not block the caller)
+# ---------------------------------------------------------------------------
+
+def _wait_job(client, job_id, timeout=30.0) -> dict:
+    deadline = time.monotonic() + timeout
+    while True:
+        snap = client.get(f"/v1/jobs/{job_id}").json()
+        if snap["state"] in ("succeeded", "failed", "cancelled"):
+            return snap
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"Job {job_id} stuck in {snap['state']}")
+        time.sleep(0.05)
+
+
+def test_execute_job_starts_and_completes(lib_with_dups, client):
+    lib_id, lib_dir, a, b = lib_with_dups
+    ids = _member_ids(client, lib_id)
+    client.post(
+        f"/v1/libraries/{lib_id}/duplicates/resolutions",
+        json={"resolutions": [
+            {"file_id": ids[0], "action": "keep"},
+            {"file_id": ids[1], "action": "trash"},
+        ]},
+    )
+
+    res = client.post(
+        f"/v1/libraries/{lib_id}/duplicates/execute-job",
+        json={"expected_trash_count": 1},
+    )
+    assert res.status_code == 202
+    body = res.json()
+    assert body["type"] == "dedupe-execute"
+    assert body["state"] in ("queued", "running")
+
+    snap = _wait_job(client, body["id"])
+    assert snap["state"] == "succeeded"
+    assert snap["result"]["ok"] is True
+    assert snap["result"]["handled"] == 1
+    assert snap["result"]["error_count"] == 0
+
+    dups = client.get(f"/v1/libraries/{lib_id}/duplicates").json()
+    assert dups["groups"] == []
+
+
+def test_execute_job_count_mismatch_returns_409(lib_with_dups, client):
+    lib_id, lib_dir, a, b = lib_with_dups
+    ids = _member_ids(client, lib_id)
+    client.post(
+        f"/v1/libraries/{lib_id}/duplicates/resolutions",
+        json={"resolutions": [{"file_id": ids[1], "action": "trash"}]},
+    )
+    res = client.post(
+        f"/v1/libraries/{lib_id}/duplicates/execute-job",
+        json={"expected_trash_count": 99},
+    )
+    assert res.status_code == 409
+
+
+def test_execute_job_busy_returns_409(lib_with_dups, client, monkeypatch):
+    lib_id, lib_dir, a, b = lib_with_dups
+    ids = _member_ids(client, lib_id)
+    client.post(
+        f"/v1/libraries/{lib_id}/duplicates/resolutions",
+        json={"resolutions": [
+            {"file_id": ids[0], "action": "keep"},
+            {"file_id": ids[1], "action": "trash"},
+        ]},
+    )
+
+    import threading
+    block = threading.Event()
+
+    import mediamind.api.routes.duplicates as duplicates_module
+    original_trash = duplicates_module.trash
+
+    def slow_trash(*args, **kwargs):
+        block.wait(timeout=5)
+        return original_trash(*args, **kwargs)
+
+    monkeypatch.setattr(duplicates_module, "trash", slow_trash)
+
+    res1 = client.post(
+        f"/v1/libraries/{lib_id}/duplicates/execute-job",
+        json={"expected_trash_count": 1},
+    )
+    assert res1.status_code == 202
+    time.sleep(0.05)  # let the worker thread start and grab the guard
+
+    res2 = client.post(
+        f"/v1/libraries/{lib_id}/duplicates/execute-job",
+        json={"expected_trash_count": 1},
+    )
+    assert res2.status_code == 409
+
+    block.set()
+    _wait_job(client, res1.json()["id"])
+
+
+class _StubCtx:
+    """Minimal JobContext stand-in — the runner only needs cancelled() and
+    report_progress(); mirrors test_face_scan_runner.py's _StubCtx."""
+
+    job_id = "test-execute"
+
+    def cancelled(self) -> bool:
+        return False
+
+    def report_progress(self, done: int, total: int, phase: str = "") -> None:
+        pass
+
+
+def test_execute_runner_vanished_file_produces_error(lib_with_dups, client):
+    """Runner-level check (no threads/HTTP polling needed) mirroring
+    test_vanished_file_produces_error_not_blind_trash for the async path."""
+    lib_id, lib_dir, a, b = lib_with_dups
+    ids = _member_ids(client, lib_id)
+    client.post(
+        f"/v1/libraries/{lib_id}/duplicates/resolutions",
+        json={"resolutions": [
+            {"file_id": ids[0], "action": "keep"},
+            {"file_id": ids[1], "action": "trash"},
+        ]},
+    )
+    b.unlink()
+
+    from mediamind.api.routes.duplicates import _make_execute_runner
+
+    runner = _make_execute_runner(lib_dir, [ids[1]], [b.name], permanent=False)
+    result = runner(_StubCtx())
+
+    assert result["ok"] is False
+    assert result["handled"] == 0
+    assert result["error_count"] == 1
 
 
 # ---------------------------------------------------------------------------

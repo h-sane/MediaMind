@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
 import { Music } from 'lucide-react'
 import { useBrowseThumbnailUrl, useFileThumbnailUrl } from '../api/hooks'
+import { useNearViewport } from '../hooks/useNearViewport'
 
 const MEDIA_KINDS = new Set(['image', 'gif', 'video'])
 
@@ -13,31 +13,6 @@ interface Props {
   className?: string
   size?: number
   fit?: 'cover' | 'contain'
-}
-
-/**
- * True once the element has come within 300px of the viewport — and stays
- * true (sticky), so a fetched thumbnail is never re-fetched or revoked by
- * scrolling away. Keeps huge folders cheap: only visible tiles hit the API.
- */
-function useNearViewport<T extends HTMLElement>(): [React.RefObject<T | null>, boolean] {
-  const ref = useRef<T | null>(null)
-  const [visible, setVisible] = useState(false)
-
-  useEffect(() => {
-    const el = ref.current
-    if (!el || visible) return
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) setVisible(true)
-      },
-      { rootMargin: '300px' }
-    )
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [visible])
-
-  return [ref, visible]
 }
 
 function FileIcon({ label }: { label: string }): React.JSX.Element {

@@ -19,7 +19,6 @@ from mediamind.store.duplicates import (
     mark_members_trashed,
     persist_scan,
     upsert_resolution,
-    validate_no_empty_groups,
 )
 
 
@@ -206,34 +205,3 @@ def test_mark_members_trashed(tmp_path: Path):
 
     rows = conn.execute("SELECT resolution FROM duplicate_members").fetchall()
     assert all(r["resolution"] == "trashed" for r in rows)
-
-
-# ---------------------------------------------------------------------------
-# Zero-keeper validation
-# ---------------------------------------------------------------------------
-
-def test_validate_no_empty_groups_catches_all_trash(tmp_path: Path):
-    conn = open_db(library_db_path(tmp_path))
-    group, _ = _make_group(tmp_path, "V")
-    now = time.time()
-    persist_scan(conn, "s1", [group], tmp_path, now, now + 1, {}, {})
-
-    members = conn.execute("SELECT id FROM duplicate_members").fetchall()
-    for m in members:
-        upsert_resolution(conn, m["id"], "trash")
-
-    bad = validate_no_empty_groups(conn)
-    assert len(bad) == 1
-
-
-def test_validate_no_empty_groups_passes_when_keeper_exists(tmp_path: Path):
-    conn = open_db(library_db_path(tmp_path))
-    group, _ = _make_group(tmp_path, "W")
-    now = time.time()
-    persist_scan(conn, "s1", [group], tmp_path, now, now + 1, {}, {})
-
-    members = conn.execute("SELECT id FROM duplicate_members ORDER BY id").fetchall()
-    upsert_resolution(conn, members[0]["id"], "keep")
-    upsert_resolution(conn, members[1]["id"], "trash")
-
-    assert validate_no_empty_groups(conn) == []

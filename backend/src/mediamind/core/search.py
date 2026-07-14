@@ -8,7 +8,7 @@ the folder currently being browsed.
 
 Media scope is the same predicate `api/routes/fs.py::list_dir` already uses —
 `EXPLORER_KINDS`/`explorer_kind_of` from `core/explorer_media.py` for files,
-and `is_noise_dir` from `core/media_index.py` for directories to skip — so a
+and `is_noise_dir` from `core/scanner.py` for directories to skip — so a
 recursive search never surfaces a file/folder type the plain listing wouldn't. Folder *hits*
 are further checked against the same `MediaIndex` cache the listing uses
 (when available) so a folder that's confirmed junk (has files, none of them
@@ -33,7 +33,8 @@ from typing import Iterator
 
 from mediamind.config import LIBRARY_DATA_DIRNAME
 from mediamind.core.explorer_media import EXPLORER_KINDS, explorer_kind_of
-from mediamind.core.media_index import MediaIndex, is_noise_dir
+from mediamind.core.media_index import MediaIndex
+from mediamind.core.scanner import is_noise_dir
 
 # How many filesystem entries to examine between heartbeats — bounds how
 # long a non-matching stretch of the tree can run before the caller gets a

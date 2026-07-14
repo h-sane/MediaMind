@@ -18,6 +18,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 
 @dataclass(frozen=True)
@@ -220,14 +221,25 @@ def trash(
     manifest_path: Path | None = None,
     dry_run: bool = False,
     permanent: bool = False,
+    on_progress: Callable[[int, int], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> ExecutionReport:
     """Send files to the OS recycle bin (recoverable). Never hard-deletes
     unless `permanent=True` — an explicit, separately-confirmed fallback for
-    locations (network/virtual drives) where the Recycle Bin is unavailable."""
+    locations (network/virtual drives) where the Recycle Bin is unavailable.
+
+    `on_progress(handled_plus_errored, total)` is called after each file if
+    given — lets a long batch report progress to a background job.
+    `should_cancel()` is checked before each file if given — cooperative
+    cancellation is safe here since each trash/delete is a single atomic
+    operation; whatever hasn't been reached yet is simply left untouched.
+    """
     from send2trash import send2trash
 
     report = ExecutionReport(planned=len(paths))
     for path in paths:
+        if should_cancel is not None and should_cancel():
+            break
         try:
             if dry_run:
                 action = "dry-run-deleted" if permanent else "dry-run-trashed"
@@ -247,6 +259,8 @@ def trash(
             entry = ManifestEntry(str(path), "error", "", error=message)
             report.entries.append(entry)
             report.errors.append(entry)
+        if on_progress is not None:
+            on_progress(report.handled + len(report.errors), len(paths))
     if manifest_path is not None:
         _write_manifest(manifest_path, report.entries)
         report.manifest_path = manifest_path

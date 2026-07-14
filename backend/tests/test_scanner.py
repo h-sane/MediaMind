@@ -86,6 +86,30 @@ def test_stalled_file_stat_is_skipped_not_hung(media_library: Path, monkeypatch)
     assert len(found) == 8  # everything else still returned promptly
 
 
+def test_should_cancel_stops_walk_immediately(media_library: Path):
+    """Regression test: the duplicate-scan Cancel button used to do nothing
+    until the whole walk+stat phase had finished, since scan_folder had no
+    cancellation check at all. A should_cancel that's already true must stop
+    the walk before any file is collected, let alone stat'd."""
+    found = list(scan_folder(media_library, should_cancel=lambda: True))
+    assert found == []
+
+
+def test_should_cancel_stops_stat_phase_early(media_library: Path):
+    """Cancelling partway through must stop well short of every file being
+    stat'd, not just after the generator is fully exhausted."""
+    stat_calls = {"n": 0}
+
+    found = list(
+        scan_folder(
+            media_library,
+            on_stat=lambda done, total: stat_calls.__setitem__("n", done),
+            should_cancel=lambda: stat_calls["n"] >= 3,
+        )
+    )
+    assert 0 < len(found) < 9
+
+
 def test_stalled_directory_listing_is_skipped_not_hung(media_library: Path, monkeypatch):
     """Same bug class as the stat timeout above, but for a directory whose
     listing itself never returns (e.g. a hung network share) — previously

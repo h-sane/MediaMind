@@ -25,6 +25,13 @@ export function selectJobForLibrary(
   )
 }
 
+/** All jobs of a given type, across all libraries, most recent first. */
+export function selectJobsByType(jobs: Record<string, JobSnapshot>, type: string): JobSnapshot[] {
+  return Object.values(jobs)
+    .filter((j) => j.type === type)
+    .sort((a, b) => b.created_at - a.created_at)
+}
+
 /** Most recent job (any state) for a given type, across all libraries. */
 export function selectJobByType(
   jobs: Record<string, JobSnapshot>,

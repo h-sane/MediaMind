@@ -542,6 +542,15 @@ export const api = {
         permanent
       }),
 
+    // Real deletion as a background job — the confirm dialog fires this and
+    // closes immediately; a DeleteProgressBubble tracks it to completion via
+    // the WS job broadcast instead of the caller awaiting the request.
+    executeJob: (libraryId: string, expectedTrashCount: number, permanent = false) =>
+      request<JobSnapshot>('POST', `/v1/libraries/${libraryId}/duplicates/execute-job`, {
+        expected_trash_count: expectedTrashCount,
+        permanent
+      }),
+
     confirm: (libraryId: string) =>
       request<{ confirmed_groups: number; skipped_pending: number }>(
         'POST',

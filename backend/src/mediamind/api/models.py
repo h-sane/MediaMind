@@ -227,6 +227,11 @@ class ExecuteIn(BaseModel):
     permanent: bool = False
 
 
+class ExecuteJobIn(BaseModel):
+    expected_trash_count: int
+    permanent: bool = False
+
+
 class ManifestEntryOut(BaseModel):
     source: str
     action: str

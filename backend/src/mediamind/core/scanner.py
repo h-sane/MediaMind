@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterator
@@ -30,6 +31,35 @@ KIND_OTHER = "other"
 
 MEDIA_KINDS = (KIND_IMAGE, KIND_GIF, KIND_VIDEO)
 
+# Never descend into these — OS/app noise that is never user media, and
+# descending into some of them (e.g. system-protected folders) can be slow
+# or trigger permission errors on every entry. Dot-prefixed names are always
+# noise too (see is_noise_dir): besides MediaMind's own `.mediamind`, real
+# folder trees on a user's drive can contain other apps' hidden state that
+# must never be walked into or scanned as user media — e.g. `.git`, or a
+# Cryptomator vault's `.dtrash` (its internal trash: files that already look
+# "deleted" to the user but still exist on disk, and would otherwise get
+# scanned as live duplicates of the files they were deleted from).
+SKIP_DIR_NAMES = {
+    "$Recycle.Bin",
+    "System Volume Information",
+    "node_modules",
+    ".git",
+    "Windows",
+    "Program Files",
+    "Program Files (x86)",
+    "ProgramData",
+    "$WinREAgent",
+}
+
+
+def is_noise_dir(name: str) -> bool:
+    """True for OS/app clutter that should never be scanned, browsed, or
+    descended into — hidden/dot folders, recycle bins, VCS and build
+    folders, and known Windows system directories."""
+    return name.startswith(".") or name in SKIP_DIR_NAMES
+
+
 # A single unreachable directory or file must never freeze an entire scan:
 # listing a directory or stat-ing a file is a blocking syscall with no other
 # bound on its I/O time. Seen in practice with cloud-sync placeholder folders
@@ -39,6 +69,15 @@ MEDIA_KINDS = (KIND_IMAGE, KIND_GIF, KIND_VIDEO)
 # it gets the longer budget; a per-file stat is cheaper and gets a shorter one.
 DEFAULT_WALK_TIMEOUT_SECONDS = 30.0
 DEFAULT_STAT_TIMEOUT_SECONDS = 15.0
+
+# A directory/file whose read times out leaks its watchdog thread forever
+# (see run_with_timeout) — on a chronically wedged mount, a scan of
+# thousands of files can leak thousands of never-returning threads with no
+# bound, eventually exhausting the process's thread capacity and crashing
+# the scan outright instead of just skipping one more file. This caps how
+# many such leaked threads one scan_folder() call will tolerate before it
+# starts failing further stalls fast rather than spawning more.
+MAX_LEAKED_STALL_THREADS = 64
 
 
 @dataclass(frozen=True)
@@ -64,14 +103,14 @@ def kind_of(path: Path) -> str:
     return KIND_OTHER
 
 
-def _list_dir(path: Path, timeout: float) -> list[os.DirEntry]:
+def _list_dir(path: Path, timeout: float, limiter: threading.Semaphore) -> list[os.DirEntry]:
     def _list() -> list[os.DirEntry]:
         try:
             return list(os.scandir(path))
         except OSError:
             return []
 
-    outcome = run_with_timeout(_list, timeout)
+    outcome = run_with_timeout(_list, timeout, limiter)
     if outcome is TIMED_OUT:
         logger.warning(
             "scan: skipping directory %s - timed out after %.0fs listing it "
@@ -90,11 +129,14 @@ def scan_folder(
     on_stat: Callable[[int, int], None] | None = None,
     walk_timeout_seconds: float = DEFAULT_WALK_TIMEOUT_SECONDS,
     stat_timeout_seconds: float = DEFAULT_STAT_TIMEOUT_SECONDS,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> Iterator[ScannedFile]:
     """Yield every file under `root`, classified, in stable sorted order.
 
     Directories named in `exclude_dirs` (MediaMind's own data folder by
-    default) are pruned before descending into them. Files that vanish
+    default) are pruned before descending into them, as is anything
+    `is_noise_dir` flags — OS/app noise such as recycle bins, VCS folders,
+    and other apps' hidden dot-directories (see `SKIP_DIR_NAMES`). Files that vanish
     mid-scan are skipped rather than raising — a scan must survive a
     changing folder. A directory whose listing doesn't return within
     `walk_timeout_seconds`, or a file whose metadata read doesn't return
@@ -120,18 +162,26 @@ def scan_folder(
     gave: an unguarded walk over such a loop can run indefinitely on a
     "many nested folders" tree and looks identical to a hung scan from the
     caller's side.
+
+    `should_cancel`, if given, is polled between directories during the walk
+    and between files during the stat pass so a cancelled job stops within
+    one directory listing / one stat call instead of only after the entire
+    tree has been walked and stat'd — on a large library that first phase can
+    take far longer than the hashing phase it precedes, which is where the
+    only other cancellation check used to live.
     """
     root = root.expanduser().resolve()
     collected: list[Path] = []
     found = 0
+    limiter = threading.Semaphore(MAX_LEAKED_STALL_THREADS)
 
     def _emit_progress() -> None:
         if on_walk is not None and found % 200 == 0:
             on_walk(found)
 
     if not recursive:
-        for entry in _list_dir(root, walk_timeout_seconds):
-            if entry.name in exclude_dirs:
+        for entry in _list_dir(root, walk_timeout_seconds, limiter):
+            if entry.name in exclude_dirs or is_noise_dir(entry.name):
                 continue
             collected.append(Path(entry.path))
             found += 1
@@ -139,15 +189,17 @@ def scan_folder(
     else:
         stack = [root]
         while stack:
+            if should_cancel is not None and should_cancel():
+                return
             current = stack.pop()
             subdirs: list[Path] = []
-            for entry in _list_dir(current, walk_timeout_seconds):
+            for entry in _list_dir(current, walk_timeout_seconds, limiter):
                 try:
                     is_dir = entry.is_dir()  # follows symlinks, matches os.walk's classification
                 except OSError:
                     continue
                 if is_dir:
-                    if entry.name in exclude_dirs:
+                    if entry.name in exclude_dirs or is_noise_dir(entry.name):
                         continue
                     try:
                         is_link = entry.is_symlink()
@@ -162,11 +214,17 @@ def scan_folder(
                     _emit_progress()
             stack.extend(subdirs)
 
+    if should_cancel is not None and should_cancel():
+        return
+
     if on_walk is not None:
         on_walk(found)
 
     total = len(collected)
     for i, path in enumerate(sorted(collected), 1):
+        if should_cancel is not None and should_cancel():
+            return
+
         def _read(path: Path = path) -> tuple[int, float] | None:
             if not path.is_file():
                 return None
@@ -174,8 +232,13 @@ def scan_folder(
             return stat.st_size, stat.st_mtime
 
         try:
-            outcome = run_with_timeout(_read, stat_timeout_seconds)
-        except OSError:
+            outcome = run_with_timeout(_read, stat_timeout_seconds, limiter)
+        except Exception:
+            # A single file's metadata read must never end the whole scan
+            # (project invariant: one bad file can't crash a run) — anything
+            # beyond the expected OSError (e.g. a thread-creation failure
+            # once many stalls have already leaked threads) is skipped the
+            # same way.
             outcome = None
 
         if outcome is TIMED_OUT:

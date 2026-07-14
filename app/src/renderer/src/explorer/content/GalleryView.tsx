@@ -10,6 +10,7 @@ import { RenameInput } from '../interactions/RenameInput'
 import { useFileOps } from '../useFileOps'
 import { useSelectionModel } from '../selection/useSelectionModel'
 import { groupEntries } from './grouping'
+import { useIconSizeZoom } from './useIconSizeZoom'
 import type { DirEntry } from './useDirectoryListing'
 
 /** Same four icon-size tiers `IconGridView.tsx` uses (`Ctrl+Shift+1-4`) — a
@@ -122,6 +123,7 @@ export function GalleryView({ entries, onOpenFile }: Props): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const [columns, setColumns] = useState(6)
+  useIconSizeZoom(scrollRef)
 
   const orderedPaths = entries.map((e) => e.path)
   const { onItemClick, isSelected } = useSelectionModel(orderedPaths)

@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, dialog, clipboard } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, clipboard, screen } from 'electron'
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
@@ -124,6 +124,65 @@ function createWindow(): BrowserWindow {
   })
 
   win.on('ready-to-show', () => win.show())
+
+  // Windows leaves an invisible ~8px resize border around thick-frame windows
+  // that Chromium doesn't subtract when it maximizes: `maximize()` lands the
+  // window 16px wider/taller than the monitor's work area, offset -8/-8, so
+  // it spills a strip under the taskbar and past the screen edge.
+  //
+  // Windows also refuses any `setBounds()` while the WS_MAXIMIZE style bit
+  // is set — it silently re-snaps to its own (wrong) computed rect on every
+  // attempt, at any delay, so the bounds can't be corrected in place. The
+  // only way to land on the right size is to drop the native maximized
+  // state and size the window ourselves ("fake maximize"), which then
+  // leaves `isMaximized()` false and breaks the OS maximize button's normal
+  // click-to-restore toggle. `fakeMaximized` below re-implements that
+  // toggle: a second maximize click while already fake-maximized restores
+  // the last normal size instead of re-filling the screen.
+  let fakeMaximized = false
+  let adjustingBounds = false
+  let lastNormalBounds = win.getBounds()
+
+  win.on('resize', () => {
+    if (adjustingBounds) return
+    if (fakeMaximized) {
+      // Re-clicking maximize while fake-maximized makes Windows run its own
+      // (buggy, oversized) maximize sequence again before our 'maximize'
+      // handler below gets to convert it into a restore — that transient
+      // resize also lands here first. Only treat this as a genuine manual
+      // drag-resize-away-from-fullscreen if the OS isn't mid-maximize.
+      if (win.isMaximized()) return
+      fakeMaximized = false
+      lastNormalBounds = win.getBounds()
+      return
+    }
+    if (!win.isMaximized()) lastNormalBounds = win.getBounds()
+  })
+
+  // Every maximize click — fill or restore — arrives here with the OS
+  // genuinely in WS_MAXIMIZE (it thought the window was restored, so the
+  // click sent a real SC_MAXIMIZE), so both branches need the same
+  // unmaximize-then-settle dance before a setBounds() will stick.
+  function settleBoundsAfterMaximize(target: Electron.Rectangle, becomesFakeMaximized: boolean): void {
+    adjustingBounds = true
+    setTimeout(() => {
+      win.unmaximize()
+      setTimeout(() => {
+        win.setBounds(target)
+        fakeMaximized = becomesFakeMaximized
+        adjustingBounds = false
+      }, 100)
+    }, 50)
+  }
+
+  win.on('maximize', () => {
+    if (fakeMaximized) {
+      settleBoundsAfterMaximize(lastNormalBounds, false)
+      return
+    }
+    const workArea = screen.getDisplayMatching(win.getBounds()).workArea
+    settleBoundsAfterMaximize(workArea, true)
+  })
 
   // External links open in the OS browser, never inside the app.
   win.webContents.setWindowOpenHandler(({ url }) => {

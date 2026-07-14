@@ -49,9 +49,10 @@ from mediamind.core.explorer_media import EXPLORER_KINDS, explorer_kind_of
 from mediamind.core.file_facts import file_facts, stat_facts
 from mediamind.core.folder_stats import FolderStatsIndex
 from mediamind.core.gallery import DEFAULT_GALLERY_LIMIT, MAX_COLLECTED, MAX_GALLERY_LIMIT, iter_gallery_items
-from mediamind.core.media_index import MediaIndex, is_noise_dir
+from mediamind.core.media_index import MediaIndex
 from mediamind.core.pathsafe import resolve_os_path
 from mediamind.core.quick_access import QuickAccessStore
+from mediamind.core.scanner import is_noise_dir
 from mediamind.core.recent import RecentFilesStore
 from mediamind.core.scanner import MEDIA_KINDS, kind_of
 from mediamind.core.settings import SettingsStore

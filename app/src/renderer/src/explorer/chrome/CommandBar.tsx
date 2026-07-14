@@ -82,7 +82,7 @@ export function CommandBar(): React.JSX.Element {
 
   return (
     <div className="flex items-center justify-between border-b border-zinc-200 px-3 py-1.5">
-      <div className="flex items-center gap-0.5">
+      <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
         <ActionButton icon={FolderPlus} label="New" onClick={fileOps.newFolder} disabled={!fileOps.canNewFolder} />
         <div className="mx-1 h-4 w-px bg-zinc-200" />
         <ActionButton icon={Scissors} label="Cut" onClick={fileOps.cut} disabled={!fileOps.canCutCopy} />
@@ -123,7 +123,7 @@ export function CommandBar(): React.JSX.Element {
         />
       </div>
 
-      <div className="flex items-center gap-1">
+      <div className="flex shrink-0 items-center gap-1">
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild>
             <button className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-zinc-600 hover:bg-zinc-100">

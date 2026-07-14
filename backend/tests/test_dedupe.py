@@ -73,6 +73,28 @@ def test_best_copy_is_highest_resolution(dup_library: Path):
     assert photo_group.files[0].is_best  # keeper is listed first
 
 
+def test_best_copy_prefers_named_folder_over_generic_when_tied(tmp_path: Path):
+    """Same pixels, same size, same mtime — only the folder name differs, and a
+    named folder (e.g. a person's/group's name) should win over a generic
+    placeholder folder (TEST*/TEMP*/Unknown/Unnamed/...)."""
+    original = _noise_image(tmp_path / "TEST" / "photo.png", seed=5)
+    named_copy = tmp_path / "Family Reunion" / "photo.png"
+    named_copy.parent.mkdir()
+    named_copy.write_bytes(original.read_bytes())
+    # Keep mtimes identical so the folder-name tiebreak is the only signal
+    # deciding the keeper, not the existing "oldest wins" fallback.
+    import os
+
+    st = original.stat()
+    os.utime(named_copy, (st.st_atime, st.st_mtime))
+
+    groups = _groups(tmp_path)
+    group = next(g for g in groups if any(f.path.name == "photo.png" for f in g.files))
+    best = [f for f in group.files if f.is_best]
+    assert len(best) == 1
+    assert best[0].path.parent.name == "Family Reunion"
+
+
 def test_no_duplicates_no_groups(tmp_path: Path):
     _noise_image(tmp_path / "a.png", seed=10)
     _noise_image(tmp_path / "b.png", seed=20)
@@ -157,6 +179,69 @@ def test_stalled_file_is_skipped_not_hung(dup_library: Path, monkeypatch):
     for g in groups:
         assert "clip_copy.mp4" not in {f.path.name for f in g.files}
     # Everything else still resolved normally in the same call.
+    photo_group = next(g for g in groups if any(f.path.name == "photo.png" for f in g.files))
+    assert {f.path.name for f in photo_group.files} == {"photo.png", "photo_copy.png", "photo_small.jpg"}
+
+
+def test_many_simultaneous_stalls_dont_hang_or_crash(tmp_path: Path, monkeypatch):
+    """Regression: a chronically wedged mount can stall many files at once,
+    not just one. Each stall leaks a watchdog thread that never returns
+    (Python can't kill it) — without a cap, that grows without bound and can
+    eventually crash the scan when the OS refuses to hand out more threads.
+    With the cap, stalls beyond the limit fail fast instead of piling on, and
+    the whole call still returns promptly."""
+    import time
+
+    import mediamind.core.dedupe as dedupe_mod
+
+    monkeypatch.setattr(dedupe_mod, "MAX_LEAKED_STALL_THREADS", 3)
+
+    real_hash_file = dedupe_mod.hash_file
+
+    def hanging_hash_file(path: Path) -> str:
+        if path.name.startswith("clip"):
+            time.sleep(10)  # far longer than the test's tiny file_timeout_seconds
+        return real_hash_file(path)
+
+    monkeypatch.setattr(dedupe_mod, "hash_file", hanging_hash_file)
+
+    payload = b"fake video bytes" * 100
+    for n in range(6):
+        (tmp_path / f"clip{n}.mp4").write_bytes(payload)
+
+    files = list(scan_folder(tmp_path))
+    started = time.monotonic()
+    groups = find_duplicates(files, file_timeout_seconds=0.2)
+    elapsed = time.monotonic() - started
+
+    # All six stall, but only 3 (the cap) ever wait out the real 0.2s
+    # timeout — the rest fail fast without spawning a thread at all, so this
+    # returns in roughly one timeout window, not six.
+    assert elapsed < 2.0
+    assert groups == []  # every file skipped; none can group
+
+
+def test_non_os_error_during_hash_is_skipped_not_fatal(dup_library: Path, monkeypatch):
+    """Safety invariant (CLAUDE.md): one bad file must never crash a run.
+    Only OSError was previously guarded against; anything else (e.g. a
+    thread-creation failure once many stalls have already leaked threads)
+    used to propagate and fail the whole scan."""
+    import mediamind.core.dedupe as dedupe_mod
+
+    real_hash_file = dedupe_mod.hash_file
+
+    def flaky_hash_file(path: Path) -> str:
+        if path.name == "clip.mp4":
+            raise RuntimeError("simulated non-OSError failure")
+        return real_hash_file(path)
+
+    monkeypatch.setattr(dedupe_mod, "hash_file", flaky_hash_file)
+
+    files = list(scan_folder(dup_library))
+    groups = find_duplicates(files)  # must not raise
+
+    for g in groups:
+        assert "clip.mp4" not in {f.path.name for f in g.files}
     photo_group = next(g for g in groups if any(f.path.name == "photo.png" for f in g.files))
     assert {f.path.name for f in photo_group.files} == {"photo.png", "photo_copy.png", "photo_small.jpg"}
 

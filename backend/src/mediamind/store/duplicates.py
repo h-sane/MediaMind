@@ -161,19 +161,6 @@ def mark_members_trashed(conn: sqlite3.Connection, member_ids: list[int]) -> Non
     conn.commit()
 
 
-def validate_no_empty_groups(conn: sqlite3.Connection) -> list[int]:
-    """Return group IDs where every member is marked 'trash' (no keeper remains)."""
-    bad: list[int] = []
-    for gr in conn.execute("SELECT id FROM duplicate_groups").fetchall():
-        count = conn.execute(
-            "SELECT COUNT(*) AS c FROM duplicate_members WHERE group_id = ? AND (resolution IS NULL OR resolution != 'trash')",
-            (gr["id"],),
-        ).fetchone()["c"]
-        if count == 0:
-            bad.append(gr["id"])
-    return bad
-
-
 def get_dismissed_signatures(conn: sqlite3.Connection) -> set[str]:
     """All group signatures the user has already reviewed and confirmed via
     /duplicates/confirm — a fresh scan filters these out (see

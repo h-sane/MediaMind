@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './client'
 import { isRealFolder } from '../stores/explorer'
+import { useJobsStore } from '../stores/jobs'
 import type { DuplicateFile, Person } from './client'
 
 // ---------------------------------------------------------------------------
@@ -588,6 +589,30 @@ export function useExecute(libraryId: string) {
   })
 }
 
+// Kicks off the real deletion as a background job and returns immediately —
+// callers close their confirm dialog right after calling mutate(), they
+// don't await completion. Progress/completion is picked up from the WS job
+// broadcast (see api/progress.ts) by DeleteProgressBubble, not from this
+// hook's return value.
+export function useExecuteJob(libraryId: string) {
+  return useMutation({
+    mutationFn: ({
+      expectedTrashCount,
+      permanent
+    }: {
+      expectedTrashCount: number
+      permanent?: boolean
+    }) => api.duplicates.executeJob(libraryId, expectedTrashCount, permanent),
+    onSuccess: (snap) => useJobsStore.getState().upsert(snap)
+  })
+}
+
+export function useCancelJob(jobId: string) {
+  return useMutation({
+    mutationFn: () => api.jobs.cancel(jobId)
+  })
+}
+
 export function useConfirmReviewed(libraryId: string) {
   const qc = useQueryClient()
   return useMutation({
@@ -683,11 +708,17 @@ export function usePersonMedia(libraryId: string, personId: number) {
 // Thumbnails (fetch with auth header → object URL, revoked on unmount)
 // ---------------------------------------------------------------------------
 
-export function useThumbnailUrl(libraryId: string, memberId: number, size = 256): string | null {
+export function useThumbnailUrl(
+  libraryId: string,
+  memberId: number,
+  size = 256,
+  enabled = true
+): string | null {
   const [url, setUrl] = useState<string | null>(null)
   const urlRef = useRef<string | null>(null)
 
   useEffect(() => {
+    if (!enabled) return
     let cancelled = false
     api.duplicates
       .thumbnailUrl(libraryId, memberId, size)
@@ -708,7 +739,7 @@ export function useThumbnailUrl(libraryId: string, memberId: number, size = 256)
         urlRef.current = null
       }
     }
-  }, [libraryId, memberId, size])
+  }, [libraryId, memberId, size, enabled])
 
   return url
 }
@@ -806,11 +837,17 @@ export function useSetRouteChoices(libraryId: string) {
   })
 }
 
-export function useFaceThumbnailUrl(libraryId: string, faceId: number, size = 192): string | null {
+export function useFaceThumbnailUrl(
+  libraryId: string,
+  faceId: number,
+  size = 192,
+  enabled = true
+): string | null {
   const [url, setUrl] = useState<string | null>(null)
   const urlRef = useRef<string | null>(null)
 
   useEffect(() => {
+    if (!enabled) return
     let cancelled = false
     if (faceId <= 0) return
     api.persons
@@ -832,7 +869,7 @@ export function useFaceThumbnailUrl(libraryId: string, faceId: number, size = 19
         urlRef.current = null
       }
     }
-  }, [libraryId, faceId, size])
+  }, [libraryId, faceId, size, enabled])
 
   return url
 }

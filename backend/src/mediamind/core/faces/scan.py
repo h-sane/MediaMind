@@ -47,7 +47,7 @@ def make_face_scan_runner(
         started_at = time.time()
         ctx.report_progress(0, 0, "scanning")
 
-        scanned_files = list(scan_folder(library_root))
+        scanned_files = list(scan_folder(library_root, should_cancel=ctx.cancelled))
         total = len(scanned_files)
         if ctx.cancelled():
             return {}

@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,13 @@ DEFAULT_NEAR_THRESHOLD = 5  # max pHash hamming distance to call two images "nea
 # indefinitely. 30s is generous for even a large local video on a slow disk
 # while still bounding the worst case.
 DEFAULT_FILE_TIMEOUT_SECONDS = 30.0
+
+# Mirrors scanner.MAX_LEAKED_STALL_THREADS: a file whose read times out
+# leaks its watchdog thread forever, so a chronically wedged mount can leak
+# one thread per stalled file with no bound across a large library — this
+# caps how many of those a single find_duplicates() call will tolerate
+# before failing further stalls fast instead of adding to the pile.
+MAX_LEAKED_STALL_THREADS = 64
 
 # Hashing is I/O-bound (hash_file releases the GIL during reads; Pillow's
 # decode is mostly C), so oversubscribing cores pays off — concurrent reads
@@ -118,9 +126,29 @@ def _perceptual_hash(path: Path):
         return None  # undecodable image -> participates in exact matching only
 
 
+# Folder names that signal "not yet organized" — a named folder (a person's
+# or group's name) always outranks these when pixels/size are tied, since a
+# named folder reflects a deliberate choice and a generic one doesn't.
+_GENERIC_FOLDER_NAMES = {"unknown", "unnamed", "untitled", "new folder"}
+_GENERIC_FOLDER_PREFIXES = ("test", "temp")
+
+
+def _is_generic_folder(name: str) -> bool:
+    n = name.strip().lower()
+    if not n or n in _GENERIC_FOLDER_NAMES:
+        return True
+    return n.startswith(_GENERIC_FOLDER_PREFIXES)
+
+
 def _pick_best(files: list[DuplicateFile]) -> None:
-    """Mark the keeper: most pixels, then largest file, then oldest (PRD F1.4)."""
-    best = max(files, key=lambda f: (f.pixels, f.size, -f.mtime))
+    """Mark the keeper: most pixels, then largest file, then a named folder
+    over a generic one (TEST*/TEMP*/Unknown/Unnamed/...), then oldest (PRD F1.4)."""
+
+    def key(f: DuplicateFile) -> tuple:
+        named_folder = not _is_generic_folder(f.path.parent.name)
+        return (f.pixels, f.size, named_folder, -f.mtime)
+
+    best = max(files, key=key)
     for f in files:
         f.is_best = f is best
 
@@ -152,16 +180,22 @@ def find_duplicates(
         phash = _perceptual_hash(f.path) if f.kind == KIND_IMAGE else None
         return content_hash, width, height, phash
 
+    limiter = threading.Semaphore(MAX_LEAKED_STALL_THREADS)
+
     def _task(f: ScannedFile) -> tuple | None:
         # Still wrapped in run_with_timeout so a genuinely stalled read costs
         # a leaked daemon thread, not a pool worker — the pool keeps its full
         # concurrency for the rest of the scan.
         try:
             outcome = run_with_timeout(
-                lambda: _process(f, size_counts[f.size] > 1), file_timeout_seconds
+                lambda: _process(f, size_counts[f.size] > 1), file_timeout_seconds, limiter
             )
-        except OSError:
-            return None  # vanished mid-scan; detection is read-only, just skip
+        except Exception:
+            # One file's failure must never end the whole scan (project
+            # invariant). Vanishing mid-scan raises OSError; once many
+            # stalls have already leaked threads, even spawning the
+            # watchdog thread itself can fail — skip either way.
+            return None
         if outcome is TIMED_OUT:
             logger.warning(
                 "dedupe: skipping %s - timed out after %.0fs reading it (likely a "

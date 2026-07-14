@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { usePersons, usePersonMedia } from '../../../api/hooks'
+import { useZoomScale } from '../../../hooks/useZoomScale'
 import { FileThumbnail } from '../../../components/FileThumbnail'
 import { MediaViewer } from '../../../components/MediaViewer'
 
@@ -26,11 +27,13 @@ export function PersonDetailPanel({ libraryId, personId, onBack }: Props): React
   const files = useMemo(() => media ?? [], [media])
 
   const [viewerIndex, setViewerIndex] = useState<number | null>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [zoom] = useZoomScale(scrollRef, { min: 0.5, max: 2 })
 
   const displayName = person?.name ?? person?.auto_label ?? 'Person'
 
   return (
-    <div className="h-full overflow-y-auto p-6">
+    <div ref={scrollRef} className="h-full overflow-y-auto p-6">
       <button
         onClick={onBack}
         className="mb-6 flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-600"
@@ -60,7 +63,10 @@ export function PersonDetailPanel({ libraryId, personId, onBack }: Props): React
       )}
 
       {files.length > 0 && (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(8rem,1fr))] gap-3">
+        <div
+          className="grid gap-3"
+          style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${Math.round(8 * 16 * zoom)}px, 1fr))` }}
+        >
           {files.map((f, i) => (
             <figure key={f.file_id} title={f.path}>
               <button type="button" onClick={() => setViewerIndex(i)} className="block w-full cursor-pointer">

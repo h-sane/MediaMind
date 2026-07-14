@@ -34,25 +34,11 @@ from pathlib import Path
 from typing import NamedTuple
 
 from mediamind.core.explorer_media import EXPLORER_KINDS, explorer_kind_of
+from mediamind.core.scanner import is_noise_dir
 
 # Re-checked even if the directory's own mtime hasn't changed, to catch
 # additions/removals several levels deeper in the subtree.
 CACHE_TTL_SECONDS = 15 * 60
-
-# Never descend into these — OS/app noise that is never user media, and
-# descending into some of them (e.g. system-protected folders) can be slow
-# or trigger permission errors on every entry.
-SKIP_DIR_NAMES = {
-    "$Recycle.Bin",
-    "System Volume Information",
-    "node_modules",
-    ".git",
-    "Windows",
-    "Program Files",
-    "Program Files (x86)",
-    "ProgramData",
-    "$WinREAgent",
-}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS dir_media (
@@ -71,13 +57,6 @@ class MediaStatus(NamedTuple):
     # structure only) — see module docstring for why this is tracked
     # separately from has_media.
     has_any_file: bool
-
-
-def is_noise_dir(name: str) -> bool:
-    """True for OS/app clutter that should never appear in the Explorer
-    shell or be descended into — hidden/dot folders, recycle bins, VCS and
-    build folders, and known Windows system directories."""
-    return name.startswith(".") or name in SKIP_DIR_NAMES
 
 
 def _walk_media_status(root: Path) -> MediaStatus:

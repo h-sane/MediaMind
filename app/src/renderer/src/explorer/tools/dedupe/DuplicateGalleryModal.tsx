@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Check, ChevronLeft, ChevronRight, Folder, X } from 'lucide-react'
 import { useFileRawUrl } from '../../../api/hooks'
+import { useZoomScale } from '../../../hooks/useZoomScale'
+import { MediaViewer } from '../../../components/MediaViewer'
 import { Thumbnail } from '../../../components/Thumbnail'
 import { FileThumbnail } from '../../../components/FileThumbnail'
 import { formatBytes, formatDate, subfolderOf } from './format'
@@ -14,17 +16,34 @@ function GalleryFileCard({
   file,
   libraryId,
   folderName,
-  onToggle
+  onToggle,
+  onOpenSingle,
+  onVideoRef,
+  onVideoReady,
+  onVideoPlay,
+  onVideoPause,
+  onVideoFailed
 }: {
   file: DuplicateFile
   libraryId: string
   folderName: string
   onToggle: (id: number, current: DuplicateFile['resolution']) => void
+  onOpenSingle: (file: DuplicateFile) => void
+  onVideoRef: (fileId: number, el: HTMLVideoElement | null) => void
+  onVideoReady: (fileId: number) => void
+  onVideoPlay: (fileId: number) => void
+  onVideoPause: (fileId: number) => void
+  onVideoFailed: (fileId: number) => void
 }): React.JSX.Element {
   const marked = file.resolution === 'trash'
   const location = subfolderOf(file.path, folderName)
   const isVideo = file.kind === 'video'
   const raw = useFileRawUrl(libraryId, file.path, isVideo)
+
+  useEffect(() => {
+    if (isVideo && raw.failed) onVideoFailed(file.id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [raw.failed])
 
   return (
     <div
@@ -44,13 +63,44 @@ function GalleryFileCard({
         )}
       </div>
 
-      <div className="flex aspect-video items-center justify-center bg-black">
+      <div
+        className="relative aspect-video cursor-zoom-in overflow-hidden bg-black"
+        title="Double-click for a full-screen view of just this file"
+        onDoubleClick={() => onOpenSingle(file)}
+      >
         {isVideo ? (
           raw.failed ? (
-            <p className="px-4 text-center text-xs text-red-400">Could not load this file.</p>
+            <p className="absolute inset-0 flex items-center justify-center px-4 text-center text-xs text-red-400">
+              Could not load this file.
+            </p>
           ) : raw.url ? (
-            <video src={raw.url} controls className="h-full w-full object-contain" />
+            <video
+              ref={(el) => onVideoRef(file.id, el)}
+              src={raw.url}
+              controls
+              // `absolute inset-0` (not h-full/w-full in flow) keeps a
+              // portrait video's own intrinsic aspect ratio from leaking
+              // into this grid cell's auto row-height calculation and
+              // blowing the card out past the aspect-video box.
+              className="absolute inset-0 h-full w-full object-contain"
+              onLoadedData={() => onVideoReady(file.id)}
+              onPlay={() => onVideoPlay(file.id)}
+              onPause={() => onVideoPause(file.id)}
+            />
           ) : (
+            <div className="absolute inset-0">
+              <FileThumbnail
+                libraryId={libraryId}
+                path={file.path}
+                kind={file.kind}
+                size={1024}
+                fit="contain"
+                className="h-full w-full"
+              />
+            </div>
+          )
+        ) : (
+          <div className="absolute inset-0">
             <FileThumbnail
               libraryId={libraryId}
               path={file.path}
@@ -59,16 +109,7 @@ function GalleryFileCard({
               fit="contain"
               className="h-full w-full"
             />
-          )
-        ) : (
-          <FileThumbnail
-            libraryId={libraryId}
-            path={file.path}
-            kind={file.kind}
-            size={1024}
-            fit="contain"
-            className="h-full w-full"
-          />
+          </div>
         )}
       </div>
 
@@ -124,6 +165,7 @@ export function DuplicateGalleryModal({
   onClose
 }: Props): React.JSX.Element {
   const [activeGroupId, setActiveGroupId] = useState(initialGroupId)
+  const [singleViewFile, setSingleViewFile] = useState<DuplicateFile | null>(null)
   const activeIndex = groups.findIndex((g) => g.id === activeGroupId)
   const activeGroup = groups[activeIndex] ?? groups[0]
 
@@ -132,7 +174,94 @@ export function DuplicateGalleryModal({
     setActiveGroupId(groups[index].id)
   }
 
+  // Every video in the currently open group plays automatically, together,
+  // as soon as it's ready — no per-file play button. Because each
+  // GalleryFileCard is keyed by file id, switching groups unmounts the old
+  // group's <video> elements (stopping playback) and mounts fresh ones for
+  // the new group (so revisiting a group always restarts from 0, in sync).
+  const videoRefs = useRef<Map<number, HTMLVideoElement>>(new Map())
+  const readyIdsRef = useRef<Set<number>>(new Set())
+  const failedIdsRef = useRef<Set<number>>(new Set())
+  const syncingRef = useRef(false)
+  const expectedVideoIds = activeGroup.files.filter((f) => f.kind === 'video').map((f) => f.id)
+
+  const playGroupSynced = useCallback(() => {
+    const elements = expectedVideoIds
+      .map((id) => videoRefs.current.get(id))
+      .filter((el): el is HTMLVideoElement => !!el)
+    if (elements.length === 0) return
+    syncingRef.current = true
+    elements.forEach((el) => {
+      el.currentTime = 0
+    })
+    Promise.all(elements.map((el) => el.play().catch(() => {}))).finally(() => {
+      syncingRef.current = false
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeGroupId])
+
+  // A video that fails to load must not block the rest of the group from
+  // autoplaying — only wait on the ones that can actually play.
+  const pendingVideoIds = expectedVideoIds.filter((id) => !failedIdsRef.current.has(id))
+
+  const onVideoRef = useCallback((fileId: number, el: HTMLVideoElement | null) => {
+    if (el) {
+      videoRefs.current.set(fileId, el)
+    } else {
+      videoRefs.current.delete(fileId)
+      readyIdsRef.current.delete(fileId)
+    }
+  }, [])
+
+  const onVideoReady = useCallback(
+    (fileId: number) => {
+      readyIdsRef.current.add(fileId)
+      if (pendingVideoIds.length > 0 && pendingVideoIds.every((id) => readyIdsRef.current.has(id))) {
+        playGroupSynced()
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeGroupId, playGroupSynced]
+  )
+
+  const onVideoFailed = useCallback(
+    (fileId: number) => {
+      failedIdsRef.current.add(fileId)
+      const remaining = expectedVideoIds.filter((id) => !failedIdsRef.current.has(id))
+      if (remaining.length > 0 && remaining.every((id) => readyIdsRef.current.has(id))) {
+        playGroupSynced()
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeGroupId, playGroupSynced]
+  )
+
+  // Native play/pause on any one video (e.g. the user clicks its controls)
+  // mirrors to the rest of the group, so comparing videos never requires
+  // pressing play separately on each one.
+  const onVideoPlay = useCallback((fileId: number) => {
+    if (syncingRef.current) return
+    syncingRef.current = true
+    videoRefs.current.forEach((el, id) => {
+      if (id !== fileId && el.paused) el.play().catch(() => {})
+    })
+    syncingRef.current = false
+  }, [])
+
+  const onVideoPause = useCallback((fileId: number) => {
+    if (syncingRef.current) return
+    syncingRef.current = true
+    videoRefs.current.forEach((el, id) => {
+      if (id !== fileId && !el.paused) el.pause()
+    })
+    syncingRef.current = false
+  }, [])
+
   useEffect(() => {
+    // The single-file viewer owns keyboard input (Escape/arrows) while it's
+    // open, and stacks visually above this modal — this modal's own
+    // shortcuts must stand down so Escape closes just the single view first.
+    if (singleViewFile) return
     function onKey(e: KeyboardEvent): void {
       if (e.key === 'Escape') onClose()
       if (e.key === 'ArrowRight') goTo(activeIndex + 1)
@@ -141,14 +270,11 @@ export function DuplicateGalleryModal({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeIndex])
+  }, [activeIndex, singleViewFile])
 
-  const gridCols =
-    activeGroup.files.length <= 2
-      ? 'grid-cols-1 sm:grid-cols-2'
-      : activeGroup.files.length === 3
-        ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
-        : 'grid-cols-2 lg:grid-cols-3'
+  const galleryScrollRef = useRef<HTMLDivElement>(null)
+  const [zoom] = useZoomScale(galleryScrollRef, { min: 0.5, max: 2 })
+  const cardMinWidth = Math.round(260 * zoom)
 
   return (
     <div className="fixed inset-0 z-[70] flex bg-zinc-950">
@@ -219,14 +345,39 @@ export function DuplicateGalleryModal({
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6">
-          <div className={`grid gap-4 ${gridCols}`}>
+        <div ref={galleryScrollRef} className="flex-1 overflow-y-auto p-6">
+          <div
+            className="grid gap-4"
+            style={{ gridTemplateColumns: `repeat(auto-fit, minmax(${cardMinWidth}px, 1fr))` }}
+          >
             {activeGroup.files.map((f) => (
-              <GalleryFileCard key={f.id} file={f} libraryId={libraryId} folderName={folderName} onToggle={onToggle} />
+              <GalleryFileCard
+                key={f.id}
+                file={f}
+                libraryId={libraryId}
+                folderName={folderName}
+                onToggle={onToggle}
+                onOpenSingle={setSingleViewFile}
+                onVideoRef={onVideoRef}
+                onVideoReady={onVideoReady}
+                onVideoPlay={onVideoPlay}
+                onVideoPause={onVideoPause}
+                onVideoFailed={onVideoFailed}
+              />
             ))}
           </div>
         </div>
       </div>
+
+      {singleViewFile && (
+        <MediaViewer
+          libraryId={libraryId}
+          files={[{ path: singleViewFile.path, kind: singleViewFile.kind }]}
+          index={0}
+          onClose={() => setSingleViewFile(null)}
+          onIndexChange={() => {}}
+        />
+      )}
     </div>
   )
 }

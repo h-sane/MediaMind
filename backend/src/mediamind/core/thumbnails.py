@@ -8,6 +8,8 @@ crash a request or a run).
 
 from __future__ import annotations
 
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import NamedTuple
 
@@ -15,6 +17,26 @@ from mediamind.core import loaders
 from mediamind.core.scanner import KIND_GIF, KIND_IMAGE, KIND_VIDEO
 
 JPEG_QUALITY = 85
+
+# In-memory cache of encoded thumbnails, keyed by (path, kind, size, mtime,
+# file size) so a changed file is never served a stale thumbnail. Bounded by
+# total bytes rather than entry count since a 1024px preview is far larger
+# than a 64px grid tile. Every thumbnail route (duplicates, faces-adjacent
+# file browsing, Explorer file grid) funnels through `media_thumbnail_jpeg`,
+# so one cache here covers all of them. Single-process backend (see
+# `__main__.py`, no uvicorn `workers=`), so a process-wide dict is safe.
+_CACHE_MAX_BYTES = 128 * 1024 * 1024
+_cache: "OrderedDict[tuple, bytes]" = OrderedDict()
+_cache_bytes = 0
+_cache_lock = threading.Lock()
+
+
+def _cache_key(path: Path, kind: str, size: int) -> tuple | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (str(path), kind, size, st.st_mtime_ns, st.st_size)
 
 
 class MediaMetadata(NamedTuple):
@@ -39,8 +61,35 @@ def media_thumbnail_jpeg(path: Path, kind: str, size: int) -> bytes | None:
 
     Works for images, GIFs (first frame), and videos (first sampled frame).
     Never upscales. Returns None on any decode/encode failure — callers turn
-    that into a placeholder or 4xx, never a 500.
+    that into a placeholder or 4xx, never a 500. Cached by path+size+mtime so
+    re-opening a review screen or re-scrolling a grid never re-decodes a file
+    it has already thumbnailed.
     """
+    global _cache_bytes
+
+    key = _cache_key(path, kind, size)
+    if key is not None:
+        with _cache_lock:
+            cached = _cache.get(key)
+            if cached is not None:
+                _cache.move_to_end(key)
+                return cached
+
+    data = _generate_thumbnail_jpeg(path, kind, size)
+
+    if key is not None and data is not None:
+        with _cache_lock:
+            _cache[key] = data
+            _cache.move_to_end(key)
+            _cache_bytes += len(data)
+            while _cache_bytes > _CACHE_MAX_BYTES and _cache:
+                _, evicted = _cache.popitem(last=False)
+                _cache_bytes -= len(evicted)
+
+    return data
+
+
+def _generate_thumbnail_jpeg(path: Path, kind: str, size: int) -> bytes | None:
     try:
         frame = _first_frame(path, kind)
         if frame is None:
