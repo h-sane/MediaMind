@@ -17,7 +17,7 @@ python.org first and tick "Add to PATH".)
 ## 2. Run
 
 ```
-python sort_faces.py "C:\Users\husai\Pictures\my_photos"
+python sort_faces.py "C:\Users\<you>\Pictures\my_photos"
 ```
 
 - First run downloads the face model (~300 MB) once, then it's cached.

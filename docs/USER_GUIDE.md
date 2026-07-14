@@ -57,15 +57,16 @@ real File Explorer.
 
 ---
 
-## Prerequisites (one-time setup, already done on your machine)
+## Prerequisites (one-time setup)
 
-| What | Where on your machine |
+| What | Notes |
 |---|---|
-| Python 3.11 + MediaMind backend | `C:\Users\husai\faces-env` |
-| Node.js + npm | Already installed |
-| MediaMind app | `C:\Users\husai\Desktop\CODES\MediaMind` |
+| Python 3.11 + MediaMind backend | A venv with the backend installed — see the README's "Development setup" |
+| Node.js + npm | Node 20+ |
+| MediaMind app | This repo, checked out locally |
 
-You do **not** need to install anything yourself. Everything is already set up.
+See the root [`README.md`](../README.md#development-setup) if you haven't set
+these up yet.
 
 ---
 
@@ -78,7 +79,7 @@ Press **Win + X** → choose **Terminal** (or **PowerShell**).
 ### Step 2 — Navigate to the app folder
 
 ```
-cd C:\Users\husai\Desktop\CODES\MediaMind\app
+cd <path-to-this-repo>\app
 ```
 
 ### Step 3 — Start the app
@@ -270,7 +271,7 @@ problems.
 | Symptom | What to do |
 |---|---|
 | "Starting engine…" banner stays up for >30 seconds | Close app, check for leftover processes (above), re-run `npm run dev` |
-| "Engine offline — retrying…" banner | Check `engine.log` for a traceback. Or run `C:\Users\husai\faces-env\Scripts\python.exe -m mediamind` directly in a terminal to see the raw error |
+| "Engine offline — retrying…" banner | Check `engine.log` for a traceback. Or run `<your-venv>\Scripts\python.exe -m mediamind` directly in a terminal to see the raw error |
 | Thumbnails/photos don't show even though names/counts look right | Make sure you have the latest code and did a full restart, not just a hot-reload (this was a real, now-fixed bug — see below) |
 | A brand-new folder shows "0 items" for a couple seconds then looks like it vanished | The background "does this folder contain media" check hasn't resolved yet — wait ~1-3s |
 | App won't fully close / acts like it's running old code | See "Checking nothing was left running" above |

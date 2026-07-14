@@ -57,97 +57,15 @@ for organizing it.
 | `prototype/HANDOFF.md` | Original prototype handoff (context, decisions, limitations). |
 | `docs/PRD.md` | Product requirements for Version 1. |
 | `docs/IMPLEMENTATION_PLAN.md` | Architecture, stack, milestones for Version 1. |
-| `docs/handoffs/` | Historical session handoffs (sessions 01-08, committed, pre-dates the rule change below). |
-| `.claude/handoffs/` | Current session handoffs (session 09+, gitignored — see Persistent Handoff Rule). |
+| `docs/handoffs/` | Historical session handoffs (sessions 01-08, committed). |
+| `.claude/handoffs/` | Current session handoffs (session 09+, gitignored — internal continuity notes, not published). |
 
-**Dev environment:** the Python venv is `C:\Users\husai\faces-env`
-(Python 3.11, InsightFace/ONNX/OpenCV preinstalled). Use
-`C:\Users\husai\faces-env\Scripts\python.exe` for all backend work.
-Note: this venv runs NumPy 2.x fine with insightface 1.0.1 — the `numpy<2`
-pin mentioned in the V0 handoff is obsolete for this environment.
-
----
-
-## Persistent Handoff Rule
-
-This project is developed across many Claude Code sessions. Context must never
-be lost between sessions.
-
-**Triggers — explicit.** Whenever the user says any of:
-
-- "create a handoff"
-- "update the handoff"
-- "end today's session"
-- "continue next session"
-- "continue where we left off" / "continue where we left off through the handoff"
-
-automatically follow this workflow — do not ask for permission to do so.
-
-**Triggers — proactive (no phrase required).** Also create or update a
-handoff, without being asked, whenever:
-
-- You complete one phase of a larger, explicitly phased plan (e.g. finishing
-  "Phase A" of a multi-phase architectural rebuild), and phases remain.
-- You are about to end a turn on a big architectural change, a multi-file
-  rewrite, or any effort where it is plausible the user will pick this up in
-  a future session rather than the same one.
-
-Judgment call: a small bug fix or a single-file tweak doesn't need one. A
-change that took multiple hours of agent work, touched many files, or is
-explicitly one step of a longer plan does.
-
-**1. Create a detailed handoff document.** State the exact date **and
-   timestamp** (not just the date) at the top of the document, e.g.
-   `Session date: 2026-07-12, 14:32 local`. The filename date alone is not
-   enough — a session can span hours and a future session needs to know how
-   fresh the state is.
-
-**2. Save it in** `.claude/handoffs/` **(gitignored — not committed).**
-   Handoffs are internal continuity notes for the agent, not project
-   documentation; they are not part of the public repo history. (Sessions
-   01-08 predate this rule and remain committed under `docs/handoffs/` as
-   historical record — leave those where they are. All handoffs from session
-   09 onward live in `.claude/handoffs/`.)
-
-**3. File naming format:** `YYYY-MM-DD_session_<number>.md`
-   (e.g., `2026-07-02_session_01.md`). The session number increments across the
-   whole project (continuing the same sequence `docs/handoffs/` started),
-   zero-padded to two digits.
-
-**4. Every handoff MUST contain all of these sections:**
-
-- Summary of work completed
-- Files modified
-- Architectural decisions (with reasoning)
-- New dependencies
-- Commands executed
-- Problems encountered
-- Solutions attempted
-- Pending tasks
-- Next recommended steps
-- Important implementation notes
-- Assumptions made
-- Known bugs
-- Testing status
-
-**5. Every new handoff must link/reference the previous handoffs** (at minimum
-the immediately preceding one, by relative path).
-
-**6. Resuming.** When the user says **"continue from the latest handoff"**,
-**"continue where we left off"**, or similar:
-
-1. List `.claude/handoffs/` (fall back to `docs/handoffs/` only if the former
-   doesn't exist yet) and locate the newest handoff (by filename date, then
-   session number).
-2. Read it completely.
-3. Understand the full state it describes (follow links to earlier handoffs,
-   and to any referenced plan documents, if needed).
-4. Continue working from exactly that state.
-
-Do **not** ask the user which handoff to use unless multiple files genuinely
-tie for "latest".
-
----
+**Dev environment:** a Python 3.10+ venv with InsightFace/ONNX/OpenCV
+installed (see `backend/pyproject.toml` for exact dependencies). Point
+`MAIN_VITE_PYTHON` in `app/.env` (see `app/.env.example`) at that venv's
+`python.exe`/`python` for the Electron app to spawn the backend correctly.
+Note: NumPy 2.x works fine with insightface 1.0.1 — the `numpy<2` pin
+mentioned in the V0 handoff is obsolete for current environments.
 
 ## Safety rules (non-negotiable)
 
@@ -210,7 +128,8 @@ point MediaMind at irreplaceable personal media.
   injectable interface so tests never need the 300 MB model (see
   `prototype/HANDOFF.md` §6). Safety invariants (routing, count checks, dry-run,
   copy-then-delete) are the highest-priority test targets.
-- **Docs:** product docs in `docs/`, session state in `docs/handoffs/`,
+- **Docs:** product docs in `docs/`, session continuity notes in
+  `.claude/handoffs/` (gitignored) or `docs/handoffs/` (historical record),
   user-facing usage in `README.md` files.
 - **Dependency note:** insightface 1.0.1 + onnxruntime 1.27 work with
   NumPy 2.x (verified in the dev venv). The V0 handoff's `numpy<2` pin applied

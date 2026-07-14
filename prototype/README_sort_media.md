@@ -21,13 +21,13 @@ pip install "numpy<2" insightface onnxruntime opencv-python scikit-learn pillow 
 Default **moves** everything (flushes the folder):
 
 ```
-python sort_media.py "C:\Users\husai\Pictures\dump"
+python sort_media.py "C:\Users\<you>\Pictures\dump"
 ```
 
 **Preview first (changes nothing):**
 
 ```
-python sort_media.py "C:\Users\husai\Pictures\dump" --dry-run
+python sort_media.py "C:\Users\<you>\Pictures\dump" --dry-run
 ```
 
 ## Output layout

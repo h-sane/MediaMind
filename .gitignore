@@ -56,10 +56,10 @@ logs/
 # electron-vite build output
 app/out/
 
-# Session handoffs (working notes for continuing across Claude Code sessions —
-# see CLAUDE.md's Persistent Handoff Rule). Not committed: these are internal
-# continuity notes, not project documentation. Sessions 01-08 predate this
-# rule and remain committed under docs/handoffs/ as historical record.
+# Session handoffs (working notes for continuing across Claude Code sessions).
+# Not committed: these are internal continuity notes, not project
+# documentation. Sessions 01-08 predate this convention and remain committed
+# under docs/handoffs/ as historical record.
 .claude/handoffs/
 
 # Screenshots taken by the run-desktop skill's Playwright driver
