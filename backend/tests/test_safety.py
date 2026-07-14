@@ -6,7 +6,10 @@ verification, and per-op fault isolation.
 """
 
 import csv
+import sys
 from pathlib import Path
+
+import pytest
 
 from mediamind.core.safety import (
     ExecutionReport,
@@ -180,6 +183,7 @@ def test_recycle_bin_supported_on_exfat_removable(tmp_path: Path, monkeypatch):
     assert recycle_bin_supported(tmp_path)
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="filesystem_name is a Windows-only check; recycle_bin_supported short-circuits to True on other platforms")
 def test_recycle_bin_unsupported_on_unrecognized_virtual_filesystem(tmp_path: Path, monkeypatch):
     """A WinFsp/Dokan virtual-vault mount reports DRIVE_FIXED (so
     is_network_location misses it) but often a non-standard filesystem name —

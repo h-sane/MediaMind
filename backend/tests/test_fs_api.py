@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import sys
 import time
 from pathlib import Path
 
@@ -383,7 +384,12 @@ def test_fs_list_includes_created_and_attributes(client: TestClient, tmp_path: P
     body = res.json()
 
     file_entry = next(f for f in body["files"] if f["name"] == "photo.jpg")
-    assert file_entry["created"] is not None
+    if sys.platform == "win32" or sys.platform == "darwin":
+        assert file_entry["created"] is not None
+    else:
+        # Linux has no birth-time syscall exposed via os.stat(); see
+        # core/file_facts.py::_created_time.
+        assert file_entry["created"] is None
     assert file_entry["accessed"] is not None
     assert file_entry["read_only"] is False
     assert file_entry["hidden"] is False

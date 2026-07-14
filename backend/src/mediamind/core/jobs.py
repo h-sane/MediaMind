@@ -187,17 +187,22 @@ class JobManager:
         try:
             result = runner(ctx)
             if cancel_event.is_set():
-                job.state = "cancelled"
                 job.result = None
+                job.finished_at = time.time()
+                job.state = "cancelled"
             else:
-                job.state = "succeeded"
                 job.result = result
+                job.finished_at = time.time()
+                job.state = "succeeded"
         except Exception as exc:
-            job.state = "failed"
             job.error = str(exc)
             logger.exception("Job %s (type=%s, library=%s) failed", job.id, job.type, job.library_id)
-        finally:
             job.finished_at = time.time()
+            job.state = "failed"
+        finally:
+            # `state` is written last on every path above so that any thread
+            # observing a terminal state (e.g. an API request polling job
+            # status) never sees it before result/error/finished_at are set.
             try:
                 loop.call_soon_threadsafe(self._emit, job)
             except RuntimeError:
