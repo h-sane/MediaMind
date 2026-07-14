@@ -405,10 +405,17 @@ def test_fs_list_includes_created_and_attributes(client: TestClient, tmp_path: P
 
     folder_entry = next(f for f in body["folders"] if f["name"] == "sub")
     assert folder_entry["mtime"] > 0  # folders never had this at all before Phase G
-    assert folder_entry["created"] is not None
     assert folder_entry["accessed"] is not None
-    assert folder_entry["read_only"] is False
-    assert folder_entry["hidden"] is False
+    if sys.platform in ("win32", "darwin"):
+        assert folder_entry["created"] is not None
+    else:
+        assert folder_entry["created"] is None
+    if sys.platform == "win32":
+        assert folder_entry["read_only"] is False
+        assert folder_entry["hidden"] is False
+    else:
+        assert folder_entry["read_only"] is None
+        assert folder_entry["hidden"] is None
 
 
 def test_fs_list_keeps_empty_folder_visible_after_resolution(
