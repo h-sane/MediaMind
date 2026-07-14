@@ -9,8 +9,11 @@ download), and helps you organize everything safely: every automatic decision
 waits for your review, every file operation is audited, and nothing is ever
 deleted without your explicit confirmation.
 
-> **Status: Version 1 in active development.** The validated Version 0
-> prototype lives in [`prototype/`](prototype/) and is still usable as a CLI.
+> **Status: v0.1 — early release.** The primary UI is a Windows Explorer
+> clone with Duplicate Detection and Facial Recognition (Beta) built in as
+> tools. The validated Version 0 prototype lives in
+> [`prototype/`](prototype/) and is still usable as a CLI. Contributions
+> welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Why MediaMind?
 
@@ -27,8 +30,8 @@ deleted without your explicit confirmation.
 ## Version 1 features
 
 1. **Duplicate detection** — exact + near duplicates, resolved in a few clicks.
-2. **Face recognition** — zero-training person clustering across photos,
-   GIFs, *and videos*, with configurable model providers.
+2. **Face recognition (Beta)** — zero-training person clustering across
+   photos, GIFs, *and videos*, with configurable model providers.
 3. **Review before saving** — media with several people gets one final home
    you choose; no duplicate copies.
 4. **Person naming** — `Person_001` → `John`, persisted as a known identity.
@@ -44,6 +47,7 @@ deleted without your explicit confirmation.
 | [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) | Architecture, stack, milestones |
 | [`CLAUDE.md`](CLAUDE.md) | Project rules & session workflow |
 | [`prototype/HANDOFF.md`](prototype/HANDOFF.md) | Version 0 prototype context |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to report bugs, suggest features, or submit code |
 
 ## Repository layout
 

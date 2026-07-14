@@ -4,9 +4,9 @@ import { isRealFolder, useExplorerStore } from '../../stores/explorer'
 import type { ToolMode } from '../../stores/explorer'
 import { useJobsStore, selectJobForLibrary } from '../../stores/jobs'
 
-const TOOLS: { mode: Exclude<ToolMode, 'none'>; label: string; icon: React.ComponentType<{ className?: string }>; jobType: 'dedupe' | 'faces' }[] = [
+const TOOLS: { mode: Exclude<ToolMode, 'none'>; label: string; icon: React.ComponentType<{ className?: string }>; jobType: 'dedupe' | 'faces'; beta?: boolean }[] = [
   { mode: 'dedupe', label: 'Duplicate Detection', icon: CopyCheck, jobType: 'dedupe' },
-  { mode: 'faces', label: 'Facial Recognition', icon: ScanFace, jobType: 'faces' }
+  { mode: 'faces', label: 'Facial Recognition', icon: ScanFace, jobType: 'faces', beta: true }
 ]
 
 /**
@@ -29,7 +29,7 @@ export function ToolRail(): React.JSX.Element {
   return (
     <div className="flex shrink-0 flex-col border-t border-zinc-200 bg-zinc-50 py-1">
       <p className="px-3 pb-1 pt-1 text-[11px] font-medium uppercase tracking-wide text-zinc-400">Tools</p>
-      {TOOLS.map(({ mode, label, icon: Icon, jobType }) => {
+      {TOOLS.map(({ mode, label, icon: Icon, jobType, beta }) => {
         const isActive = toolMode === mode
         const job = library ? selectJobForLibrary(jobs, library.id, jobType) : undefined
         const isRunning = !!job
@@ -47,6 +47,15 @@ export function ToolRail(): React.JSX.Element {
           >
             <Icon className={`h-4 w-4 shrink-0 ${isActive ? 'text-blue-600' : 'text-zinc-400'}`} />
             <span className="flex-1 truncate">{label}</span>
+            {beta && (
+              <span
+                className={`shrink-0 rounded px-1 py-px text-[10px] font-medium uppercase tracking-wide ${
+                  isActive ? 'bg-blue-100 text-blue-600' : 'bg-zinc-200 text-zinc-500'
+                }`}
+              >
+                Beta
+              </span>
+            )}
             {isRunning && (
               <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-blue-500" title="Running…" />
             )}

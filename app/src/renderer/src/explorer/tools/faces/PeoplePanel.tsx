@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { usePersons, useRenamePerson, useMergePersons } from '../../../api/hooks'
 import { selectJobForLibrary, useJobsStore } from '../../../stores/jobs'
+import { useZoomScale } from '../../../hooks/useZoomScale'
 import { ScanProgress } from '../../../components/ScanProgress'
 import { FaceThumbnail } from '../../../components/FaceThumbnail'
 import type { Person } from '../../../api/client'
@@ -10,6 +11,7 @@ function PersonCard({
   libraryId,
   selected,
   selectMode,
+  zoom,
   onToggleSelect,
   onOpen
 }: {
@@ -17,6 +19,7 @@ function PersonCard({
   libraryId: string
   selected: boolean
   selectMode: boolean
+  zoom: number
   onToggleSelect: (id: number) => void
   onOpen: (id: number) => void
 }): React.JSX.Element {
@@ -69,11 +72,14 @@ function PersonCard({
           <FaceThumbnail
             libraryId={libraryId}
             faceId={person.sample_face_ids[0]}
-            size={72}
+            size={Math.round(72 * zoom)}
             className="ring-2 ring-white ring-offset-1"
           />
         ) : (
-          <div className="flex h-[72px] w-[72px] items-center justify-center rounded-full bg-zinc-100">
+          <div
+            className="flex items-center justify-center rounded-full bg-zinc-100"
+            style={{ width: 72 * zoom, height: 72 * zoom }}
+          >
             <svg className="h-8 w-8 text-zinc-300" fill="currentColor" viewBox="0 0 24 24">
               <path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z" />
             </svg>
@@ -131,6 +137,8 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
 
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<number[]>([])
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [zoom] = useZoomScale(scrollRef, { min: 0.5, max: 2 })
 
   const toggleSelect = (id: number) => {
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : prev.length < 2 ? [...prev, id] : prev))
@@ -149,10 +157,15 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
   const isScanning = !!activeJob
 
   return (
-    <div className="h-full overflow-y-auto p-6 pb-24">
+    <div ref={scrollRef} className="h-full overflow-y-auto p-6 pb-24">
       <div className="mb-6 flex items-end justify-between">
         <div>
-          <h2 className="text-lg font-semibold tracking-tight">People</h2>
+          <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
+            People
+            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-700">
+              Beta
+            </span>
+          </h2>
           {personsData && (
             <p className="mt-1 text-sm text-zinc-500">
               {persons.length} {persons.length === 1 ? 'person' : 'people'}
@@ -201,7 +214,10 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
       )}
 
       {persons.length > 0 && (
-        <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5">
+        <div
+          className="grid gap-3"
+          style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${Math.round(130 * zoom)}px, 1fr))` }}
+        >
           {persons.map((p: Person) => (
             <PersonCard
               key={p.id}
@@ -209,6 +225,7 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
               libraryId={libraryId}
               selected={selected.includes(p.id)}
               selectMode={selectMode}
+              zoom={zoom}
               onToggleSelect={toggleSelect}
               onOpen={onOpenPerson}
             />
