@@ -384,15 +384,24 @@ def test_fs_list_includes_created_and_attributes(client: TestClient, tmp_path: P
     body = res.json()
 
     file_entry = next(f for f in body["files"] if f["name"] == "photo.jpg")
-    if sys.platform == "win32" or sys.platform == "darwin":
+    assert file_entry["accessed"] is not None
+
+    # created: Windows exposes st_ctime as birth time; macOS/BSD expose a
+    # real st_birthtime; Linux has no birth-time syscall here. See
+    # core/file_facts.py::_created_time.
+    if sys.platform in ("win32", "darwin"):
         assert file_entry["created"] is not None
     else:
-        # Linux has no birth-time syscall exposed via os.stat(); see
-        # core/file_facts.py::_created_time.
         assert file_entry["created"] is None
-    assert file_entry["accessed"] is not None
-    assert file_entry["read_only"] is False
-    assert file_entry["hidden"] is False
+
+    # read_only/hidden come from Windows file attribute bits only; see
+    # core/file_facts.py::_windows_attributes.
+    if sys.platform == "win32":
+        assert file_entry["read_only"] is False
+        assert file_entry["hidden"] is False
+    else:
+        assert file_entry["read_only"] is None
+        assert file_entry["hidden"] is None
 
     folder_entry = next(f for f in body["folders"] if f["name"] == "sub")
     assert folder_entry["mtime"] > 0  # folders never had this at all before Phase G
