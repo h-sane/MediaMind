@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from mediamind.core.organize_plan import PlannedMove, build_organize_plan, safe_
 from mediamind.store.db import open_db
 from mediamind.store.persons import FileFaces, persist_face_scan, upsert_file
 from mediamind.store.embeddings import CachedFace
+from mediamind.store import bindings as bindings_store
 
 PROVIDER = "fake-color"
 
@@ -249,3 +251,99 @@ def test_plan_custom_target_rel(conn):
 
     moves = build_organize_plan(conn, PROVIDER, target_rel="Sorted")
     assert moves[0].dest_folder_rel.startswith("Sorted/")
+
+
+# ---------------------------------------------------------------------------
+# Phase B: accepted folder bindings freeze the organize sweep
+# ---------------------------------------------------------------------------
+
+def test_plan_excludes_files_in_bound_folder(conn):
+    fid_a = upsert_file(conn, "Family/Alice/one.jpg", "photo", 100, 0.0, "h1", True)
+    fid_b = upsert_file(conn, "Family/Alice/two.jpg", "photo", 100, 0.0, "h2", True)
+    conn.commit()
+    ff = [
+        FileFaces(file_id=fid_a, content_hash="h1", decoded_ok=True, faces=[_face(1, 0, 0)]),
+        FileFaces(file_id=fid_b, content_hash="h2", decoded_ok=True, faces=[_face(1, 0, 0)]),
+    ]
+    _do_scan(conn, ff, [0, 0])
+    pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
+
+    now = time.time()
+    conn.execute(
+        "INSERT INTO folder_bindings (folder_rel, kind, provider_id, created_at) VALUES (?, 'person', ?, ?)",
+        ("Family/Alice", PROVIDER, now),
+    )
+    binding_id = conn.execute(
+        "SELECT id FROM folder_bindings WHERE folder_rel = 'Family/Alice'"
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO folder_binding_members (binding_id, person_id) VALUES (?, ?)", (binding_id, pid)
+    )
+    conn.commit()
+
+    moves = build_organize_plan(conn, PROVIDER)
+    assert moves == []
+
+
+def test_plan_includes_accepted_outlier_in_bound_folder(conn):
+    """A file explicitly approved to move (accepted_outlier_file_ids) still
+    routes normally even though the rest of its folder is frozen."""
+    fid_a = upsert_file(conn, "Family/Alice/one.jpg", "photo", 100, 0.0, "h1", True)
+    fid_outlier = upsert_file(conn, "Family/Alice/stray.jpg", "photo", 100, 0.0, "h2", True)
+    conn.commit()
+    ff = [
+        FileFaces(file_id=fid_a, content_hash="h1", decoded_ok=True, faces=[_face(1, 0, 0)]),
+        FileFaces(file_id=fid_outlier, content_hash="h2", decoded_ok=True, faces=[_face(0, 1, 0)]),
+    ]
+    _do_scan(conn, ff, [0, 1])
+    persons = conn.execute(
+        "SELECT id FROM persons WHERE provider_id = ? ORDER BY id", (PROVIDER,)
+    ).fetchall()
+    pid_alice, pid_other = persons[0]["id"], persons[1]["id"]
+    conn.execute("UPDATE persons SET name = 'Other' WHERE id = ?", (pid_other,))
+    conn.commit()
+
+    now = time.time()
+    conn.execute(
+        """
+        INSERT INTO folder_bindings (folder_rel, kind, provider_id, accepted_outlier_file_ids, created_at)
+        VALUES (?, 'person', ?, ?, ?)
+        """,
+        ("Family/Alice", PROVIDER, json.dumps([fid_outlier]), now),
+    )
+    binding_id = conn.execute(
+        "SELECT id FROM folder_bindings WHERE folder_rel = 'Family/Alice'"
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO folder_binding_members (binding_id, person_id) VALUES (?, ?)",
+        (binding_id, pid_alice),
+    )
+    conn.commit()
+
+    moves = build_organize_plan(conn, PROVIDER)
+    assert len(moves) == 1
+    assert moves[0].source_rel == "Family/Alice/stray.jpg"
+    assert moves[0].person_name == "Other"
+
+
+def test_plan_bound_folder_freezes_undecoded_files_too(conn):
+    """A frozen folder must also hold back its decode-failure files —
+    otherwise a bound folder could still churn out a partial _unsorted move."""
+    fid = upsert_file(conn, "Family/Alice/bad.jpg", "photo", 100, 0.0, "h_bad", None)
+    conn.commit()
+    upsert_file(conn, "Family/Alice/bad.jpg", "photo", 100, 0.0, "h_bad", False)
+    conn.commit()
+
+    now = time.time()
+    conn.execute(
+        "INSERT INTO folder_bindings (folder_rel, kind, provider_id, created_at) VALUES (?, 'person', ?, ?)",
+        ("Family/Alice", PROVIDER, now),
+    )
+    conn.execute(
+        "INSERT INTO scans (id, type, state, params, started_at, finished_at, summary) VALUES (?, 'faces', 'succeeded', ?, ?, ?, ?)",
+        ("s-dummy", '{"provider_id": "fake-color"}', time.time() - 1, time.time(), '{}'),
+    )
+    conn.commit()
+
+    moves = build_organize_plan(conn, PROVIDER)
+    assert moves == []

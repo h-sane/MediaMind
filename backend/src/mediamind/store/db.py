@@ -11,7 +11,7 @@ import sqlite3
 from pathlib import Path
 from typing import Callable
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _V1_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -166,11 +166,52 @@ CREATE TABLE IF NOT EXISTS dedupe_dismissals (
     conn.commit()
 
 
-# v2 is a string; v3/v4 are callables (ALTER TABLE requires special handling).
+def _v5_migration(conn: sqlite3.Connection) -> None:
+    """Schema v5: folder-binding detection (Phase B — respect pre-existing
+    person/group subfolders instead of bulldozing them into People/)."""
+    conn.executescript("""
+CREATE TABLE IF NOT EXISTS folder_bindings (
+    id INTEGER PRIMARY KEY,
+    folder_rel TEXT NOT NULL UNIQUE,    -- bound folder, relative to library root (posix)
+    kind TEXT NOT NULL,                 -- 'person' | 'group'
+    provider_id TEXT NOT NULL,
+    accepted_outlier_file_ids TEXT NOT NULL DEFAULT '[]',  -- JSON array of files.id explicitly approved to move
+    created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS folder_binding_members (
+    id INTEGER PRIMARY KEY,
+    binding_id INTEGER NOT NULL REFERENCES folder_bindings(id) ON DELETE CASCADE,
+    person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE
+);
+-- One-folder-per-person: a person can be a member of at most one binding.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_binding_members_person ON folder_binding_members(person_id);
+CREATE INDEX IF NOT EXISTS idx_binding_members_binding ON folder_binding_members(binding_id);
+
+CREATE TABLE IF NOT EXISTS binding_suggestions (
+    id INTEGER PRIMARY KEY,
+    folder_rel TEXT NOT NULL,
+    kind TEXT NOT NULL,                 -- 'person' | 'group'
+    provider_id TEXT NOT NULL,
+    file_count INTEGER NOT NULL,
+    coverage REAL NOT NULL,
+    person_ids TEXT NOT NULL,           -- JSON array of person ids, ranked
+    outlier_file_ids TEXT NOT NULL DEFAULT '[]',  -- JSON array of files.id
+    status TEXT NOT NULL DEFAULT 'pending',       -- pending | accepted | dismissed
+    created_at REAL NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_binding_suggestions_folder
+    ON binding_suggestions(folder_rel, provider_id);
+""")
+    conn.commit()
+
+
+# v2 is a string; v3+ are callables (ALTER TABLE requires special handling).
 _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (2, _V2_ADDITIONS),
     (3, _v3_migration),
     (4, _v4_migration),
+    (5, _v5_migration),
 ]
 
 

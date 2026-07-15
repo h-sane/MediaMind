@@ -12,10 +12,17 @@ Routing rules (mirrors V0 invariant — every file routes somewhere):
   - File that failed to decode             → People/_unsorted/
 
 Files with zero face records are NOT included in the plan; they stay in place.
+
+Phase B exception: a file whose current folder is an accepted folder-binding
+(`folder_bindings` — pre-existing person/group organization the user chose to
+respect) is excluded from the plan entirely and left in place, unless its
+file id is in that binding's `accepted_outlier_file_ids` (the user explicitly
+approved moving it despite the folder being frozen).
 """
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -63,6 +70,16 @@ def build_organize_plan(
     for rc in conn.execute("SELECT file_id, person_id FROM route_choices"):
         route_choices[int(rc["file_id"])] = int(rc["person_id"])
 
+    # Accepted folder bindings (Phase B): folder_rel -> set of file ids explicitly
+    # approved to move despite the folder being frozen. Any other file whose
+    # parent is one of these folders is excluded from the plan below.
+    frozen_folders: dict[str, set[int]] = {}
+    for b in conn.execute(
+        "SELECT folder_rel, accepted_outlier_file_ids FROM folder_bindings WHERE provider_id = ?",
+        (provider_id,),
+    ):
+        frozen_folders[b["folder_rel"]] = set(json.loads(b["accepted_outlier_file_ids"] or "[]"))
+
     # Aggregate face data per file
     file_data: dict[int, dict] = {}
     for row in conn.execute(
@@ -89,6 +106,11 @@ def build_organize_plan(
         source_rel: str = fd["path"]
         person_ids: set[int] = fd["person_ids"]
         decoded_ok: bool = fd["decoded_ok"]
+
+        parent_rel = PurePosixPath(source_rel).parent.as_posix()
+        accepted_outliers = frozen_folders.get(parent_rel)
+        if accepted_outliers is not None and fid not in accepted_outliers:
+            continue  # folder is a respected pre-existing binding — leave in place
 
         if not decoded_ok:
             dest_folder = "_unsorted"
@@ -153,6 +175,12 @@ def build_organize_plan(
         if fid in file_data:
             continue  # already planned via the faces join above
         source_rel = row["path"]
+
+        parent_rel = PurePosixPath(source_rel).parent.as_posix()
+        accepted_outliers = frozen_folders.get(parent_rel)
+        if accepted_outliers is not None and fid not in accepted_outliers:
+            continue  # folder is a respected pre-existing binding — leave in place
+
         if PurePosixPath(source_rel).parent.as_posix() == unsorted_dest:
             continue
         plans.append(

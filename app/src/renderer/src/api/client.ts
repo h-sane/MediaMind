@@ -279,6 +279,7 @@ export interface Provider {
   id: string
   name: string
   description: string
+  guidance: string
   license: License
   installed: boolean
   size_bytes: number
@@ -375,6 +376,46 @@ export interface PendingMatch {
   person_id: number
   person_name: string
   confidence: number
+}
+
+// ---------------------------------------------------------------------------
+// Folder binding types (Phase B — respect pre-existing person/group folders)
+// ---------------------------------------------------------------------------
+
+export interface BindingSuggestion {
+  id: number
+  folder_rel: string
+  kind: 'person' | 'group'
+  file_count: number
+  coverage: number
+  person_ids: number[]
+  person_names: string[]
+  outlier_file_ids: number[]
+  status: 'pending' | 'accepted' | 'dismissed'
+  created_at: number
+}
+
+export interface RefreshSuggestionsResult {
+  suggested: number
+  removed_stale: number
+}
+
+export interface OutlierFile {
+  file_id: number
+  path: string
+  kind: string
+  accepted: boolean
+}
+
+export interface FolderBinding {
+  id: number
+  folder_rel: string
+  kind: 'person' | 'group'
+  person_ids: number[]
+  person_names: string[]
+  accepted_outlier_file_ids: number[]
+  outliers: OutlierFile[]
+  created_at: number
 }
 
 // ---------------------------------------------------------------------------
@@ -641,5 +682,42 @@ export const api = {
       if (!res.ok) throw new Error('Face thumbnail unavailable')
       return URL.createObjectURL(await res.blob())
     }
+  },
+
+  bindings: {
+    refresh: (libraryId: string) =>
+      request<RefreshSuggestionsResult>('POST', `/v1/libraries/${libraryId}/bindings/refresh`),
+
+    suggestions: (libraryId: string, status: 'pending' | 'accepted' | 'dismissed' = 'pending') =>
+      request<{ provider_id: string; suggestions: BindingSuggestion[] }>(
+        'GET',
+        `/v1/libraries/${libraryId}/bindings/suggestions?status=${status}`
+      ),
+
+    accept: (libraryId: string, suggestionId: number) =>
+      request<FolderBinding>(
+        'POST',
+        `/v1/libraries/${libraryId}/bindings/suggestions/${suggestionId}/accept`
+      ),
+
+    dismiss: (libraryId: string, suggestionId: number) =>
+      request<{ ok: boolean }>(
+        'POST',
+        `/v1/libraries/${libraryId}/bindings/suggestions/${suggestionId}/dismiss`
+      ),
+
+    list: (libraryId: string) =>
+      request<{ provider_id: string; bindings: FolderBinding[] }>(
+        'GET',
+        `/v1/libraries/${libraryId}/bindings`
+      ),
+
+    release: (libraryId: string, bindingId: number) =>
+      request<{ ok: boolean }>('POST', `/v1/libraries/${libraryId}/bindings/${bindingId}/release`),
+
+    setOutliers: (libraryId: string, bindingId: number, fileIds: number[]) =>
+      request<FolderBinding>('POST', `/v1/libraries/${libraryId}/bindings/${bindingId}/outliers`, {
+        file_ids: fileIds
+      })
   }
 }

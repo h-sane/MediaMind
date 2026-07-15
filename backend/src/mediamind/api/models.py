@@ -273,6 +273,7 @@ class ProviderOut(BaseModel):
     id: str
     name: str
     description: str
+    guidance: str
     license: LicenseOut
     installed: bool
     size_bytes: int
@@ -405,3 +406,57 @@ class RouteChoiceIn(BaseModel):
 
 class RouteChoicesIn(BaseModel):
     choices: list[RouteChoiceIn]
+
+
+# ---------------------------------------------------------------------------
+# Folder bindings (Phase B — respect pre-existing person/group folders)
+# ---------------------------------------------------------------------------
+
+class BindingSuggestionOut(BaseModel):
+    id: int
+    folder_rel: str
+    kind: str  # "person" | "group"
+    file_count: int
+    coverage: float
+    person_ids: list[int]
+    person_names: list[str]
+    outlier_file_ids: list[int]
+    status: str
+    created_at: float
+
+
+class BindingSuggestionsOut(BaseModel):
+    provider_id: str
+    suggestions: list[BindingSuggestionOut]
+
+
+class RefreshSuggestionsOut(BaseModel):
+    suggested: int
+    removed_stale: int
+
+
+class OutlierFileOut(BaseModel):
+    file_id: int
+    path: str
+    kind: str
+    accepted: bool
+
+
+class BindingOut(BaseModel):
+    id: int
+    folder_rel: str
+    kind: str
+    person_ids: list[int]
+    person_names: list[str]
+    accepted_outlier_file_ids: list[int]
+    outliers: list[OutlierFileOut]
+    created_at: float
+
+
+class BindingsOut(BaseModel):
+    provider_id: str
+    bindings: list[BindingOut]
+
+
+class AcceptOutliersIn(BaseModel):
+    file_ids: list[int]

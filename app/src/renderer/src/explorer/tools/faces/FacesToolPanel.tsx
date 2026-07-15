@@ -1,101 +1,75 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { ChevronDown } from 'lucide-react'
-import { usePersons, useProviders, useStartFaceScan } from '../../../api/hooks'
+import { useEffect, useRef, useState } from 'react'
+import { usePersons } from '../../../api/hooks'
 import { selectJobForLibrary, useJobsStore } from '../../../stores/jobs'
+import { ModelSelectPanel } from './ModelSelectPanel'
 import { OrganizePanel } from './OrganizePanel'
 import { PeoplePanel } from './PeoplePanel'
 import { PersonDetailPanel } from './PersonDetailPanel'
-import { ProviderGate } from './ProviderGate'
 
 interface Props {
   libraryId: string
   folderPath: string
 }
 
-type FacesSub = { name: 'people' } | { name: 'person'; personId: number } | { name: 'organize' }
+type FacesSub =
+  | { name: 'setup' }
+  | { name: 'people' }
+  | { name: 'person'; personId: number }
+  | { name: 'organize' }
 
 /**
- * Faces tool root — gates on having a model installed (`ProviderGate`), then
- * hosts the People → Person detail → Organize sub-navigation locally (this
- * replaces the orphaned `stores/app.ts` view machine the original screens
- * used). Round-1 scope omits Pending/Multi-person review (see handoff).
+ * Faces tool root — hosts the Setup (model choice) → People → Person detail
+ * → Organize sub-navigation locally (this replaces the orphaned
+ * `stores/app.ts` view machine the original screens used). Round-1 scope
+ * omits Pending/Multi-person review (see handoff).
+ *
+ * A scan never starts on its own: opening the tool on a folder with no prior
+ * face scan lands on Setup, and Rescan always returns to Setup rather than
+ * re-running silently — a folder's demographic mix can call for a different
+ * model each time, so the choice isn't a one-time global default.
  */
 export function FacesToolPanel({ libraryId, folderPath: _folderPath }: Props): React.JSX.Element {
-  const { data: providers, isLoading: providersLoading } = useProviders()
-  const installed = useMemo(() => (providers ?? []).filter((p) => p.installed), [providers])
-
-  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null)
-  useEffect(() => {
-    if (installed.length > 0 && (!selectedProviderId || !installed.some((p) => p.id === selectedProviderId))) {
-      setSelectedProviderId(installed[0].id)
-    }
-  }, [installed, selectedProviderId])
-
-  const [sub, setSub] = useState<FacesSub>({ name: 'people' })
+  const [sub, setSub] = useState<FacesSub>({ name: 'setup' })
 
   const jobs = useJobsStore((s) => s.jobs)
   const activeJob = selectJobForLibrary(jobs, libraryId, 'faces')
   const { data: personsData, isLoading: personsLoading } = usePersons(libraryId)
-  const startFaceScan = useStartFaceScan(libraryId)
-  const autoScanTriggered = useRef<string | null>(null)
+  const initialSubResolved = useRef<string | null>(null)
 
-  // First-run: once a model is installed, opening the tool on a folder with
-  // no prior face scan starts one automatically — same convention as dedupe.
+  // Land on People if a scan already exists for this folder, Setup otherwise
+  // — once per folder, so explicit navigation (Rescan, back) isn't overridden.
   useEffect(() => {
-    if (installed.length === 0 || personsLoading || activeJob) return
-    // personsData only resolves once a scan has already run (404 until then,
-    // per usePersons's retry:false) — its presence at all means "don't rescan".
-    if (personsData) return
-    if (autoScanTriggered.current === libraryId) return
-    autoScanTriggered.current = libraryId
-    startFaceScan.mutate(selectedProviderId ?? undefined)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [libraryId, installed.length, personsLoading, personsData, activeJob])
+    if (personsLoading || initialSubResolved.current === libraryId) return
+    initialSubResolved.current = libraryId
+    setSub(personsData ? { name: 'people' } : { name: 'setup' })
+  }, [libraryId, personsLoading, personsData])
 
-  if (providersLoading) {
-    return <div className="p-6 text-sm text-zinc-400">Loading…</div>
-  }
-
-  if (installed.length === 0) {
-    return <ProviderGate />
-  }
-
-  const selectedProvider = installed.find((p) => p.id === selectedProviderId) ?? installed[0]
+  const goToSetup = () => setSub({ name: 'setup' })
+  const goToPeople = () => setSub({ name: 'people' })
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-end border-b border-zinc-100 px-6 py-2">
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger asChild>
-            <button className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-100">
-              Model: {selectedProvider?.name ?? '—'}
-              <ChevronDown className="h-3.5 w-3.5" />
-            </button>
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              align="end"
-              sideOffset={4}
-              className="z-50 w-56 rounded-lg border border-zinc-200 bg-white py-1 text-sm shadow-lg"
-            >
-              {installed.map((p) => (
-                <DropdownMenu.Item
-                  key={p.id}
-                  onSelect={() => setSelectedProviderId(p.id)}
-                  className={`cursor-pointer px-3 py-1.5 outline-none hover:bg-zinc-100 ${
-                    p.id === selectedProvider?.id ? 'font-medium text-zinc-900' : 'text-zinc-600'
-                  }`}
-                >
-                  {p.name}
-                </DropdownMenu.Item>
-              ))}
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
-      </div>
+      {sub.name !== 'setup' && (
+        <div className="flex items-center justify-between border-b border-zinc-100 px-6 py-2">
+          <span className="text-xs text-zinc-500">Model: {personsData?.provider_id ?? '—'}</span>
+          <button
+            onClick={goToSetup}
+            disabled={!!activeJob}
+            className="rounded-md px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-100 disabled:opacity-40"
+          >
+            Rescan…
+          </button>
+        </div>
+      )}
 
       <div className="min-h-0 flex-1">
+        {sub.name === 'setup' && (
+          <ModelSelectPanel
+            libraryId={libraryId}
+            defaultProviderId={personsData?.provider_id}
+            onScanStarted={goToPeople}
+          />
+        )}
         {sub.name === 'people' && (
           <PeoplePanel
             libraryId={libraryId}
@@ -104,9 +78,9 @@ export function FacesToolPanel({ libraryId, folderPath: _folderPath }: Props): R
           />
         )}
         {sub.name === 'person' && (
-          <PersonDetailPanel libraryId={libraryId} personId={sub.personId} onBack={() => setSub({ name: 'people' })} />
+          <PersonDetailPanel libraryId={libraryId} personId={sub.personId} onBack={goToPeople} />
         )}
-        {sub.name === 'organize' && <OrganizePanel libraryId={libraryId} onBack={() => setSub({ name: 'people' })} />}
+        {sub.name === 'organize' && <OrganizePanel libraryId={libraryId} onBack={goToPeople} />}
       </div>
     </div>
   )

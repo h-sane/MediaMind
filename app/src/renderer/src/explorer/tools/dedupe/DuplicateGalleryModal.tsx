@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Check, ChevronLeft, ChevronRight, Folder, X } from 'lucide-react'
+import { Check, ChevronLeft, ChevronRight, Folder } from 'lucide-react'
 import { useFileRawUrl } from '../../../api/hooks'
 import { useZoomScale } from '../../../hooks/useZoomScale'
 import { MediaViewer } from '../../../components/MediaViewer'
 import { Thumbnail } from '../../../components/Thumbnail'
 import { FileThumbnail } from '../../../components/FileThumbnail'
+import { FullscreenModalShell } from '../shared/FullscreenModalShell'
 import { formatBytes, formatDate, subfolderOf } from './format'
 import type { DuplicateFile, DuplicateGroup } from '../../../api/client'
 
@@ -260,10 +261,10 @@ export function DuplicateGalleryModal({
   useEffect(() => {
     // The single-file viewer owns keyboard input (Escape/arrows) while it's
     // open, and stacks visually above this modal — this modal's own
-    // shortcuts must stand down so Escape closes just the single view first.
+    // shortcuts must stand down so Escape closes just the single view first
+    // (Escape itself is handled by FullscreenModalShell via suppressEscape).
     if (singleViewFile) return
     function onKey(e: KeyboardEvent): void {
-      if (e.key === 'Escape') onClose()
       if (e.key === 'ArrowRight') goTo(activeIndex + 1)
       if (e.key === 'ArrowLeft') goTo(activeIndex - 1)
     }
@@ -277,45 +278,49 @@ export function DuplicateGalleryModal({
   const cardMinWidth = Math.round(260 * zoom)
 
   return (
-    <div className="fixed inset-0 z-[70] flex bg-zinc-950">
-      <aside className="flex w-64 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900">
-        <div className="border-b border-zinc-800 px-4 py-3">
-          <h2 className="text-sm font-semibold text-white">Duplicates ({groups.length})</h2>
-        </div>
-        <div className="flex-1 overflow-y-auto p-2">
-          {groups.map((g, i) => {
-            const resolved = g.files.every((f) => f.resolution !== null)
-            const active = g.id === activeGroupId
-            return (
-              <button
-                key={g.id}
-                type="button"
-                onClick={() => setActiveGroupId(g.id)}
-                className={`mb-1 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition ${
-                  active ? 'bg-zinc-700' : 'hover:bg-zinc-800'
-                }`}
-              >
-                <div className="h-10 w-10 shrink-0 overflow-hidden rounded-md bg-zinc-800">
-                  <Thumbnail libraryId={libraryId} memberId={g.files[0].id} size={64} className="h-full w-full" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs font-medium text-zinc-200">
-                    Group {i + 1} · {g.files.length} files
-                  </p>
-                  <p className="truncate text-[10px] text-zinc-500">
-                    {g.match === 'exact' ? 'Exact copy' : 'Visually similar'}
-                  </p>
-                </div>
-                {resolved && <Check className="h-3.5 w-3.5 shrink-0 text-emerald-400" />}
-              </button>
-            )
-          })}
-        </div>
-      </aside>
-
-      <div className="flex flex-1 flex-col">
-        <div className="flex items-center justify-between border-b border-zinc-800 px-6 py-3">
-          <div className="flex items-center gap-3">
+    <>
+      <FullscreenModalShell
+        onClose={onClose}
+        suppressEscape={!!singleViewFile}
+        bodyRef={galleryScrollRef}
+        sidebar={
+          <aside className="flex w-64 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900">
+            <div className="border-b border-zinc-800 px-4 py-3">
+              <h2 className="text-sm font-semibold text-white">Duplicates ({groups.length})</h2>
+            </div>
+            <div className="flex-1 overflow-y-auto p-2">
+              {groups.map((g, i) => {
+                const resolved = g.files.every((f) => f.resolution !== null)
+                const active = g.id === activeGroupId
+                return (
+                  <button
+                    key={g.id}
+                    type="button"
+                    onClick={() => setActiveGroupId(g.id)}
+                    className={`mb-1 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition ${
+                      active ? 'bg-zinc-700' : 'hover:bg-zinc-800'
+                    }`}
+                  >
+                    <div className="h-10 w-10 shrink-0 overflow-hidden rounded-md bg-zinc-800">
+                      <Thumbnail libraryId={libraryId} memberId={g.files[0].id} size={64} className="h-full w-full" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-medium text-zinc-200">
+                        Group {i + 1} · {g.files.length} files
+                      </p>
+                      <p className="truncate text-[10px] text-zinc-500">
+                        {g.match === 'exact' ? 'Exact copy' : 'Visually similar'}
+                      </p>
+                    </div>
+                    {resolved && <Check className="h-3.5 w-3.5 shrink-0 text-emerald-400" />}
+                  </button>
+                )
+              })}
+            </div>
+          </aside>
+        }
+        headerLeft={
+          <>
             <button
               type="button"
               onClick={() => goTo(activeIndex - 1)}
@@ -335,17 +340,10 @@ export function DuplicateGalleryModal({
             >
               <ChevronRight className="h-5 w-5" />
             </button>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        <div ref={galleryScrollRef} className="flex-1 overflow-y-auto p-6">
+          </>
+        }
+      >
+        <div className="p-6">
           <div
             className="grid gap-4"
             style={{ gridTemplateColumns: `repeat(auto-fit, minmax(${cardMinWidth}px, 1fr))` }}
@@ -367,7 +365,7 @@ export function DuplicateGalleryModal({
             ))}
           </div>
         </div>
-      </div>
+      </FullscreenModalShell>
 
       {singleViewFile && (
         <MediaViewer
@@ -378,6 +376,6 @@ export function DuplicateGalleryModal({
           onIndexChange={() => {}}
         />
       )}
-    </div>
+    </>
   )
 }

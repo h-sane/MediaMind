@@ -1,10 +1,14 @@
-import { CopyCheck, ScanFace, X } from 'lucide-react'
+import { CopyCheck, ScanFace, Sparkles, X } from 'lucide-react'
 import { useEnsureLibrary } from '../../api/hooks'
 import { isRealFolder, useExplorerStore } from '../../stores/explorer'
 import type { ToolMode } from '../../stores/explorer'
 import { useJobsStore, selectJobForLibrary } from '../../stores/jobs'
 
-const TOOLS: { mode: Exclude<ToolMode, 'none'>; label: string; icon: React.ComponentType<{ className?: string }>; jobType: 'dedupe' | 'faces'; beta?: boolean }[] = [
+// 'suggestions' has no scan job of its own — it's a read-only projection of
+// dedupe/faces state — so its jobType is left undefined and the running-dot
+// indicator never lights up for it.
+const TOOLS: { mode: Exclude<ToolMode, 'none'>; label: string; icon: React.ComponentType<{ className?: string }>; jobType?: 'dedupe' | 'faces'; beta?: boolean }[] = [
+  { mode: 'suggestions', label: 'Suggestions', icon: Sparkles },
   { mode: 'dedupe', label: 'Duplicate Detection', icon: CopyCheck, jobType: 'dedupe' },
   { mode: 'faces', label: 'Facial Recognition', icon: ScanFace, jobType: 'faces', beta: true }
 ]
@@ -31,7 +35,7 @@ export function ToolRail(): React.JSX.Element {
       <p className="px-3 pb-1 pt-1 text-[11px] font-medium uppercase tracking-wide text-zinc-400">Tools</p>
       {TOOLS.map(({ mode, label, icon: Icon, jobType, beta }) => {
         const isActive = toolMode === mode
-        const job = library ? selectJobForLibrary(jobs, library.id, jobType) : undefined
+        const job = library && jobType ? selectJobForLibrary(jobs, library.id, jobType) : undefined
         const isRunning = !!job
 
         return (

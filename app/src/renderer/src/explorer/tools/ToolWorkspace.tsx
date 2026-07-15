@@ -2,6 +2,7 @@ import { useEnsureLibrary } from '../../api/hooks'
 import { isRealFolder, useExplorerStore } from '../../stores/explorer'
 import { DedupeToolPanel } from './dedupe/DedupeToolPanel'
 import { FacesToolPanel } from './faces/FacesToolPanel'
+import { SuggestionsToolPanel } from './suggestions/SuggestionsToolPanel'
 
 /**
  * Occupies the same slot `ContentPane` normally does (see `ExplorerShell.tsx`)
@@ -31,6 +32,8 @@ export function ToolWorkspace(): React.JSX.Element {
         <DedupeToolPanel libraryId={library.id} folderPath={currentPath} />
       ) : toolMode === 'faces' ? (
         <FacesToolPanel libraryId={library.id} folderPath={currentPath} />
+      ) : toolMode === 'suggestions' ? (
+        <SuggestionsToolPanel libraryId={library.id} folderPath={currentPath} />
       ) : null}
     </div>
   )

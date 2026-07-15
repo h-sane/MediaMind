@@ -6,7 +6,7 @@ export type ViewMode = 'icons' | 'list' | 'details' | 'tiles' | 'content' | 'gal
 /** Tool state (dedupe/faces review panels), triggered from the `ToolRail`
  * section of `NavigationPane` — orthogonal to `ViewMode`. `'none'` = plain
  * browsing. */
-export type ToolMode = 'none' | 'dedupe' | 'faces'
+export type ToolMode = 'none' | 'dedupe' | 'faces' | 'suggestions'
 export type SortKey = 'name' | 'date' | 'size' | 'type' | 'created' | 'accessed' | 'attributes'
 export type SortDir = 'asc' | 'desc'
 export type FilterType = 'all' | 'image' | 'gif' | 'video' | 'audio'

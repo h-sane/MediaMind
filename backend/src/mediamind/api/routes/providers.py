@@ -49,6 +49,7 @@ def list_providers(request: Request):
                 id=entry.id,
                 name=entry.name,
                 description=entry.description,
+                guidance=entry.guidance,
                 license=LicenseOut(
                     name=entry.license.name,
                     url=entry.license.url,

@@ -54,6 +54,15 @@ class CatalogEntry:
     # installed (the files the provider actually loads). Empty = derived from
     # `downloads` for archive="direct" entries.
     required_files: tuple[str, ...] = ()
+    # Plain-language "who is this best for" guidance, shown separately from
+    # `description` in the model-selection UI. Sourced from InsightFace's own
+    # published multi-racial benchmark (MFR-Ongoing, TAR@FAR=1e-6) — see
+    # model_zoo/README.md in github.com/deepinsight/insightface. Never state a
+    # demographic claim here that isn't backed by that benchmark or the RFW
+    # literature; every model in this catalog is weakest on East Asian faces
+    # and strongest on European/White faces, so comparisons are relative
+    # ("best of these options for X"), not absolute claims of excellence.
+    guidance: str = ""
 
 
 # All InsightFace model-zoo packs share one license: the weights are for
@@ -107,6 +116,11 @@ CATALOG: list[CatalogEntry] = [
         embedding_dim=128,
         cluster_eps=0.5,
         kind="opencv_zoo",
+        guidance=(
+            "The only commercial-use-safe option here (Apache-2.0) and the smallest "
+            "download. No published per-demographic accuracy data exists for SFace — "
+            "expect lower accuracy than the InsightFace packs across the board."
+        ),
     ),
     CatalogEntry(
         id="insightface-buffalo-l",
@@ -131,6 +145,14 @@ CATALOG: list[CatalogEntry] = [
         cluster_eps=0.5,
         kind="insightface_pack",
         required_files=("det_10g.onnx", "w600k_r50.onnx"),
+        guidance=(
+            "Best all-round choice. On InsightFace's own multi-racial benchmark it "
+            "scores highest of these models for African/Black faces (90.3) and East "
+            "Asian faces (75.0), and near-top for Indian/South Asian (93.2) and "
+            "European/White faces (94.7). Note: like every model here, it is weakest "
+            "on East Asian faces — that is a limitation of all current open models, "
+            "not a reason to pick a smaller one."
+        ),
     ),
     CatalogEntry(
         id="insightface-antelopev2",
@@ -155,6 +177,12 @@ CATALOG: list[CatalogEntry] = [
         cluster_eps=0.5,
         kind="insightface_pack",
         required_files=("scrfd_10g_bnkps.onnx", "glintr100.onnx"),
+        guidance=(
+            "Highest overall matching accuracy, and the strongest of these models "
+            "for Indian/South Asian faces (93.4 on InsightFace's multi-racial "
+            "benchmark). Slightly behind buffalo_l on African/Black and East Asian "
+            "faces. The largest and slowest download."
+        ),
     ),
     CatalogEntry(
         id="insightface-buffalo-m",
@@ -180,6 +208,11 @@ CATALOG: list[CatalogEntry] = [
         cluster_eps=0.5,
         kind="insightface_pack",
         required_files=("det_2.5g.onnx", "w600k_r50.onnx"),
+        guidance=(
+            "Identical recognition accuracy to buffalo_l (same recognition network) "
+            "with a lighter face detector — same demographic profile, faster scans, "
+            "may miss more small/blurry faces."
+        ),
     ),
     CatalogEntry(
         id="insightface-buffalo-sc",
@@ -205,5 +238,11 @@ CATALOG: list[CatalogEntry] = [
         cluster_eps=0.5,
         kind="insightface_pack",
         required_files=("det_500m.onnx", "w600k_mbf.onnx"),
+        guidance=(
+            "Quick-preview only. Accuracy drops sharply versus the larger packs, and "
+            "the drop is biggest for non-White faces (East Asian 51.0, African 69.5 "
+            "vs buffalo_l's 75.0/90.3). Fine for a fast first look on a low-spec "
+            "machine; rescan with a larger model before organizing."
+        ),
     ),
 ]

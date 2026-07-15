@@ -873,3 +873,76 @@ export function useFaceThumbnailUrl(
 
   return url
 }
+
+// ---------------------------------------------------------------------------
+// Folder bindings (Phase B/C — respect pre-existing person/group folders)
+// ---------------------------------------------------------------------------
+
+export function useBindingSuggestions(libraryId: string) {
+  return useQuery({
+    queryKey: ['binding-suggestions', libraryId],
+    queryFn: () => api.bindings.suggestions(libraryId),
+    retry: false
+  })
+}
+
+export function useBindings(libraryId: string) {
+  return useQuery({
+    queryKey: ['bindings', libraryId],
+    queryFn: () => api.bindings.list(libraryId),
+    retry: false
+  })
+}
+
+export function useRefreshBindings(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.bindings.refresh(libraryId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['binding-suggestions', libraryId] })
+  })
+}
+
+export function useAcceptBindingSuggestion(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (suggestionId: number) => api.bindings.accept(libraryId, suggestionId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['binding-suggestions', libraryId] })
+      qc.invalidateQueries({ queryKey: ['bindings', libraryId] })
+      qc.invalidateQueries({ queryKey: ['organize-preview', libraryId] })
+      qc.invalidateQueries({ queryKey: ['persons', libraryId] })
+    }
+  })
+}
+
+export function useDismissBindingSuggestion(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (suggestionId: number) => api.bindings.dismiss(libraryId, suggestionId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['binding-suggestions', libraryId] })
+  })
+}
+
+export function useReleaseBinding(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (bindingId: number) => api.bindings.release(libraryId, bindingId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bindings', libraryId] })
+      qc.invalidateQueries({ queryKey: ['binding-suggestions', libraryId] })
+      qc.invalidateQueries({ queryKey: ['organize-preview', libraryId] })
+    }
+  })
+}
+
+export function useSetBindingOutliers(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ bindingId, fileIds }: { bindingId: number; fileIds: number[] }) =>
+      api.bindings.setOutliers(libraryId, bindingId, fileIds),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bindings', libraryId] })
+      qc.invalidateQueries({ queryKey: ['organize-preview', libraryId] })
+    }
+  })
+}
