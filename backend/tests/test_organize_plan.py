@@ -347,3 +347,117 @@ def test_plan_bound_folder_freezes_undecoded_files_too(conn):
 
     moves = build_organize_plan(conn, PROVIDER)
     assert moves == []
+
+
+# ---------------------------------------------------------------------------
+# Bound-person routing gap fix: a bound person's stray photos found elsewhere
+# must route to their real bound folder, not a fresh People/<name>; and a
+# file the user explicitly rejected for a person must never be swept in.
+# ---------------------------------------------------------------------------
+
+def _bind(conn, folder_rel: str, pid: int) -> int:
+    now = time.time()
+    conn.execute(
+        "INSERT INTO folder_bindings (folder_rel, kind, provider_id, created_at) VALUES (?, 'person', ?, ?)",
+        (folder_rel, PROVIDER, now),
+    )
+    binding_id = conn.execute(
+        "SELECT id FROM folder_bindings WHERE folder_rel = ?", (folder_rel,)
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO folder_binding_members (binding_id, person_id) VALUES (?, ?)", (binding_id, pid)
+    )
+    conn.commit()
+    return binding_id
+
+
+def test_plan_routes_bound_person_to_bound_folder(conn):
+    fid = upsert_file(conn, "Random/new.jpg", "photo", 100, 0.0, "h_new", True)
+    conn.commit()
+    ff = [FileFaces(file_id=fid, content_hash="h_new", decoded_ok=True, faces=[_face(1, 0, 0)])]
+    _do_scan(conn, ff, [0])
+    pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
+    conn.execute("UPDATE persons SET name = 'Alice' WHERE id = ?", (pid,))
+    conn.commit()
+    _bind(conn, "Family/Alice", pid)
+
+    moves = build_organize_plan(conn, PROVIDER)
+    assert len(moves) == 1
+    assert moves[0].source_rel == "Random/new.jpg"
+    assert moves[0].dest_folder_rel == "Family/Alice"
+
+
+def test_plan_respects_person_rejection_over_bound_routing(conn):
+    fid = upsert_file(conn, "Random/new.jpg", "photo", 100, 0.0, "h_new", True)
+    conn.commit()
+    ff = [FileFaces(file_id=fid, content_hash="h_new", decoded_ok=True, faces=[_face(1, 0, 0)])]
+    _do_scan(conn, ff, [0])
+    pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
+    conn.execute("UPDATE persons SET name = 'Alice' WHERE id = ?", (pid,))
+    conn.commit()
+    _bind(conn, "Family/Alice", pid)
+
+    conn.execute(
+        "INSERT INTO rejected_person_files (content_hash, provider_id, person_id, created_at) VALUES (?, ?, ?, ?)",
+        ("h_new", PROVIDER, pid, time.time()),
+    )
+    conn.commit()
+
+    moves = build_organize_plan(conn, PROVIDER)
+    assert moves == []
+
+
+def test_plan_rejection_still_routes_other_person(conn):
+    fid = upsert_file(conn, "Random/both.jpg", "photo", 100, 0.0, "h_both", True)
+    conn.commit()
+    ff = [FileFaces(
+        file_id=fid, content_hash="h_both", decoded_ok=True,
+        faces=[_face(1, 0, 0), _face(0, 0, 1)],
+    )]
+    _do_scan(conn, ff, [0, 1])
+    persons = conn.execute(
+        "SELECT id FROM persons WHERE provider_id = ? ORDER BY id", (PROVIDER,)
+    ).fetchall()
+    pid_alice, pid_bob = persons[0]["id"], persons[1]["id"]
+    conn.execute("UPDATE persons SET name = 'Alice' WHERE id = ?", (pid_alice,))
+    conn.execute("UPDATE persons SET name = 'Bob' WHERE id = ?", (pid_bob,))
+    conn.commit()
+    _bind(conn, "Family/Bob", pid_bob)
+
+    conn.execute(
+        "INSERT INTO rejected_person_files (content_hash, provider_id, person_id, created_at) VALUES (?, ?, ?, ?)",
+        ("h_both", PROVIDER, pid_alice, time.time()),
+    )
+    conn.commit()
+
+    moves = build_organize_plan(conn, PROVIDER)
+    assert len(moves) == 1
+    assert moves[0].dest_folder_rel == "Family/Bob"
+
+
+def test_plan_rejection_survives_rescan(conn):
+    """The scenario that breaks a "just clear person_id" fix: clustering
+    re-clusters this file's embedding right back next to Alice on every
+    rescan, so only a durable, content_hash-keyed rejection (not a person_id
+    mutation) can keep it out of her bound folder."""
+    fid = upsert_file(conn, "Random/new.jpg", "photo", 100, 0.0, "h_new", True)
+    conn.commit()
+    ff = [FileFaces(file_id=fid, content_hash="h_new", decoded_ok=True, faces=[_face(1, 0, 0)])]
+    _do_scan(conn, ff, [0])
+    pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
+    conn.execute("UPDATE persons SET name = 'Alice' WHERE id = ?", (pid,))
+    conn.commit()
+    _bind(conn, "Family/Alice", pid)
+
+    conn.execute(
+        "INSERT INTO rejected_person_files (content_hash, provider_id, person_id, created_at) VALUES (?, ?, ?, ?)",
+        ("h_new", PROVIDER, pid, time.time()),
+    )
+    conn.commit()
+
+    # Rescan: persist_face_scan wipes and recreates every `faces` row and
+    # re-clusters from scratch — the same embedding lands back on Alice.
+    _do_scan(conn, ff, [0])
+
+    moves = build_organize_plan(conn, PROVIDER)
+    assert moves == []

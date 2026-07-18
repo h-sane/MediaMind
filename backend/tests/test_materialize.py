@@ -165,6 +165,23 @@ def test_materialize_respects_exclusions_and_reassignments(tmp_path: Path, clien
     # the remaining two land in the new Dave/ folder
     assert len(list((library_root / "Dave").glob("*.jpg"))) == 2
 
+    # "Not this person" was recorded durably for both the excluded and the
+    # redirected file, and a later generic Organize run must not sweep
+    # either of them into Dave/ (the routing-gap fix's other half).
+    data_dir = library_data_dir(library_root)
+    conn = open_db(library_db_path(data_dir))
+    rejected_count = conn.execute(
+        "SELECT COUNT(*) FROM rejected_person_files WHERE person_id = ?", (person_id,)
+    ).fetchone()[0]
+    conn.close()
+    assert rejected_count == 2
+
+    preview_after = client.post(f"/v1/libraries/{lib_id}/organize/preview").json()
+    dests = {m["source_rel"]: m["dest_folder_rel"] for m in preview_after["moves"]}
+    excluded_path = next(c["path"] for c in candidates if c["file_id"] == excluded_id)
+    assert excluded_path not in dests
+    assert dests.get(f"Elsewhere/{reassigned_name}") != "Dave"
+
 
 def test_materialize_rejects_already_bound_person(tmp_path: Path, client):
     library_root = tmp_path / "lib"

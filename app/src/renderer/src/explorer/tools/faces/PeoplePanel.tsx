@@ -6,6 +6,7 @@ import {
   useBindings,
   useRefreshBindings,
   useMergeSuggestion,
+  useAcceptBindingSuggestion,
   useDismissBindingSuggestion
 } from '../../../api/hooks'
 import { selectJobForLibrary, useJobsStore } from '../../../stores/jobs'
@@ -64,6 +65,7 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
   const { data: bindingsData } = useBindings(libraryId)
   const refreshBindings = useRefreshBindings(libraryId)
   const mergeSuggestion = useMergeSuggestion(libraryId)
+  const acceptSuggestion = useAcceptBindingSuggestion(libraryId)
   const dismissSuggestion = useDismissBindingSuggestion(libraryId)
 
   const [mergingSuggestionId, setMergingSuggestionId] = useState<number | null>(null)
@@ -133,6 +135,18 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
         onError: () => setMergingSuggestionId(null)
       }
     )
+  }
+
+  // A suggestion with nothing to review (every file already matches, no
+  // stray photos elsewhere) has no move to make — the only useful action is
+  // locking the folder in as this person's, so a later Organize run
+  // respects it instead of bulldozing it into People/<name>.
+  const handleLockFolder = (suggestion: BindingSuggestion) => {
+    setMergingSuggestionId(suggestion.id)
+    acceptSuggestion.mutate(suggestion.id, {
+      onSuccess: () => setMergingSuggestionId(null),
+      onError: () => setMergingSuggestionId(null)
+    })
   }
 
   return (
@@ -220,6 +234,7 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
               onToggleSelect={toggleSelect}
               onOpen={onOpenPerson}
               onMergeIntoFolder={handleMergeIntoFolder}
+              onLockFolder={handleLockFolder}
               onOpenDetails={setReviewingSuggestion}
               onDismissSuggestion={(s) => dismissSuggestion.mutate(s.id)}
               onMaterialize={setMaterializingPerson}

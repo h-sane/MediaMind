@@ -14,6 +14,7 @@ interface Props {
   onToggleSelect: (id: number) => void
   onOpen: (id: number) => void
   onMergeIntoFolder?: (suggestion: BindingSuggestion) => void
+  onLockFolder?: (suggestion: BindingSuggestion) => void
   onOpenDetails?: (suggestion: BindingSuggestion) => void
   onDismissSuggestion?: (suggestion: BindingSuggestion) => void
   onMaterialize?: (person: Person) => void
@@ -35,6 +36,7 @@ export function PersonCard({
   onToggleSelect,
   onOpen,
   onMergeIntoFolder,
+  onLockFolder,
   onOpenDetails,
   onDismissSuggestion,
   onMaterialize,
@@ -154,21 +156,38 @@ export function PersonCard({
               </button>
             )}
           </div>
-          <div className="mt-2 flex gap-1.5">
-            <button
-              onClick={() => onMergeIntoFolder?.(suggestion)}
-              disabled={mergeBusy}
-              className="flex-1 rounded-lg bg-emerald-600 px-2 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-500 disabled:opacity-50"
-            >
-              {mergeBusy ? 'Merging…' : 'Merge into folder'}
-            </button>
-            <button
-              onClick={() => onOpenDetails?.(suggestion)}
-              className="rounded-lg border border-emerald-200 px-2 py-1.5 text-xs text-emerald-700 transition hover:bg-emerald-100"
-            >
-              Open details
-            </button>
-          </div>
+          {suggestion.outlier_file_ids.length === 0 && suggestion.move_count === 0 ? (
+            // Every file already matches and this person has no stray
+            // photos elsewhere — nothing to review or move. The only real
+            // action left is locking this folder in as theirs, so a later
+            // Organize run respects it instead of recreating it under
+            // People/<name>.
+            <div className="mt-2">
+              <button
+                onClick={() => onLockFolder?.(suggestion)}
+                disabled={mergeBusy}
+                className="w-full rounded-lg bg-emerald-600 px-2 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-500 disabled:opacity-50"
+              >
+                {mergeBusy ? 'Locking…' : 'Lock this folder'}
+              </button>
+            </div>
+          ) : (
+            <div className="mt-2 flex gap-1.5">
+              <button
+                onClick={() => onMergeIntoFolder?.(suggestion)}
+                disabled={mergeBusy}
+                className="flex-1 rounded-lg bg-emerald-600 px-2 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-500 disabled:opacity-50"
+              >
+                {mergeBusy ? 'Merging…' : 'Merge into folder'}
+              </button>
+              <button
+                onClick={() => onOpenDetails?.(suggestion)}
+                className="rounded-lg border border-emerald-200 px-2 py-1.5 text-xs text-emerald-700 transition hover:bg-emerald-100"
+              >
+                Open details
+              </button>
+            </div>
+          )}
         </div>
       )}
 
