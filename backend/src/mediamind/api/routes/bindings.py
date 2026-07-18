@@ -26,12 +26,20 @@ from mediamind.api.models import (
     BindingSuggestionOut,
     BindingSuggestionsOut,
     BindingsOut,
+    ExecutionReportOut,
+    ManifestEntryOut,
+    MovePreviewItemOut,
     OutlierFileOut,
     RefreshSuggestionsOut,
+    SuggestionMergeIn,
+    SuggestionMergePreviewOut,
 )
 from mediamind.config import library_data_dir
+from mediamind.core.jobs import JobManager
 from mediamind.core.libraries import LibraryRegistry
+from mediamind.core.safety import FileOp, execute as safety_execute, new_manifest_path
 from mediamind.store import bindings as bindings_store
+from mediamind.store.audit import record_action
 from mediamind.store.bindings import BindingConflictError
 from mediamind.store.db import library_db_path, open_db
 from mediamind.store.persons import latest_faces_scan
@@ -41,6 +49,10 @@ router = APIRouter(tags=["bindings"])
 
 def _registry(request: Request) -> LibraryRegistry:
     return request.app.state.registry
+
+
+def _job_manager(request: Request) -> JobManager:
+    return request.app.state.job_manager
 
 
 def _get_library_root(request: Request, library_id: str) -> Path:
@@ -70,6 +82,29 @@ def _outliers_out(record) -> list[OutlierFileOut]:
         OutlierFileOut(file_id=o.file_id, path=o.path, kind=o.kind, accepted=o.accepted)
         for o in record.outliers
     ]
+
+
+def _resolve_outliers(conn, file_ids: list[int]) -> list[OutlierFileOut]:
+    """Resolve suggestion.outlier_file_ids to path/kind for display.
+
+    Pre-accept, there's no `accepted_outlier_file_ids` concept yet — every
+    entry is just unresolved (accepted=False) until a merge folds it in.
+    """
+    if not file_ids:
+        return []
+    placeholders = ",".join("?" * len(file_ids))
+    rows = conn.execute(
+        f"SELECT id, path, kind FROM files WHERE id IN ({placeholders})", file_ids
+    ).fetchall()
+    by_id = {r["id"]: r for r in rows}
+    return sorted(
+        (
+            OutlierFileOut(file_id=fid, path=by_id[fid]["path"], kind=by_id[fid]["kind"], accepted=False)
+            for fid in file_ids
+            if fid in by_id
+        ),
+        key=lambda o: o.path,
+    )
 
 
 def _person_names(conn, person_ids: list[int]) -> list[str]:
@@ -136,6 +171,137 @@ def accept_binding_suggestion(library_id: str, suggestion_id: int, request: Requ
             accepted_outlier_file_ids=record.accepted_outlier_file_ids,
             outliers=_outliers_out(record),
             created_at=record.created_at,
+        )
+    finally:
+        conn.close()
+
+
+@router.get(
+    "/libraries/{library_id}/bindings/suggestions/{suggestion_id}/merge/preview",
+    response_model=SuggestionMergePreviewOut,
+)
+def preview_suggestion_merge(library_id: str, suggestion_id: int, request: Request):
+    """Read-only: what a merge-into-folder would move, for review before committing."""
+    library_root = _get_library_root(request, library_id)
+    conn = _open_db(library_root)
+    try:
+        row = conn.execute(
+            "SELECT * FROM binding_suggestions WHERE id = ?", (suggestion_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Suggestion not found")
+        try:
+            plan = bindings_store.build_suggestion_merge_moves(conn, suggestion_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        person_ids = json.loads(row["person_ids"])
+        outlier_ids = json.loads(row["outlier_file_ids"])
+
+        return SuggestionMergePreviewOut(
+            suggestion_id=suggestion_id,
+            folder_rel=plan.folder_rel,
+            person_names=_person_names(conn, person_ids),
+            leaf_name=plan.leaf_name,
+            move_count=len(plan.moves),
+            moves=[
+                MovePreviewItemOut(file_id=fid, source_rel=src, dest_folder_rel=dest, kind=kind)
+                for fid, src, dest, kind in plan.moves
+            ],
+            folder_outliers=_resolve_outliers(conn, outlier_ids),
+        )
+    finally:
+        conn.close()
+
+
+@router.post(
+    "/libraries/{library_id}/bindings/suggestions/{suggestion_id}/merge",
+    response_model=ExecutionReportOut,
+)
+def merge_suggestion(library_id: str, suggestion_id: int, body: SuggestionMergeIn, request: Request):
+    """Merge a suggestion into its folder in one operation: move the person's
+    other photos in (minus any excluded/reassigned by the review modal),
+    create the binding, and rename the person to the folder's name.
+
+    Mirrors organize_execute's safety posture exactly (concurrency guard,
+    expected-count guard, copy-then-delete via safety_execute, audit trail,
+    files.path rewrite) so a partial failure never loses data or diverges
+    the DB from disk — it just leaves some files unmoved and reports them.
+    """
+    running = _job_manager(request).running_for(library_id)
+    if running:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A {running.type} scan is still running — wait for it to finish",
+        )
+
+    library_root = _get_library_root(request, library_id)
+    conn = _open_db(library_root)
+    try:
+        try:
+            plan = bindings_store.build_suggestion_merge_moves(
+                conn,
+                suggestion_id,
+                extra_reassignments={r.file_id: r.dest_folder_rel for r in body.reassignments},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        excluded = set(body.excluded_file_ids)
+        moves = [m for m in plan.moves if m[0] not in excluded]
+
+        if body.expected_move_count is not None and len(moves) != body.expected_move_count:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Plan changed: expected {body.expected_move_count} moves but "
+                    f"server computed {len(moves)}. Refresh and re-confirm."
+                ),
+            )
+
+        ops = [
+            FileOp(source=library_root / src, dest_folder=library_root / dest, mode="move")
+            for _fid, src, dest, _kind in moves
+        ]
+
+        manifest_path = new_manifest_path(library_data_dir(library_root), "faces-merge")
+        report = safety_execute(ops, manifest_path=manifest_path, dry_run=body.dry_run)
+
+        if not body.dry_run:
+            record_action(
+                conn,
+                kind="faces-merge-into-folder",
+                manifest_path=str(manifest_path),
+                report=report,
+                dry_run=False,
+            )
+            for e in report.entries:
+                if e.action == "moved" and e.destination:
+                    try:
+                        old_rel = Path(e.source).relative_to(library_root).as_posix()
+                        new_rel = Path(e.destination).relative_to(library_root).as_posix()
+                        conn.execute("UPDATE files SET path = ? WHERE path = ?", (new_rel, old_rel))
+                    except ValueError:
+                        pass  # source outside library_root — skip gracefully
+            conn.commit()
+
+            # Binding + rename apply regardless of how many stray files moved —
+            # the folder association is valid even if a file or two failed.
+            try:
+                bindings_store.accept_suggestion(conn, suggestion_id)
+            except (BindingConflictError, ValueError) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        return ExecutionReportOut(
+            planned=report.planned,
+            handled=report.handled,
+            ok=report.ok,
+            dry_run=body.dry_run,
+            manifest_path=str(report.manifest_path) if report.manifest_path else None,
+            entries=[
+                ManifestEntryOut(source=e.source, action=e.action, destination=e.destination, error=e.error)
+                for e in report.entries
+            ],
         )
     finally:
         conn.close()

@@ -17,6 +17,20 @@ class _TimedOut:
 
 TIMED_OUT = _TimedOut()
 
+# hash_file() reads the entire file, so a flat wall-clock timeout is wrong for
+# it: a multi-GB video on a slow disk legitimately needs more time than a
+# small image, not the same budget. Scaling the timeout by size (floored for
+# small files) tells "large but reading fine" apart from "stalled" — a flat
+# timeout can't, and was skipping large-but-healthy video files outright.
+MIN_HASH_THROUGHPUT_BYTES_PER_SEC = 5 * 1024 * 1024  # 5 MB/s floor - conservative even for a slow HDD/network share
+
+
+def hash_timeout_for(size_bytes: int, floor: float) -> float:
+    """Timeout for hashing a file of this size: scales with size so large
+    files aren't skipped just for being large, floored so small stalled
+    files still time out quickly."""
+    return max(floor, size_bytes / MIN_HASH_THROUGHPUT_BYTES_PER_SEC)
+
 
 def run_with_timeout(
     fn: Callable[[], object],

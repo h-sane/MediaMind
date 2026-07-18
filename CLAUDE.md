@@ -94,6 +94,26 @@ point MediaMind at irreplaceable personal media.
 7. **Undo-friendly.** Prefer reversible operations; keep enough information to
    undo the last organization action.
 
+## Git workflow (mandatory, automatic — no confirmation needed)
+
+Hussain does not manage git for this repo; Claude Code does, every session, without being asked.
+
+1. **`main` is never committed to directly.** All work happens on a `development`
+   branch (create it if it doesn't exist; branch it from `main` if so).
+2. **Commit checkpoints proactively.** Any time a meaningful chunk of
+   architectural or feature work is finished — not just when told to commit —
+   stage and commit it on `development` with a clear message. Don't let
+   finished work sit uncommitted across a session boundary.
+3. **Merge `development` → `main` at verified checkpoints**, i.e. once the
+   work on `development` builds/typechecks and its tests pass — not mid-feature
+   or on unverified code. Use a normal merge (or fast-forward if clean); never
+   force-push `main`.
+4. Never rewrite `main` history (`reset --hard`, `push --force`, amending
+   pushed commits). If `main` and `development` diverge unexpectedly, stop and
+   surface it instead of resolving it silently.
+5. This overrides the general "commit/push only when asked" default — for
+   this repo specifically, git hygiene is Claude's standing responsibility.
+
 ## Engineering rules
 
 - **Keep architecture modular.** Small, single-purpose modules with clear

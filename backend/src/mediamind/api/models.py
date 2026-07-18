@@ -458,5 +458,73 @@ class BindingsOut(BaseModel):
     bindings: list[BindingOut]
 
 
+class MovePreviewItemOut(BaseModel):
+    file_id: int
+    source_rel: str
+    dest_folder_rel: str
+    kind: str
+
+
+class SuggestionMergePreviewOut(BaseModel):
+    suggestion_id: int
+    folder_rel: str
+    person_names: list[str]
+    leaf_name: str
+    move_count: int
+    moves: list[MovePreviewItemOut]
+    folder_outliers: list[OutlierFileOut]
+
+
+class ReassignItemIn(BaseModel):
+    file_id: int
+    dest_folder_rel: str
+
+
+class SuggestionMergeIn(BaseModel):
+    dry_run: bool = False
+    expected_move_count: int | None = None  # safety guard: reject if plan size changed
+    excluded_file_ids: list[int] = []
+    reassignments: list[ReassignItemIn] = []
+
+
 class AcceptOutliersIn(BaseModel):
     file_ids: list[int]
+
+
+# ---------------------------------------------------------------------------
+# Faces pre-scan folder prep (recommend Unsorted/ before scanning)
+# ---------------------------------------------------------------------------
+
+class FacesPrepOut(BaseModel):
+    has_subfolders: bool
+    top_level_loose_count: int
+    named_subfolder_count: int
+    already_has_unsorted: bool
+    recommend_unsorted: bool
+
+
+class CreateUnsortedIn(BaseModel):
+    dry_run: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Materialize a not-yet-foldered person into a brand-new sibling folder
+# ---------------------------------------------------------------------------
+
+class MaterializeCandidateOut(BaseModel):
+    file_id: int
+    path: str
+    kind: str
+
+
+class MaterializePreviewOut(BaseModel):
+    person_id: int
+    candidates: list[MaterializeCandidateOut]
+
+
+class MaterializeIn(BaseModel):
+    name: str
+    dry_run: bool = False
+    expected_move_count: int | None = None  # safety guard: reject if plan size changed
+    excluded_file_ids: list[int] = []
+    reassignments: list[ReassignItemIn] = []

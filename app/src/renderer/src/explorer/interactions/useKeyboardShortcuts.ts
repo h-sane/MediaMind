@@ -115,6 +115,9 @@ export function useKeyboardShortcuts({ onRequestPermanentDelete }: Options): voi
         e.preventDefault()
         fileOps.cut()
       } else if (e.ctrlKey && key === 'c') {
+        // A non-empty text selection (e.g. the dev log panel) means the user
+        // wants the browser's native copy, not "copy selected files".
+        if (window.getSelection()?.toString()) return
         e.preventDefault()
         fileOps.copy()
       } else if (e.ctrlKey && key === 'v') {

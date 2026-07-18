@@ -16,7 +16,8 @@ const PHASE_LABELS: Record<string, string> = {
   hashing: 'Comparing files',
   detecting: 'Detecting faces',
   clustering: 'Grouping people',
-  saving: 'Saving results'
+  saving: 'Saving results',
+  reviewable: 'Results ready — finishing large videos in the background'
 }
 
 function phaseLabel(phase: string): string {

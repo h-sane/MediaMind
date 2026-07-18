@@ -5,6 +5,7 @@ import { useProgressSocket } from './api/progress'
 import { useJobsStore } from './stores/jobs'
 import { ExplorerShell } from './explorer/ExplorerShell'
 import { DeleteProgressBubble } from './components/DeleteProgressBubble'
+import { FaceScanProgressBubble } from './components/FaceScanProgressBubble'
 import { DevLogPanel } from './components/DevLogPanel'
 import { DEV_LOG_PANEL_ENABLED } from './devLogConfig'
 
@@ -18,7 +19,12 @@ function JobInvalidator(): null {
 
   useEffect(() => {
     for (const job of Object.values(jobs)) {
-      if (job.state === 'succeeded') {
+      // A face scan's fast pass persists partway through (see scan.py's
+      // "reviewable" phase) so results show up without waiting on any large
+      // videos still processing in the background — refetch persons then,
+      // not just once the whole job (including the slow pass) finishes.
+      const reviewableCheckpoint = job.type === 'faces' && job.phase === 'reviewable'
+      if (job.state === 'succeeded' || reviewableCheckpoint) {
         if (job.type === 'dedupe' || job.type === 'dedupe-execute') {
           qc.invalidateQueries({ queryKey: ['duplicates', job.library_id] })
         } else if (job.type === 'faces') {
@@ -89,6 +95,7 @@ export default function App(): React.JSX.Element {
       <EngineStatusBanner />
       <ExplorerShell />
       <DeleteProgressBubble />
+      <FaceScanProgressBubble />
       <DevLogGate />
     </div>
   )

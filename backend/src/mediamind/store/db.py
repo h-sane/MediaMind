@@ -11,7 +11,7 @@ import sqlite3
 from pathlib import Path
 from typing import Callable
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _V1_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -206,12 +206,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_binding_suggestions_folder
     conn.commit()
 
 
+def _v6_migration(conn: sqlite3.Connection) -> None:
+    """Schema v6: manual "not a face" rejection (Phase D — background/object
+    false positives). Keyed by content_hash (survives rename/move) + provider_id
+    + bbox rather than faces.id, since faces rows get wiped and recreated wholesale
+    on every rescan (see persist_face_scan) — a rejection must outlive that."""
+    conn.executescript("""
+CREATE TABLE IF NOT EXISTS rejected_face_regions (
+    id INTEGER PRIMARY KEY,
+    content_hash TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    bbox_x1 REAL NOT NULL, bbox_y1 REAL NOT NULL, bbox_x2 REAL NOT NULL, bbox_y2 REAL NOT NULL,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rejected_face_regions_key
+    ON rejected_face_regions(content_hash, provider_id);
+""")
+    conn.commit()
+
+
 # v2 is a string; v3+ are callables (ALTER TABLE requires special handling).
 _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (2, _V2_ADDITIONS),
     (3, _v3_migration),
     (4, _v4_migration),
     (5, _v5_migration),
+    (6, _v6_migration),
 ]
 
 

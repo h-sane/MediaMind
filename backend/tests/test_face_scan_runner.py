@@ -49,6 +49,38 @@ def _run(library_root: Path):
     return runner(_StubCtx())
 
 
+def test_stalled_hash_is_skipped_not_hung(tmp_path: Path, conn, monkeypatch):
+    """Bug reproduction: a stalled read (Cryptomator/other network mount gone
+    unresponsive) inside hash_file() must not freeze the whole face scan —
+    mirrors test_dedupe.py's test_stalled_file_is_skipped_not_hung for the
+    sibling code path."""
+    import time
+
+    import mediamind.core.faces.scan as scan_mod
+
+    real_hash_file = scan_mod.hash_file
+
+    def hanging_hash_file(path: Path) -> str:
+        if path.name == "stalled.jpg":
+            time.sleep(10)  # far longer than the monkeypatched timeout below
+        return real_hash_file(path)
+
+    monkeypatch.setattr(scan_mod, "hash_file", hanging_hash_file)
+    monkeypatch.setattr(scan_mod, "DEFAULT_HASH_TIMEOUT_SECONDS", 0.2)
+
+    Image.new("RGB", (64, 64), (255, 0, 0)).save(tmp_path / "stalled.jpg")
+    Image.new("RGB", (64, 64), (0, 0, 255)).save(tmp_path / "blue.jpg")
+
+    summary = _run(tmp_path)
+
+    # The stalled file is skipped (never hashed), the rest of the scan still
+    # completes in the same call instead of hanging forever.
+    assert summary["files"] == 2
+    assert summary["faces"] == 1
+    row = conn.execute("SELECT COUNT(*) FROM files WHERE path = ?", ("stalled.jpg",)).fetchone()[0]
+    assert row == 0, "a timed-out hash must not upsert a files row"
+
+
 # ---------------------------------------------------------------------------
 # Basic sanity
 # ---------------------------------------------------------------------------
@@ -120,6 +152,45 @@ def test_decode_failure_not_cached(tmp_path: Path, conn):
 # ---------------------------------------------------------------------------
 # Fix 13 — stale faces rows pruned when a file disappears between scans
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Fast/slow split — a large video must not block or skip fast files
+# ---------------------------------------------------------------------------
+
+def test_slow_video_deferred_to_second_pass_with_interim_persist(tmp_path: Path, conn, monkeypatch):
+    """Root-cause regression guard for the "large videos get skipped/block
+    everything" bug: a large video is deferred to a second pass, an interim
+    persist makes the fast files' results reviewable first, and the video
+    still gets fully processed (not skipped) by the end of the run."""
+    import mediamind.core.faces.scan as scan_mod
+
+    monkeypatch.setattr(scan_mod, "SLOW_VIDEO_BYTES", 1)  # any video counts as "slow" here
+
+    Image.new("RGB", (64, 64), (255, 0, 0)).save(tmp_path / "red.jpg")
+    (tmp_path / "clip.mp4").write_bytes(b"not a real video" * 100)
+
+    phases: list[str] = []
+
+    class _RecordingCtx(_StubCtx):
+        def report_progress(self, done: int, total: int, phase: str = "") -> None:
+            if phase:
+                phases.append(phase)
+
+    runner = make_face_scan_runner(
+        tmp_path, lambda: FakeColorProvider(), PROVIDER, pending_for_named=True
+    )
+    summary = runner(_RecordingCtx())
+
+    assert summary["files"] == 2
+    assert "reviewable" in phases
+    # reviewable must fire before the slow video's own hashing/detecting -
+    # otherwise the fast pass wasn't actually persisted first.
+    reviewable_idx = phases.index("reviewable")
+    assert "hashing" in phases[reviewable_idx + 1 :]
+
+    row = conn.execute("SELECT COUNT(*) FROM files WHERE path = ?", ("clip.mp4",)).fetchone()[0]
+    assert row == 1, "slow video must still be processed, not skipped"
+
 
 def test_stale_faces_pruned_after_external_delete(tmp_path: Path, conn):
     Image.new("RGB", (64, 64), (255, 0, 0)).save(tmp_path / "red.jpg")

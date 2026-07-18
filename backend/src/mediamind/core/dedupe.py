@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from mediamind.core.concurrency import TIMED_OUT, run_with_timeout
+from mediamind.core.concurrency import TIMED_OUT, hash_timeout_for, run_with_timeout
 from mediamind.core.hashing import hash_file
 from mediamind.core.scanner import KIND_IMAGE, ScannedFile
 
@@ -33,8 +33,9 @@ DEFAULT_NEAR_THRESHOLD = 5  # max pHash hamming distance to call two images "nea
 # one file's I/O time. Seen in practice with cloud-sync placeholder files
 # (OneDrive Files-On-Demand, Google Drive streaming) and stalled
 # network/encrypted-drive mounts, where a single `open()`/`read()` can block
-# indefinitely. 30s is generous for even a large local video on a slow disk
-# while still bounding the worst case.
+# indefinitely. This is a floor, not a flat cap — hash_timeout_for() scales it
+# up for large files so a big-but-healthy video isn't skipped just for being
+# big, while small stalled files still time out quickly.
 DEFAULT_FILE_TIMEOUT_SECONDS = 30.0
 
 # Mirrors scanner.MAX_LEAKED_STALL_THREADS: a file whose read times out
@@ -188,7 +189,9 @@ def find_duplicates(
         # concurrency for the rest of the scan.
         try:
             outcome = run_with_timeout(
-                lambda: _process(f, size_counts[f.size] > 1), file_timeout_seconds, limiter
+                lambda: _process(f, size_counts[f.size] > 1),
+                hash_timeout_for(f.size, floor=file_timeout_seconds),
+                limiter,
             )
         except Exception:
             # One file's failure must never end the whole scan (project
@@ -200,7 +203,7 @@ def find_duplicates(
             logger.warning(
                 "dedupe: skipping %s - timed out after %.0fs reading it (likely a "
                 "cloud-sync placeholder or a stalled network/encrypted-drive read)",
-                f.path, file_timeout_seconds,
+                f.path, hash_timeout_for(f.size, floor=file_timeout_seconds),
             )
             return None
         return outcome  # type: ignore[return-value]

@@ -1,124 +1,21 @@
-import { useRef, useState } from 'react'
-import { usePersons, useRenamePerson, useMergePersons } from '../../../api/hooks'
+import { useEffect, useRef, useState } from 'react'
+import {
+  usePersons,
+  useMergePersons,
+  useBindingSuggestions,
+  useBindings,
+  useRefreshBindings,
+  useMergeSuggestion,
+  useDismissBindingSuggestion
+} from '../../../api/hooks'
 import { selectJobForLibrary, useJobsStore } from '../../../stores/jobs'
 import { useZoomScale } from '../../../hooks/useZoomScale'
-import { ScanProgress } from '../../../components/ScanProgress'
-import { FaceThumbnail } from '../../../components/FaceThumbnail'
-import type { Person } from '../../../api/client'
-
-function PersonCard({
-  person,
-  libraryId,
-  selected,
-  selectMode,
-  zoom,
-  onToggleSelect,
-  onOpen
-}: {
-  person: Person
-  libraryId: string
-  selected: boolean
-  selectMode: boolean
-  zoom: number
-  onToggleSelect: (id: number) => void
-  onOpen: (id: number) => void
-}): React.JSX.Element {
-  const rename = useRenamePerson(libraryId)
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  const displayName = person.name ?? person.auto_label
-  const isNamed = person.name !== null
-
-  const startEdit = () => {
-    setDraft(person.name ?? '')
-    setEditing(true)
-    setTimeout(() => inputRef.current?.focus(), 0)
-  }
-
-  const commitEdit = () => {
-    const trimmed = draft.trim()
-    rename.mutate({ personId: person.id, name: trimmed || null })
-    setEditing(false)
-  }
-
-  const handleClick = () => {
-    if (selectMode) onToggleSelect(person.id)
-    else onOpen(person.id)
-  }
-
-  return (
-    <div
-      onClick={handleClick}
-      className={`group relative cursor-pointer rounded-2xl border p-4 transition ${
-        selectMode
-          ? selected
-            ? 'border-zinc-900 bg-zinc-50 shadow-md'
-            : 'border-zinc-200 bg-white hover:border-zinc-300'
-          : 'border-zinc-200 bg-white hover:border-zinc-300 hover:shadow-sm'
-      }`}
-    >
-      {selectMode && (
-        <div
-          className={`absolute right-3 top-3 h-5 w-5 rounded-full border-2 transition ${
-            selected ? 'border-zinc-900 bg-zinc-900' : 'border-zinc-300 bg-white'
-          }`}
-        />
-      )}
-
-      <div className="mb-3 flex justify-center">
-        {person.sample_face_ids.length > 0 ? (
-          <FaceThumbnail
-            libraryId={libraryId}
-            faceId={person.sample_face_ids[0]}
-            size={Math.round(72 * zoom)}
-            className="ring-2 ring-white ring-offset-1"
-          />
-        ) : (
-          <div
-            className="flex items-center justify-center rounded-full bg-zinc-100"
-            style={{ width: 72 * zoom, height: 72 * zoom }}
-          >
-            <svg className="h-8 w-8 text-zinc-300" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z" />
-            </svg>
-          </div>
-        )}
-      </div>
-
-      <div className="text-center">
-        {editing ? (
-          <input
-            ref={inputRef}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={commitEdit}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') commitEdit()
-              if (e.key === 'Escape') setEditing(false)
-            }}
-            placeholder={person.auto_label}
-            className="w-full rounded-lg border border-zinc-300 px-2 py-1 text-center text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900"
-            onClick={(e) => e.stopPropagation()}
-          />
-        ) : (
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              if (!selectMode) startEdit()
-            }}
-            className="w-full text-center"
-            title="Click to rename"
-          >
-            <p className={`truncate text-sm font-medium ${isNamed ? '' : 'text-zinc-400'}`}>{displayName}</p>
-          </button>
-        )}
-        <p className="mt-0.5 text-xs text-zinc-400">{person.media_count} photos/videos</p>
-      </div>
-    </div>
-  )
-}
+import { PersonCard } from './PersonCard'
+import { GroupSuggestionStrip } from './GroupSuggestionStrip'
+import { RespectedFolders } from './RespectedFolders'
+import { MatchReviewModal } from './MatchReviewModal'
+import { MaterializeReviewModal } from './MaterializeReviewModal'
+import type { BindingSuggestion, ExecutionReport, Person } from '../../../api/client'
 
 interface Props {
   libraryId: string
@@ -126,19 +23,68 @@ interface Props {
   onOrganize: () => void
 }
 
-/** People grid — the Faces tool's home sub-view. Round-1 scope: Pending and
- * Multi-person review entry points are intentionally omitted (deferred). */
+function MergeResultBanner({ report, onDismiss }: { report: ExecutionReport; onDismiss: () => void }): React.JSX.Element {
+  const ok = report.ok
+  return (
+    <div className={`mb-6 rounded-xl border px-5 py-4 ${ok ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
+      <div className="flex items-start justify-between">
+        <p className={`text-sm font-medium ${ok ? 'text-emerald-800' : 'text-red-800'}`}>
+          {ok
+            ? `Merged — ${report.handled} of ${report.planned} files moved`
+            : `Partial merge — ${report.handled}/${report.planned} succeeded, ${report.entries.filter((e) => e.error).length} errors`}
+        </p>
+        <button onClick={onDismiss} className="text-xs text-zinc-400 hover:text-zinc-600">
+          Dismiss
+        </button>
+      </div>
+      {!ok && (
+        <ul className="mt-3 space-y-1">
+          {report.entries.filter((e) => e.error).slice(0, 5).map((e, i) => (
+            <li key={i} className="text-xs text-red-700">{e.source}: {e.error}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+/** People grid — the Faces tool's home sub-view. Folder-match suggestions
+ * (Phase B/C) now surface directly here as enhanced tiles instead of a
+ * separate Suggestions tab. Round-1 scope: Pending and Multi-person review
+ * entry points are intentionally omitted (deferred). */
 export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): React.JSX.Element {
   const jobs = useJobsStore((s) => s.jobs)
   const activeJob = selectJobForLibrary(jobs, libraryId, 'faces')
 
   const { data: personsData, isError, isLoading } = usePersons(libraryId)
   const mergePersons = useMergePersons(libraryId)
+  const hasFaceScan = !!personsData
+
+  const { data: suggestionsData } = useBindingSuggestions(libraryId)
+  const { data: bindingsData } = useBindings(libraryId)
+  const refreshBindings = useRefreshBindings(libraryId)
+  const mergeSuggestion = useMergeSuggestion(libraryId)
+  const dismissSuggestion = useDismissBindingSuggestion(libraryId)
+
+  const [mergingSuggestionId, setMergingSuggestionId] = useState<number | null>(null)
+  const [mergeResult, setMergeResult] = useState<ExecutionReport | null>(null)
+  const [reviewingSuggestion, setReviewingSuggestion] = useState<BindingSuggestion | null>(null)
+  const [materializingPerson, setMaterializingPerson] = useState<Person | null>(null)
 
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<number[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
   const [zoom] = useZoomScale(scrollRef, { min: 0.5, max: 2 })
+
+  // Freshness is checked on tool-open only (no filesystem watcher) — refresh
+  // detection once per folder, piggybacking on whatever faces scan already ran.
+  const refreshedFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (!hasFaceScan || refreshedFor.current === libraryId) return
+    refreshedFor.current = libraryId
+    refreshBindings.mutate()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [libraryId, hasFaceScan])
 
   const toggleSelect = (id: number) => {
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : prev.length < 2 ? [...prev, id] : prev))
@@ -153,8 +99,41 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
     )
   }
 
+  const suggestions = suggestionsData?.suggestions ?? []
+  const personSuggestions = new Map<number, BindingSuggestion>()
+  for (const s of suggestions) {
+    if (s.kind === 'person' && s.person_ids.length === 1) personSuggestions.set(s.person_ids[0], s)
+  }
+  const groupSuggestions = suggestions.filter((s) => s.kind === 'group')
+
+  const boundPersonIds = new Set<number>(
+    (bindingsData?.bindings ?? []).flatMap((b) => b.person_ids)
+  )
+
   const persons = personsData?.persons ?? []
+  const sortedPersons = [...persons].sort((a, b) => {
+    const sa = personSuggestions.get(a.id)
+    const sb = personSuggestions.get(b.id)
+    if (sa && sb) return sb.coverage - sa.coverage
+    if (sa) return -1
+    if (sb) return 1
+    return 0
+  })
   const isScanning = !!activeJob
+
+  const handleMergeIntoFolder = (suggestion: BindingSuggestion) => {
+    setMergingSuggestionId(suggestion.id)
+    mergeSuggestion.mutate(
+      { suggestionId: suggestion.id },
+      {
+        onSuccess: (data) => {
+          setMergeResult(data)
+          setMergingSuggestionId(null)
+        },
+        onError: () => setMergingSuggestionId(null)
+      }
+    )
+  }
 
   return (
     <div ref={scrollRef} className="h-full overflow-y-auto p-6 pb-24">
@@ -196,13 +175,13 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
         </div>
       </div>
 
-      {isScanning && activeJob && (
-        <div className="mb-6">
-          <ScanProgress libraryId={libraryId} job={activeJob} />
-        </div>
-      )}
+      {mergeResult && <MergeResultBanner report={mergeResult} onDismiss={() => setMergeResult(null)} />}
 
       {!isScanning && isLoading && <p className="text-sm text-zinc-400">Loading…</p>}
+
+      {isScanning && persons.length === 0 && (
+        <p className="text-sm text-zinc-400">Scanning — see progress in the bottom-right corner.</p>
+      )}
 
       {!isLoading && !isScanning && persons.length === 0 && (
         <div className="rounded-2xl border border-dashed border-zinc-300 py-16 text-center">
@@ -213,12 +192,22 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
         </div>
       )}
 
+      {!isScanning && !isLoading && persons.length > 0 && (
+        <GroupSuggestionStrip
+          suggestions={groupSuggestions}
+          busyId={mergingSuggestionId}
+          onAccept={handleMergeIntoFolder}
+          onReview={setReviewingSuggestion}
+          onDismiss={(s) => dismissSuggestion.mutate(s.id)}
+        />
+      )}
+
       {persons.length > 0 && (
         <div
           className="grid gap-3"
           style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${Math.round(130 * zoom)}px, 1fr))` }}
         >
-          {persons.map((p: Person) => (
+          {sortedPersons.map((p: Person) => (
             <PersonCard
               key={p.id}
               person={p}
@@ -226,8 +215,15 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
               selected={selected.includes(p.id)}
               selectMode={selectMode}
               zoom={zoom}
+              suggestion={personSuggestions.get(p.id)}
+              isBound={boundPersonIds.has(p.id)}
               onToggleSelect={toggleSelect}
               onOpen={onOpenPerson}
+              onMergeIntoFolder={handleMergeIntoFolder}
+              onOpenDetails={setReviewingSuggestion}
+              onDismissSuggestion={(s) => dismissSuggestion.mutate(s.id)}
+              onMaterialize={setMaterializingPerson}
+              mergeBusy={mergingSuggestionId === personSuggestions.get(p.id)?.id}
             />
           ))}
         </div>
@@ -257,6 +253,8 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
         </div>
       )}
 
+      {!isScanning && !isLoading && persons.length > 0 && <RespectedFolders libraryId={libraryId} />}
+
       {selectMode && (
         <div className="fixed bottom-6 left-1/2 z-20 -translate-x-28">
           <div className="flex items-center gap-3 rounded-2xl border border-zinc-200 bg-white px-5 py-3 shadow-xl">
@@ -278,6 +276,26 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
             )}
           </div>
         </div>
+      )}
+
+      {reviewingSuggestion && (
+        <MatchReviewModal
+          libraryId={libraryId}
+          suggestion={reviewingSuggestion}
+          onClose={() => setReviewingSuggestion(null)}
+          onCommitted={() => {
+            setReviewingSuggestion(null)
+          }}
+        />
+      )}
+
+      {materializingPerson && (
+        <MaterializeReviewModal
+          libraryId={libraryId}
+          person={materializingPerson}
+          onClose={() => setMaterializingPerson(null)}
+          onCommitted={() => setMaterializingPerson(null)}
+        />
       )}
     </div>
   )

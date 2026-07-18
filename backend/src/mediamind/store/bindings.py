@@ -66,6 +66,17 @@ class BindingRecord:
     created_at: float
 
 
+@dataclass(frozen=True)
+class SuggestionMovePlan:
+    """What a merge would move, computed read-only from a pending suggestion."""
+
+    suggestion_id: int
+    folder_rel: str
+    person_id: int | None
+    leaf_name: str
+    moves: list[tuple[int, str, str, str]]  # (file_id, source_rel, dest_folder_rel, kind)
+
+
 def _suggestion_from_row(row: sqlite3.Row) -> SuggestionRecord:
     return SuggestionRecord(
         id=row["id"],
@@ -216,6 +227,79 @@ def list_suggestions(
         (provider_id, status),
     ).fetchall()
     return [_suggestion_from_row(r) for r in rows]
+
+
+def build_suggestion_merge_moves(
+    conn: sqlite3.Connection,
+    suggestion_id: int,
+    *,
+    extra_reassignments: dict[int, str] | None = None,
+) -> SuggestionMovePlan:
+    """Read-only: compute the file moves a merge-into-folder would perform.
+
+    `coverage` on a suggestion only measures the folder->person direction
+    (what fraction of the folder matches the person). This computes the
+    reverse: for a lone-person suggestion, this person's other photos
+    elsewhere in the library that a merge would bring into `folder_rel`,
+    using the same face data `folder_patterns.load_folder_files` already
+    loads for detection so the two stay consistent. Group suggestions have
+    no single owning person, so they plan no reverse moves.
+
+    `extra_reassignments` (file_id -> dest_folder_rel) layers in ad hoc
+    corrections from the review modal — e.g. sending a misclassified folder
+    outlier to a different folder entirely — on top of the computed set.
+    """
+    row = conn.execute(
+        "SELECT * FROM binding_suggestions WHERE id = ?", (suggestion_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Suggestion {suggestion_id} not found")
+    if row["status"] != "pending":
+        raise ValueError(f"Suggestion {suggestion_id} is already {row['status']}")
+
+    folder_rel = row["folder_rel"]
+    person_ids = json.loads(row["person_ids"])
+    leaf_name = PurePosixPath(folder_rel).name
+
+    moves: dict[int, tuple[str, str]] = {}  # file_id -> (source_rel, dest_folder_rel)
+    person_id: int | None = None
+    if row["kind"] == "person" and len(person_ids) == 1:
+        person_id = person_ids[0]
+        for f in load_folder_files(conn, row["provider_id"]):
+            if person_id in f.person_ids and PurePosixPath(f.path).parent.as_posix() != folder_rel:
+                moves[f.file_id] = (f.path, folder_rel)
+
+    if extra_reassignments:
+        placeholders = ",".join("?" * len(extra_reassignments))
+        rows = conn.execute(
+            f"SELECT id, path FROM files WHERE id IN ({placeholders})",
+            list(extra_reassignments.keys()),
+        ).fetchall()
+        by_id = {r["id"]: r["path"] for r in rows}
+        for fid, dest_folder_rel in extra_reassignments.items():
+            if fid in by_id:
+                moves[fid] = (by_id[fid], dest_folder_rel)
+
+    kind_by_id: dict[int, str] = {}
+    if moves:
+        placeholders = ",".join("?" * len(moves))
+        kind_by_id = {
+            r["id"]: r["kind"]
+            for r in conn.execute(
+                f"SELECT id, kind FROM files WHERE id IN ({placeholders})", list(moves.keys())
+            ).fetchall()
+        }
+
+    return SuggestionMovePlan(
+        suggestion_id=suggestion_id,
+        folder_rel=folder_rel,
+        person_id=person_id,
+        leaf_name=leaf_name,
+        moves=[
+            (fid, src, dest, kind_by_id.get(fid, "other"))
+            for fid, (src, dest) in sorted(moves.items())
+        ],
+    )
 
 
 def accept_suggestion(conn: sqlite3.Connection, suggestion_id: int) -> BindingRecord:

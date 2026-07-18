@@ -115,7 +115,11 @@ export function DevLogPanel(): React.JSX.Element {
             </div>
           </div>
 
-          <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-3 py-2 font-mono">
+          <div
+            ref={scrollRef}
+            onScroll={handleScroll}
+            className="flex-1 select-text overflow-y-auto px-3 py-2 font-mono"
+          >
             {visible.length === 0 ? (
               <p className="text-zinc-600">No log entries yet.</p>
             ) : (

@@ -149,6 +149,8 @@ def create_app(
     from mediamind.api.routes import pending
     from mediamind.api.routes import multi_person
     from mediamind.api.routes import bindings
+    from mediamind.api.routes import faces_prep
+    from mediamind.api.routes import materialize
 
     app.include_router(libraries.router, prefix="/v1")
     app.include_router(files.router, prefix="/v1")
@@ -162,5 +164,7 @@ def create_app(
     app.include_router(pending.router, prefix="/v1")
     app.include_router(multi_person.router, prefix="/v1")
     app.include_router(bindings.router, prefix="/v1")
+    app.include_router(faces_prep.router, prefix="/v1")
+    app.include_router(materialize.router, prefix="/v1")
 
     return app

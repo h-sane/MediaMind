@@ -28,6 +28,7 @@ from mediamind.store.persons import (
     rename_person,
     latest_faces_scan,
 )
+from mediamind.store.rejected_faces import reject_face
 
 router = APIRouter(tags=["persons"])
 
@@ -168,6 +169,22 @@ def list_person_media(library_id: str, person_id: int, request: Request):
         )
         for fi in items
     ]
+
+
+@router.post("/libraries/{library_id}/faces/{face_id}/reject")
+def reject_face_endpoint(library_id: str, face_id: int, request: Request):
+    """Flag a specific detection as "not a face" (background/object false
+    positive) — removes it immediately and keeps it from resurfacing on
+    future rescans of the same image."""
+    _, library_root = _get_library_and_root(request, library_id)
+    conn = _open_library_db(library_root)
+    try:
+        result = reject_face(conn, face_id)
+    finally:
+        conn.close()
+    if result is None:
+        raise HTTPException(status_code=404, detail="Unknown face id")
+    return {"ok": True}
 
 
 @router.get("/libraries/{library_id}/faces/{face_id}/thumbnail")

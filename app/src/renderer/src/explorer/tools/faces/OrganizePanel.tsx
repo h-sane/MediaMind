@@ -174,7 +174,18 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
         {isLoading && <p className="text-sm text-zinc-400">Loading plan…</p>}
         {isError && <p className="text-sm text-zinc-400">No face scan found. Run a face scan first to organize by people.</p>}
 
-        {preview && (
+        {preview && preview.planned === 0 && (
+          <div className="rounded-xl border border-dashed border-zinc-200 bg-zinc-50 px-4 py-6 text-center">
+            <p className="text-sm font-medium text-zinc-600">Nothing to organize right now</p>
+            <p className="mx-auto mt-1 max-w-sm text-xs text-zinc-400">
+              Every detected person&apos;s photos are already in place, sitting in a respected folder, or nobody
+              has been named or matched to a folder yet. Name people or accept a folder match on the People
+              tab, then come back.
+            </p>
+          </div>
+        )}
+
+        {preview && preview.planned > 0 && (
           <>
             <p className="mb-4 text-sm text-zinc-700">
               <span className="font-medium">{preview.planned}</span> files will be organized into{' '}

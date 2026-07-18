@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './client'
 import { isRealFolder } from '../stores/explorer'
 import { useJobsStore } from '../stores/jobs'
-import type { DuplicateFile, Person } from './client'
+import type { DuplicateFile, MaterializeBody, Person, SuggestionMergeBody } from './client'
 
 // ---------------------------------------------------------------------------
 // Engine + libraries
@@ -704,6 +704,43 @@ export function usePersonMedia(libraryId: string, personId: number) {
   })
 }
 
+export function useRejectFace(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (faceId: number) => api.persons.rejectFace(libraryId, faceId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['persons', libraryId] })
+      qc.invalidateQueries({ queryKey: ['person-media', libraryId] })
+    }
+  })
+}
+
+export function useMaterializePreview(libraryId: string, personId: number | null) {
+  return useQuery({
+    queryKey: ['materialize-preview', libraryId, personId],
+    queryFn: () => api.persons.materializePreview(libraryId, personId as number),
+    enabled: personId !== null,
+    retry: false
+  })
+}
+
+export function useMaterializePerson(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ personId, body }: { personId: number; body: MaterializeBody }) =>
+      api.persons.materialize(libraryId, personId, body),
+    onSuccess: (_data, vars) => {
+      if (!vars.body.dry_run) {
+        qc.invalidateQueries({ queryKey: ['persons', libraryId] })
+        qc.invalidateQueries({ queryKey: ['bindings', libraryId] })
+        qc.invalidateQueries({ queryKey: ['binding-suggestions', libraryId] })
+        qc.invalidateQueries({ queryKey: ['organize-preview', libraryId] })
+        qc.invalidateQueries({ queryKey: ['files', libraryId] })
+      }
+    }
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Thumbnails (fetch with auth header → object URL, revoked on unmount)
 // ---------------------------------------------------------------------------
@@ -943,6 +980,59 @@ export function useSetBindingOutliers(libraryId: string) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['bindings', libraryId] })
       qc.invalidateQueries({ queryKey: ['organize-preview', libraryId] })
+    }
+  })
+}
+
+export function useSuggestionMergePreview(libraryId: string, suggestionId: number | null) {
+  return useQuery({
+    queryKey: ['suggestion-merge-preview', libraryId, suggestionId],
+    queryFn: () => api.bindings.mergePreview(libraryId, suggestionId as number),
+    enabled: suggestionId !== null,
+    retry: false
+  })
+}
+
+export function useMergeSuggestion(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      suggestionId,
+      body
+    }: {
+      suggestionId: number
+      body?: SuggestionMergeBody
+    }) => api.bindings.merge(libraryId, suggestionId, body),
+    onSuccess: (_data, vars) => {
+      if (!vars.body?.dry_run) {
+        qc.invalidateQueries({ queryKey: ['binding-suggestions', libraryId] })
+        qc.invalidateQueries({ queryKey: ['bindings', libraryId] })
+        qc.invalidateQueries({ queryKey: ['organize-preview', libraryId] })
+        qc.invalidateQueries({ queryKey: ['persons', libraryId] })
+        qc.invalidateQueries({ queryKey: ['files', libraryId] })
+      }
+    }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Faces prep gate (pre-scan check for loose vs. pre-sorted folders)
+// ---------------------------------------------------------------------------
+
+export function useFacesPrep(libraryId: string) {
+  return useQuery({
+    queryKey: ['faces-prep', libraryId],
+    queryFn: () => api.facesPrep.get(libraryId),
+    retry: false
+  })
+}
+
+export function useCreateUnsortedFolder(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ dry_run }: { dry_run: boolean }) => api.facesPrep.createUnsorted(libraryId, dry_run),
+    onSuccess: (_data, vars) => {
+      if (!vars.dry_run) qc.invalidateQueries({ queryKey: ['faces-prep', libraryId] })
     }
   })
 }

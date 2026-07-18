@@ -1,8 +1,9 @@
 import { useMemo, useRef, useState } from 'react'
-import { ArrowLeft } from 'lucide-react'
-import { usePersons, usePersonMedia } from '../../../api/hooks'
+import { ArrowLeft, X } from 'lucide-react'
+import { usePersons, usePersonMedia, useRejectFace } from '../../../api/hooks'
 import { useZoomScale } from '../../../hooks/useZoomScale'
 import { FileThumbnail } from '../../../components/FileThumbnail'
+import { FaceThumbnail } from '../../../components/FaceThumbnail'
 import { MediaViewer } from '../../../components/MediaViewer'
 
 interface Props {
@@ -25,6 +26,7 @@ export function PersonDetailPanel({ libraryId, personId, onBack }: Props): React
 
   const { data: media, isLoading, isError } = usePersonMedia(libraryId, personId)
   const files = useMemo(() => media ?? [], [media])
+  const rejectFace = useRejectFace(libraryId)
 
   const [viewerIndex, setViewerIndex] = useState<number | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -68,13 +70,34 @@ export function PersonDetailPanel({ libraryId, personId, onBack }: Props): React
           style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${Math.round(8 * 16 * zoom)}px, 1fr))` }}
         >
           {files.map((f, i) => (
-            <figure key={f.file_id} title={f.path}>
+            <figure key={f.file_id} title={f.path} className="relative">
               <button type="button" onClick={() => setViewerIndex(i)} className="block w-full cursor-pointer">
                 <FileThumbnail libraryId={libraryId} path={f.path} kind={f.kind} className="aspect-square w-full" />
               </button>
               <figcaption className="mt-1 truncate text-center text-[11px] text-zinc-500">
                 {fileName(f.path)}
               </figcaption>
+
+              <div className="absolute left-1 top-1 flex items-center gap-1">
+                <FaceThumbnail
+                  libraryId={libraryId}
+                  faceId={f.face_id}
+                  size={32}
+                  className="ring-2 ring-white"
+                />
+                <button
+                  type="button"
+                  title="Not a face — this crop is a background or object, not a person"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    rejectFace.mutate(f.face_id)
+                  }}
+                  disabled={rejectFace.isPending}
+                  className="flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white transition hover:bg-red-600 disabled:opacity-40"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
             </figure>
           ))}
         </div>

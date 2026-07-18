@@ -418,6 +418,62 @@ export interface FolderBinding {
   created_at: number
 }
 
+export interface MovePreviewItem {
+  file_id: number
+  source_rel: string
+  dest_folder_rel: string
+  kind: string
+}
+
+export interface SuggestionMergePreview {
+  suggestion_id: number
+  folder_rel: string
+  person_names: string[]
+  leaf_name: string
+  move_count: number
+  moves: MovePreviewItem[]
+  folder_outliers: OutlierFile[]
+}
+
+export interface ReassignItem {
+  file_id: number
+  dest_folder_rel: string
+}
+
+export interface SuggestionMergeBody {
+  dry_run?: boolean
+  expected_move_count?: number | null
+  excluded_file_ids?: number[]
+  reassignments?: ReassignItem[]
+}
+
+export interface FacesPrep {
+  has_subfolders: boolean
+  top_level_loose_count: number
+  named_subfolder_count: number
+  already_has_unsorted: boolean
+  recommend_unsorted: boolean
+}
+
+export interface MaterializeCandidate {
+  file_id: number
+  path: string
+  kind: string
+}
+
+export interface MaterializePreview {
+  person_id: number
+  candidates: MaterializeCandidate[]
+}
+
+export interface MaterializeBody {
+  name: string
+  dry_run?: boolean
+  expected_move_count?: number | null
+  excluded_file_ids?: number[]
+  reassignments?: ReassignItem[]
+}
+
 // ---------------------------------------------------------------------------
 // API surface
 // ---------------------------------------------------------------------------
@@ -681,7 +737,23 @@ export const api = {
       )
       if (!res.ok) throw new Error('Face thumbnail unavailable')
       return URL.createObjectURL(await res.blob())
-    }
+    },
+
+    rejectFace: (libraryId: string, faceId: number) =>
+      request<{ ok: boolean }>('POST', `/v1/libraries/${libraryId}/faces/${faceId}/reject`),
+
+    materializePreview: (libraryId: string, personId: number) =>
+      request<MaterializePreview>(
+        'GET',
+        `/v1/libraries/${libraryId}/persons/${personId}/materialize/preview`
+      ),
+
+    materialize: (libraryId: string, personId: number, body: MaterializeBody) =>
+      request<ExecutionReport>(
+        'POST',
+        `/v1/libraries/${libraryId}/persons/${personId}/materialize`,
+        body
+      )
   },
 
   bindings: {
@@ -718,6 +790,28 @@ export const api = {
     setOutliers: (libraryId: string, bindingId: number, fileIds: number[]) =>
       request<FolderBinding>('POST', `/v1/libraries/${libraryId}/bindings/${bindingId}/outliers`, {
         file_ids: fileIds
+      }),
+
+    mergePreview: (libraryId: string, suggestionId: number) =>
+      request<SuggestionMergePreview>(
+        'GET',
+        `/v1/libraries/${libraryId}/bindings/suggestions/${suggestionId}/merge/preview`
+      ),
+
+    merge: (libraryId: string, suggestionId: number, body: SuggestionMergeBody = {}) =>
+      request<ExecutionReport>(
+        'POST',
+        `/v1/libraries/${libraryId}/bindings/suggestions/${suggestionId}/merge`,
+        body
+      )
+  },
+
+  facesPrep: {
+    get: (libraryId: string) => request<FacesPrep>('GET', `/v1/libraries/${libraryId}/faces/prep`),
+
+    createUnsorted: (libraryId: string, dryRun: boolean) =>
+      request<ExecutionReport>('POST', `/v1/libraries/${libraryId}/faces/prep/create-unsorted`, {
+        dry_run: dryRun
       })
   }
 }
