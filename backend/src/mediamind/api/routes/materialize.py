@@ -26,6 +26,7 @@ from mediamind.core.libraries import LibraryRegistry
 from mediamind.core.organize_plan import safe_folder_name
 from mediamind.core.safety import FileOp, execute as safety_execute, new_manifest_path
 from mediamind.store import materialize as materialize_store
+from mediamind.store import rejected_persons
 from mediamind.store.audit import record_action
 from mediamind.store.db import library_db_path, open_db
 from mediamind.store.materialize import AlreadyBoundError
@@ -147,6 +148,13 @@ def materialize(library_id: str, person_id: int, body: MaterializeIn, request: R
                         conn.execute("UPDATE files SET path = ? WHERE path = ?", (new_rel, old_rel))
                     except ValueError:
                         pass  # source outside library_root — skip gracefully
+
+            # Same as merge_suggestion: durably record "not this person" for
+            # everything excluded or redirected, so a later organize run
+            # never silently re-files it under this person.
+            rejected_ids = list(excluded) + [r.file_id for r in body.reassignments]
+            rejected_persons.reject_person_files(conn, provider_id, person_id, rejected_ids)
+
             conn.commit()
 
             # Binding + rename apply regardless of how many stray files moved,

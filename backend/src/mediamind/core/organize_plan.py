@@ -80,11 +80,36 @@ def build_organize_plan(
     ):
         frozen_folders[b["folder_rel"]] = set(json.loads(b["accepted_outlier_file_ids"] or "[]"))
 
+    # Reverse of frozen_folders: person_id -> their bound folder_rel, so a
+    # bound person's stray photos found elsewhere route home instead of into
+    # a fresh People/<name> (the routing gap this lookup exists to close).
+    bound_folder_by_person: dict[int, str] = {}
+    for r in conn.execute(
+        """
+        SELECT m.person_id AS pid, b.folder_rel AS folder_rel
+        FROM folder_binding_members m JOIN folder_bindings b ON b.id = m.binding_id
+        WHERE b.provider_id = ?
+        """,
+        (provider_id,),
+    ):
+        bound_folder_by_person[int(r["pid"])] = r["folder_rel"]
+
+    # content_hash -> set of person_ids the user explicitly rejected for that
+    # file (folder-match merge / materialize review's "not this person").
+    # Keyed by content_hash, not faces.id/files.id, so it survives the
+    # faces-row rebuild every rescan does.
+    rejected_by_hash: dict[str, set[int]] = {}
+    for r in conn.execute(
+        "SELECT content_hash, person_id FROM rejected_person_files WHERE provider_id = ?",
+        (provider_id,),
+    ):
+        rejected_by_hash.setdefault(r["content_hash"], set()).add(int(r["person_id"]))
+
     # Aggregate face data per file
     file_data: dict[int, dict] = {}
     for row in conn.execute(
         """
-        SELECT fi.id, fi.path, fi.decoded_ok, f.person_id
+        SELECT fi.id, fi.path, fi.content_hash, fi.decoded_ok, f.person_id
         FROM files fi
         JOIN faces f ON f.file_id = fi.id
         WHERE f.provider_id = ?
@@ -95,6 +120,7 @@ def build_organize_plan(
         if fid not in file_data:
             file_data[fid] = {
                 "path": row["path"],
+                "content_hash": row["content_hash"],
                 "decoded_ok": bool(row["decoded_ok"]),
                 "person_ids": set(),
             }
@@ -112,32 +138,43 @@ def build_organize_plan(
         if accepted_outliers is not None and fid not in accepted_outliers:
             continue  # folder is a respected pre-existing binding — leave in place
 
+        # Subtract any person explicitly rejected for this exact file. A file
+        # whose only candidate person was rejected is left in place, same as
+        # a frozen-folder skip — the safest, least-surprising outcome for
+        # "not this person".
+        rejected_pids = rejected_by_hash.get(fd["content_hash"] or "", set())
+        effective_person_ids = person_ids - rejected_pids
+        if person_ids and not effective_person_ids:
+            continue
+
         if not decoded_ok:
             dest_folder = "_unsorted"
             dest_pid: int | None = None
             dest_name: str | None = None
-        elif not person_ids:
+        elif not effective_person_ids:
             # Has face records but all person_id = NULL (noise cluster)
             dest_folder = "_noise"
             dest_pid = None
             dest_name = None
-        elif len(person_ids) == 1:
-            dest_pid = next(iter(person_ids))
+        elif len(effective_person_ids) == 1:
+            dest_pid = next(iter(effective_person_ids))
             dest_name = person_display.get(dest_pid)
             dest_folder = safe_folder_name(dest_name) if dest_name else "_other"
         else:
             # Multiple persons in this file — use override or pick dominant
-            if fid in route_choices:
+            # (excluding anyone rejected for this file from either path)
+            if fid in route_choices and route_choices[fid] in effective_person_ids:
                 dest_pid = route_choices[fid]
             else:
+                eligible_placeholders = ",".join("?" * len(effective_person_ids))
                 row = conn.execute(
-                    """
+                    f"""
                     SELECT person_id, COUNT(*) AS n
                     FROM faces
-                    WHERE file_id = ? AND provider_id = ? AND person_id IS NOT NULL
+                    WHERE file_id = ? AND provider_id = ? AND person_id IN ({eligible_placeholders})
                     GROUP BY person_id ORDER BY n DESC LIMIT 1
                     """,
-                    (fid, provider_id),
+                    (fid, provider_id, *effective_person_ids),
                 ).fetchone()
                 dest_pid = int(row["person_id"]) if row else None
             if dest_pid is not None:
@@ -147,7 +184,10 @@ def build_organize_plan(
                 dest_folder = "_noise"
                 dest_name = None
 
-        dest_folder_rel = f"{target_rel}/{dest_folder}"
+        if dest_pid is not None and dest_pid in bound_folder_by_person:
+            dest_folder_rel = bound_folder_by_person[dest_pid]
+        else:
+            dest_folder_rel = f"{target_rel}/{dest_folder}"
 
         # Skip files already in their destination folder — prevents _1 churn on re-run.
         if PurePosixPath(source_rel).parent.as_posix() == dest_folder_rel:

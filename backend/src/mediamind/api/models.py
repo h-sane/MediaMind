@@ -421,6 +421,7 @@ class BindingSuggestionOut(BaseModel):
     person_ids: list[int]
     person_names: list[str]
     outlier_file_ids: list[int]
+    move_count: int
     status: str
     created_at: float
 

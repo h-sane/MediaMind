@@ -11,7 +11,7 @@ import sqlite3
 from pathlib import Path
 from typing import Callable
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _V1_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -225,6 +225,29 @@ CREATE INDEX IF NOT EXISTS idx_rejected_face_regions_key
     conn.commit()
 
 
+def _v7_migration(conn: sqlite3.Connection) -> None:
+    """Schema v7: person-scoped file rejections. A user reviewing a
+    folder-match/materialize batch can say "not this person" about a specific
+    file; that decision must survive the wholesale faces-row rebuild every
+    rescan does (see persist_face_scan), so it's keyed by content_hash (not
+    faces.id) same as rejected_face_regions — but additionally scoped to
+    person_id, since this is "not this person" (a real face, wrong person),
+    not "not a face at all". Consulted by organize_plan.py so a rejected
+    file is never auto-routed into that person's bound folder."""
+    conn.executescript("""
+CREATE TABLE IF NOT EXISTS rejected_person_files (
+    id INTEGER PRIMARY KEY,
+    content_hash TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    person_id INTEGER NOT NULL,
+    created_at REAL NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rejected_person_files_key
+    ON rejected_person_files(content_hash, provider_id, person_id);
+""")
+    conn.commit()
+
+
 # v2 is a string; v3+ are callables (ALTER TABLE requires special handling).
 _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (2, _V2_ADDITIONS),
@@ -232,6 +255,7 @@ _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (4, _v4_migration),
     (5, _v5_migration),
     (6, _v6_migration),
+    (7, _v7_migration),
 ]
 
 

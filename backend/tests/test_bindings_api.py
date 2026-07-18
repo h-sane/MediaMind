@@ -462,3 +462,22 @@ def test_suggestion_merge_excludes_and_reassigns(client, tmp_path):
     assert (lib_dir / "Random" / "other.jpg").exists()
     # Outlier was reassigned to an arbitrary folder, not the bound folder.
     assert (lib_dir / "Elsewhere" / "img_outlier.jpg").exists()
+
+    # "Not this person" was recorded durably (not just skipped for this one
+    # merge) for both the excluded stray and the redirected outlier.
+    data_dir = library_data_dir(lib_dir)
+    conn = open_db(library_db_path(data_dir))
+    rejected_pids = {
+        r["person_id"]
+        for r in conn.execute(
+            "SELECT person_id FROM rejected_person_files WHERE content_hash IN ('hstray', 'houtlier')"
+        )
+    }
+    conn.close()
+    assert len(rejected_pids) == 1  # both rows recorded, both against Alice
+
+    # And a later generic Organize run must not sweep the excluded stray back
+    # into Alice's bound folder (the routing-gap fix's other half).
+    preview = client.post(f"/v1/libraries/{lib_id}/organize/preview").json()
+    dests = {m["source_rel"]: m["dest_folder_rel"] for m in preview["moves"]}
+    assert "Random/other.jpg" not in dests

@@ -39,6 +39,7 @@ from mediamind.core.jobs import JobManager
 from mediamind.core.libraries import LibraryRegistry
 from mediamind.core.safety import FileOp, execute as safety_execute, new_manifest_path
 from mediamind.store import bindings as bindings_store
+from mediamind.store import rejected_persons
 from mediamind.store.audit import record_action
 from mediamind.store.bindings import BindingConflictError
 from mediamind.store.db import library_db_path, open_db
@@ -142,7 +143,15 @@ def list_binding_suggestions(library_id: str, request: Request, status: str = "p
                 id=r.id, folder_rel=r.folder_rel, kind=r.kind, file_count=r.file_count,
                 coverage=r.coverage, person_ids=r.person_ids,
                 person_names=_person_names(conn, r.person_ids),
-                outlier_file_ids=r.outlier_file_ids, status=r.status, created_at=r.created_at,
+                outlier_file_ids=r.outlier_file_ids,
+                # Group suggestions have no single owning person, so a merge
+                # plans no reverse moves for them — 0 without the extra query.
+                move_count=(
+                    len(bindings_store.build_suggestion_merge_moves(conn, r.id).moves)
+                    if r.kind == "person" and r.status == "pending"
+                    else 0
+                ),
+                status=r.status, created_at=r.created_at,
             )
             for r in records
         ]
@@ -238,6 +247,7 @@ def merge_suggestion(library_id: str, suggestion_id: int, body: SuggestionMergeI
     library_root = _get_library_root(request, library_id)
     conn = _open_db(library_root)
     try:
+        provider_id = _require_provider_id(conn, library_root)
         try:
             plan = bindings_store.build_suggestion_merge_moves(
                 conn,
@@ -283,6 +293,15 @@ def merge_suggestion(library_id: str, suggestion_id: int, body: SuggestionMergeI
                         conn.execute("UPDATE files SET path = ? WHERE path = ?", (new_rel, old_rel))
                     except ValueError:
                         pass  # source outside library_root — skip gracefully
+
+            # Record "not this person" durably for everything the user kept
+            # out of the move (excluded or sent elsewhere), so a later
+            # organize run never silently re-files it under this person —
+            # see rejected_persons.py.
+            if plan.person_id is not None:
+                rejected_ids = list(excluded) + [r.file_id for r in body.reassignments]
+                rejected_persons.reject_person_files(conn, provider_id, plan.person_id, rejected_ids)
+
             conn.commit()
 
             # Binding + rename apply regardless of how many stray files moved —

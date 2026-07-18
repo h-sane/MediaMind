@@ -391,6 +391,7 @@ export interface BindingSuggestion {
   person_ids: number[]
   person_names: string[]
   outlier_file_ids: number[]
+  move_count: number
   status: 'pending' | 'accepted' | 'dismissed'
   created_at: number
 }
