@@ -330,11 +330,22 @@ def make_face_scan_runner(
             # not-yet-reached slow video's existing faces as stale.
             seen_file_ids = {fid for fid in file_ids if fid is not None}
             if seen_file_ids:
-                placeholders = ",".join("?" * len(seen_file_ids))
-                conn.execute(
-                    f"DELETE FROM faces WHERE provider_id = ? AND file_id NOT IN ({placeholders})",
-                    [provider_id, *seen_file_ids],
+                # A NOT IN (?,?,...) with one placeholder per file blows past
+                # SQLite's ~32,766 bound-parameter limit on large libraries
+                # (OperationalError: too many SQL variables), failing the scan
+                # at the finish line after hours of work. A temp table sidesteps
+                # the limit entirely — each INSERT binds only a few params.
+                conn.execute("CREATE TEMP TABLE IF NOT EXISTS _scan_seen_file_ids (file_id INTEGER PRIMARY KEY)")
+                conn.execute("DELETE FROM _scan_seen_file_ids")
+                conn.executemany(
+                    "INSERT INTO _scan_seen_file_ids (file_id) VALUES (?)",
+                    [(fid,) for fid in seen_file_ids],
                 )
+                conn.execute(
+                    "DELETE FROM faces WHERE provider_id = ? AND file_id NOT IN (SELECT file_id FROM _scan_seen_file_ids)",
+                    (provider_id,),
+                )
+                conn.execute("DROP TABLE _scan_seen_file_ids")
                 conn.commit()
 
             ctx.report_progress(0, 0, "clustering")

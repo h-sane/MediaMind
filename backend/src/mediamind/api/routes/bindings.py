@@ -37,6 +37,7 @@ from mediamind.api.models import (
 from mediamind.config import library_data_dir
 from mediamind.core.jobs import JobManager
 from mediamind.core.libraries import LibraryRegistry
+from mediamind.core.organize_plan import safe_dest_folder_rel
 from mediamind.core.safety import FileOp, execute as safety_execute, new_manifest_path
 from mediamind.store import bindings as bindings_store
 from mediamind.store import rejected_persons
@@ -248,11 +249,17 @@ def merge_suggestion(library_id: str, suggestion_id: int, body: SuggestionMergeI
     conn = _open_db(library_root)
     try:
         provider_id = _require_provider_id(conn, library_root)
+
+        try:
+            reassignments = {
+                r.file_id: safe_dest_folder_rel(r.dest_folder_rel, library_root) for r in body.reassignments
+            }
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
         try:
             plan = bindings_store.build_suggestion_merge_moves(
-                conn,
-                suggestion_id,
-                extra_reassignments={r.file_id: r.dest_folder_rel for r in body.reassignments},
+                conn, suggestion_id, extra_reassignments=reassignments,
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -268,6 +275,17 @@ def merge_suggestion(library_id: str, suggestion_id: int, body: SuggestionMergeI
                     f"server computed {len(moves)}. Refresh and re-confirm."
                 ),
             )
+
+        # Bind before move: a partial move against a correctly-created binding
+        # self-heals on the next organize plan (the file just gets picked up
+        # again); files moved without a binding do not. Doing this first also
+        # means an IntegrityError (person already bound elsewhere) is caught
+        # as a clean 409 before any file is touched.
+        if not body.dry_run:
+            try:
+                bindings_store.accept_suggestion(conn, suggestion_id)
+            except (BindingConflictError, ValueError) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
 
         ops = [
             FileOp(source=library_root / src, dest_folder=library_root / dest, mode="move")
@@ -294,22 +312,27 @@ def merge_suggestion(library_id: str, suggestion_id: int, body: SuggestionMergeI
                     except ValueError:
                         pass  # source outside library_root — skip gracefully
 
-            # Record "not this person" durably for everything the user kept
-            # out of the move (excluded or sent elsewhere), so a later
-            # organize run never silently re-files it under this person —
-            # see rejected_persons.py.
             if plan.person_id is not None:
-                rejected_ids = list(excluded) + [r.file_id for r in body.reassignments]
+                # Record "not this person" durably for everything the user kept
+                # out of the move (excluded, sent elsewhere, or rejected as an
+                # in-folder outlier) so a later organize run never silently
+                # re-files it under this person — see rejected_persons.py.
+                rejected_ids = (
+                    list(excluded) + [r.file_id for r in body.reassignments] + list(body.rejected_outlier_file_ids)
+                )
                 rejected_persons.reject_person_files(conn, provider_id, plan.person_id, rejected_ids)
 
-            conn.commit()
+                # Outlier files the user confirmed ARE this person get assigned
+                # directly — otherwise the review the user just did is dropped
+                # on the floor and the same files resurface as outliers forever.
+                if body.confirmed_outlier_file_ids:
+                    placeholders = ",".join("?" * len(body.confirmed_outlier_file_ids))
+                    conn.execute(
+                        f"UPDATE faces SET person_id = ? WHERE provider_id = ? AND file_id IN ({placeholders})",
+                        (plan.person_id, provider_id, *body.confirmed_outlier_file_ids),
+                    )
 
-            # Binding + rename apply regardless of how many stray files moved —
-            # the folder association is valid even if a file or two failed.
-            try:
-                bindings_store.accept_suggestion(conn, suggestion_id)
-            except (BindingConflictError, ValueError) as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            conn.commit()
 
         return ExecutionReportOut(
             planned=report.planned,

@@ -446,6 +446,8 @@ export interface SuggestionMergeBody {
   expected_move_count?: number | null
   excluded_file_ids?: number[]
   reassignments?: ReassignItem[]
+  confirmed_outlier_file_ids?: number[]
+  rejected_outlier_file_ids?: number[]
 }
 
 export interface FacesPrep {

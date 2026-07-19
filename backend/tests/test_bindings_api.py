@@ -18,7 +18,7 @@ from mediamind.providers.catalog import CatalogEntry, LicenseInfo
 from mediamind.providers.manager import ProviderManager
 from mediamind.store.db import library_db_path, open_db
 from mediamind.store.embeddings import CachedFace
-from mediamind.store.persons import FileFaces, persist_face_scan, upsert_file
+from mediamind.store.persons import FileFaces, persist_face_scan, rename_person, upsert_file
 
 PROVIDER = "fake-color"
 
@@ -325,6 +325,16 @@ def test_bindings_outlier_review_and_approval(client, tmp_path):
 
     res = client.get(f"/v1/libraries/{lib_id}/bindings")
     assert res.json()["bindings"][0]["outliers"][0]["accepted"] is True
+
+    # Organize only ever routes named people (F10) — the outlier's person
+    # was never matched to the folder, so name them directly.
+    data_dir = library_data_dir(lib_dir)
+    conn = open_db(library_db_path(data_dir))
+    outlier_pid = conn.execute(
+        "SELECT person_id FROM faces WHERE file_id = ?", (outlier_fid,)
+    ).fetchone()["person_id"]
+    rename_person(conn, outlier_pid, "Bob")
+    conn.close()
 
     # Only the approved outlier routes; the other 5 stay frozen.
     res = client.post(f"/v1/libraries/{lib_id}/organize/preview")

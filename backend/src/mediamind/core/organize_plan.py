@@ -4,20 +4,25 @@ The plan answers "where should this file go?" without touching anything on disk.
 `build_organize_plan` returns a list of `PlannedMove` dataclasses that can be
 converted directly to `safety.FileOp` objects for execution.
 
-Routing rules (mirrors V0 invariant — every file routes somewhere):
-  - File with exactly one assigned person  → People/<PersonName>/
-  - File with multiple persons             → most-faces-count person's folder
-                                             (or route_choices override)
-  - File with faces but all noise          → People/_noise/
-  - File that failed to decode             → People/_unsorted/
+Routing rules:
+  - File with exactly one assigned, NAMED person → People/<PersonName>/
+  - File with multiple persons, dominant one named → that person's folder
+                                                       (or route_choices override)
+  - File that failed to decode                    → People/_unsorted/
+  - Everything else (unnamed person, all-noise faces, an undecided
+    pending-match review) stays in place — it is never silently moved into a
+    developer-facing holding folder. "Everything routes somewhere" now means
+    "every file has a deliberate destination or deliberately stays put", not
+    "every file physically moves".
 
 Files with zero face records are NOT included in the plan; they stay in place.
 
-Phase B exception: a file whose current folder is an accepted folder-binding
-(`folder_bindings` — pre-existing person/group organization the user chose to
-respect) is excluded from the plan entirely and left in place, unless its
-file id is in that binding's `accepted_outlier_file_ids` (the user explicitly
-approved moving it despite the folder being frozen).
+Phase B exception: a file whose current folder is inside an accepted
+folder-binding's subtree (`folder_bindings` — pre-existing person/group
+organization the user chose to respect, including its subfolders) is excluded
+from the plan entirely and left in place, unless its file id is in that
+binding's `accepted_outlier_file_ids` (the user explicitly approved moving it
+despite the folder being frozen).
 """
 
 from __future__ import annotations
@@ -46,6 +51,45 @@ def safe_folder_name(name: str) -> str:
     return name[:100] or '_unnamed'
 
 
+def is_in_folder_subtree(file_rel: str, folder_rel: str) -> bool:
+    """True if file_rel lives directly in folder_rel or in any subfolder of it.
+
+    Used everywhere a "does this file belong to this bound folder" check
+    happens, so a bound folder's own subfolders (dated albums, event
+    subfolders) are respected too, not just files sitting at its top level.
+    """
+    return PurePosixPath(file_rel).is_relative_to(PurePosixPath(folder_rel))
+
+
+def safe_dest_folder_rel(dest: str, library_root: Path) -> str:
+    """Validate and sanitize a user-supplied destination folder path.
+
+    Rejects absolute paths (POSIX or Windows-drive-letter) and `..` segments,
+    sanitizes each path segment with `safe_folder_name`, and asserts the
+    resolved path stays under `library_root`. Raises ValueError on anything
+    that doesn't hold — callers should turn that into a 422/400 response.
+    """
+    raw = (dest or "").strip()
+    if not raw:
+        raise ValueError("Destination path is empty")
+    if raw.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:[\\/]", raw):
+        raise ValueError(f"Destination path must be relative to the library: {dest!r}")
+
+    parts = [p for p in raw.replace("\\", "/").split("/") if p not in ("", ".")]
+    if any(p == ".." for p in parts):
+        raise ValueError(f"Destination path may not contain '..': {dest!r}")
+    safe_parts = [safe_folder_name(p) for p in parts]
+    if not safe_parts:
+        raise ValueError("Destination path is empty")
+
+    dest_rel = "/".join(safe_parts)
+    root_resolved = library_root.resolve()
+    resolved = (library_root / dest_rel).resolve()
+    if resolved != root_resolved and root_resolved not in resolved.parents:
+        raise ValueError(f"Destination path escapes the library: {dest!r}")
+    return dest_rel
+
+
 def build_organize_plan(
     conn: sqlite3.Connection,
     provider_id: str,
@@ -57,13 +101,33 @@ def build_organize_plan(
     records (never scanned for faces, or scanned with zero detections) are left
     in place and do not appear in the plan.
     """
-    # Person display names: id -> name or auto_label
+    # Person display names: id -> name. Unnamed (auto_label-only) persons are
+    # deliberately excluded — organize only ever moves files for people the
+    # user has actually named, so a first scan never bulldozes strangers and
+    # one-off faces into a wall of People/Person_004…_031 folders.
     person_display: dict[int, str] = {}
     for p in conn.execute(
-        "SELECT id, auto_label, name FROM persons WHERE provider_id = ?",
+        "SELECT id, name FROM persons WHERE provider_id = ? AND name IS NOT NULL",
         (provider_id,),
     ):
-        person_display[int(p["id"])] = p["name"] or p["auto_label"]
+        person_display[int(p["id"])] = p["name"]
+
+    # Files with an undecided pending-match review (a new photo matched to a
+    # named person, awaiting the user's confirm/reject) must never be routed
+    # anywhere until that review happens — see store/persons.py's pending
+    # logic. Excluded wholesale rather than per-face so a partially-decided
+    # file still waits for the rest of its faces to be reviewed too.
+    pending_file_ids: set[int] = set()
+    for r in conn.execute(
+        """
+        SELECT DISTINCT fa.file_id
+        FROM pending_matches pm
+        JOIN faces fa ON fa.id = pm.face_id
+        WHERE pm.decision IS NULL AND fa.provider_id = ?
+        """,
+        (provider_id,),
+    ):
+        pending_file_ids.add(int(r["file_id"]))
 
     # User-assigned route overrides (multi-person review)
     route_choices: dict[int, int] = {}  # file_id -> person_id
@@ -71,8 +135,8 @@ def build_organize_plan(
         route_choices[int(rc["file_id"])] = int(rc["person_id"])
 
     # Accepted folder bindings (Phase B): folder_rel -> set of file ids explicitly
-    # approved to move despite the folder being frozen. Any other file whose
-    # parent is one of these folders is excluded from the plan below.
+    # approved to move despite the folder being frozen. Any other file inside
+    # one of these folders' subtrees is excluded from the plan below.
     frozen_folders: dict[str, set[int]] = {}
     for b in conn.execute(
         "SELECT folder_rel, accepted_outlier_file_ids FROM folder_bindings WHERE provider_id = ?",
@@ -127,16 +191,26 @@ def build_organize_plan(
         if row["person_id"] is not None:
             file_data[fid]["person_ids"].add(int(row["person_id"]))
 
+    def _frozen_accepted_outliers(source_rel: str) -> set[int] | None:
+        """None if source_rel isn't inside any bound folder's subtree;
+        otherwise that binding's accepted_outlier_file_ids."""
+        for folder_rel, accepted in frozen_folders.items():
+            if is_in_folder_subtree(source_rel, folder_rel):
+                return accepted
+        return None
+
     plans: list[PlannedMove] = []
     for fid, fd in file_data.items():
         source_rel: str = fd["path"]
         person_ids: set[int] = fd["person_ids"]
         decoded_ok: bool = fd["decoded_ok"]
 
-        parent_rel = PurePosixPath(source_rel).parent.as_posix()
-        accepted_outliers = frozen_folders.get(parent_rel)
+        accepted_outliers = _frozen_accepted_outliers(source_rel)
         if accepted_outliers is not None and fid not in accepted_outliers:
-            continue  # folder is a respected pre-existing binding — leave in place
+            continue  # folder (or one of its subfolders) is a respected pre-existing binding
+
+        if fid in pending_file_ids:
+            continue  # awaiting the user's confirm/reject in the pending-match review
 
         # Subtract any person explicitly rejected for this exact file. A file
         # whose only candidate person was rejected is left in place, same as
@@ -152,14 +226,15 @@ def build_organize_plan(
             dest_pid: int | None = None
             dest_name: str | None = None
         elif not effective_person_ids:
-            # Has face records but all person_id = NULL (noise cluster)
-            dest_folder = "_noise"
-            dest_pid = None
-            dest_name = None
+            # Has face records but all person_id = NULL (noise cluster) —
+            # nobody to route to; stays in place, same as a zero-face file.
+            continue
         elif len(effective_person_ids) == 1:
             dest_pid = next(iter(effective_person_ids))
             dest_name = person_display.get(dest_pid)
-            dest_folder = safe_folder_name(dest_name) if dest_name else "_other"
+            if dest_name is None:
+                continue  # person not yet named — leave file in place
+            dest_folder = safe_folder_name(dest_name)
         else:
             # Multiple persons in this file — use override or pick dominant
             # (excluding anyone rejected for this file from either path)
@@ -177,12 +252,10 @@ def build_organize_plan(
                     (fid, provider_id, *effective_person_ids),
                 ).fetchone()
                 dest_pid = int(row["person_id"]) if row else None
-            if dest_pid is not None:
-                dest_name = person_display.get(dest_pid)
-                dest_folder = safe_folder_name(dest_name) if dest_name else "_other"
-            else:
-                dest_folder = "_noise"
-                dest_name = None
+            dest_name = person_display.get(dest_pid) if dest_pid is not None else None
+            if dest_name is None:
+                continue  # dominant person unknown/not yet named — leave file in place
+            dest_folder = safe_folder_name(dest_name)
 
         if dest_pid is not None and dest_pid in bound_folder_by_person:
             dest_folder_rel = bound_folder_by_person[dest_pid]
@@ -216,10 +289,9 @@ def build_organize_plan(
             continue  # already planned via the faces join above
         source_rel = row["path"]
 
-        parent_rel = PurePosixPath(source_rel).parent.as_posix()
-        accepted_outliers = frozen_folders.get(parent_rel)
+        accepted_outliers = _frozen_accepted_outliers(source_rel)
         if accepted_outliers is not None and fid not in accepted_outliers:
-            continue  # folder is a respected pre-existing binding — leave in place
+            continue  # folder (or one of its subfolders) is a respected pre-existing binding
 
         if PurePosixPath(source_rel).parent.as_posix() == unsorted_dest:
             continue

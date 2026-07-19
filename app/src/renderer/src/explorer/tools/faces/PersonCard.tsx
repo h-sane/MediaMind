@@ -15,7 +15,6 @@ interface Props {
   onOpen: (id: number) => void
   onMergeIntoFolder?: (suggestion: BindingSuggestion) => void
   onLockFolder?: (suggestion: BindingSuggestion) => void
-  onOpenDetails?: (suggestion: BindingSuggestion) => void
   onDismissSuggestion?: (suggestion: BindingSuggestion) => void
   onMaterialize?: (person: Person) => void
   mergeBusy?: boolean
@@ -37,7 +36,6 @@ export function PersonCard({
   onOpen,
   onMergeIntoFolder,
   onLockFolder,
-  onOpenDetails,
   onDismissSuggestion,
   onMaterialize,
   mergeBusy
@@ -172,19 +170,12 @@ export function PersonCard({
               </button>
             </div>
           ) : (
-            <div className="mt-2 flex gap-1.5">
+            <div className="mt-2">
               <button
                 onClick={() => onMergeIntoFolder?.(suggestion)}
-                disabled={mergeBusy}
-                className="flex-1 rounded-lg bg-emerald-600 px-2 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-500 disabled:opacity-50"
+                className="w-full rounded-lg bg-emerald-600 px-2 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-500"
               >
-                {mergeBusy ? 'Merging…' : 'Merge into folder'}
-              </button>
-              <button
-                onClick={() => onOpenDetails?.(suggestion)}
-                className="rounded-lg border border-emerald-200 px-2 py-1.5 text-xs text-emerald-700 transition hover:bg-emerald-100"
-              >
-                Open details
+                Review &amp; merge into folder
               </button>
             </div>
           )}
