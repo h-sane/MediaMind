@@ -320,9 +320,9 @@ def test_full_pipeline_against_real_media(client: TestClient, tmp_path: Path):
     hashes_after_organize = _content_hashes(lib_dir)
     assert hashes_after_organize == hashes_before, "file content changed during organize (copy-then-delete violated)"
 
-    unsorted_path = lib_dir / "People" / "_unsorted" / "zzz_corrupt.jpg"
+    unsorted_path = lib_dir / "People" / "_Needs Review" / "zzz_corrupt.jpg"
     assert unsorted_path.exists(), (
-        "undecodable file did not route to People/_unsorted -- "
+        "undecodable file did not route to People/_Needs Review -- "
         "violates the 'everything routes somewhere' safety invariant"
     )
 
@@ -330,7 +330,7 @@ def test_full_pipeline_against_real_media(client: TestClient, tmp_path: Path):
         db_row = conn.execute(
             "SELECT path FROM files WHERE path LIKE '%zzz_corrupt.jpg'"
         ).fetchone()
-    assert db_row["path"] == "People/_unsorted/zzz_corrupt.jpg", "files.path not updated after organize execute"
+    assert db_row["path"] == "People/_Needs Review/zzz_corrupt.jpg", "files.path not updated after organize execute"
 
     # Re-running organize immediately must plan nothing further (skip-in-place, fix 3).
     preview2 = client.post(f"/v1/libraries/{lib_id}/organize/preview")
@@ -338,11 +338,14 @@ def test_full_pipeline_against_real_media(client: TestClient, tmp_path: Path):
     assert preview2.json()["planned"] == 0, "re-running organize planned more moves -- churn regression"
 
     # With nothing left to plan, execute must refuse rather than silently no-op.
+    # 409, not 422: real (non-dry-run) execution runs through run_sync as a
+    # JobManager job (Phase 2), and a guard-rejection ValueError from the
+    # runner is always mapped to 409 (client-correctable: refresh and retry).
     res = client.post(
         f"/v1/libraries/{lib_id}/organize/execute",
         json={"dry_run": False, "expected_planned": expected_planned},
     )
-    assert res.status_code == 422
+    assert res.status_code == 409
 
     # Undo restores everything, byte-for-byte.
     res = client.post(f"/v1/libraries/{lib_id}/organize/undo")

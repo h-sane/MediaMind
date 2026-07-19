@@ -42,8 +42,9 @@ function BindingRow({
           onClick={onRelease}
           disabled={busy}
           className="rounded-md px-2 py-1 text-[11px] text-zinc-400 transition hover:bg-zinc-200 hover:text-zinc-700 disabled:opacity-50"
+          title="Stop respecting this folder — Organize may move its files again"
         >
-          Unfreeze
+          Stop respecting
         </button>
       </div>
     </div>

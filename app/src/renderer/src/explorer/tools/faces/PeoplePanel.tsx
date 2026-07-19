@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { ArrowLeftRight } from 'lucide-react'
 import {
   usePersons,
   useMergePersons,
@@ -21,6 +22,8 @@ interface Props {
   libraryId: string
   onOpenPerson: (personId: number) => void
   onOrganize: () => void
+  onReviewPending: () => void
+  onReviewMultiPerson: () => void
 }
 
 function MergeResultBanner({ report, onDismiss }: { report: ExecutionReport; onDismiss: () => void }): React.JSX.Element {
@@ -50,9 +53,14 @@ function MergeResultBanner({ report, onDismiss }: { report: ExecutionReport; onD
 
 /** People grid — the Faces tool's home sub-view. Folder-match suggestions
  * (Phase B/C) now surface directly here as enhanced tiles instead of a
- * separate Suggestions tab. Round-1 scope: Pending and Multi-person review
- * entry points are intentionally omitted (deferred). */
-export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): React.JSX.Element {
+ * separate Suggestions tab. */
+export function PeoplePanel({
+  libraryId,
+  onOpenPerson,
+  onOrganize,
+  onReviewPending,
+  onReviewMultiPerson
+}: Props): React.JSX.Element {
   const jobs = useJobsStore((s) => s.jobs)
   const activeJob = selectJobForLibrary(jobs, libraryId, 'faces')
 
@@ -86,16 +94,23 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [libraryId, hasFaceScan])
 
+  const [showMergeConfirm, setShowMergeConfirm] = useState(false)
+
   const toggleSelect = (id: number) => {
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : prev.length < 2 ? [...prev, id] : prev))
   }
+
+  // selected[0] is absorbed (deleted), selected[1] is the survivor whose name
+  // is kept — order is click order by default, but swappable before confirm
+  // so the user isn't stuck with whichever they happened to click first (F17).
+  const swapMergeDirection = () => setSelected((prev) => (prev.length === 2 ? [prev[1], prev[0]] : prev))
 
   const handleMerge = () => {
     if (selected.length !== 2) return
     const [source, target] = selected
     mergePersons.mutate(
       { sourceId: source, targetId: target },
-      { onSuccess: () => { setSelectMode(false); setSelected([]) } }
+      { onSuccess: () => { setSelectMode(false); setSelected([]); setShowMergeConfirm(false) } }
     )
   }
 
@@ -111,6 +126,8 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
   )
 
   const persons = personsData?.persons ?? []
+  const personDisplayName = (id: number): string =>
+    persons.find((p) => p.id === id)?.name ?? persons.find((p) => p.id === id)?.auto_label ?? `#${id}`
   const sortedPersons = [...persons].sort((a, b) => {
     const sa = personSuggestions.get(a.id)
     const sb = personSuggestions.get(b.id)
@@ -159,6 +176,28 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
         </div>
 
         <div className="flex flex-wrap gap-2">
+          {!!personsData?.pending_count && (
+            <button
+              onClick={onReviewPending}
+              className="flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 transition hover:bg-amber-100"
+            >
+              Confirm new photos
+              <span className="rounded-full bg-amber-200 px-1.5 py-0.5 text-xs font-medium">
+                {personsData.pending_count}
+              </span>
+            </button>
+          )}
+          {!!personsData?.multi_person_count && (
+            <button
+              onClick={onReviewMultiPerson}
+              className="flex items-center gap-1.5 rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-600 transition hover:bg-zinc-50"
+            >
+              Multi-person files
+              <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-xs font-medium text-zinc-500">
+                {personsData.multi_person_count}
+              </span>
+            </button>
+          )}
           {persons.length > 0 && !isScanning && (
             <button
               onClick={onOrganize}
@@ -243,8 +282,8 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
             </p>
             <p className="mt-0.5 text-xs text-amber-700">
               These files could not be decoded (corrupt, unsupported format, or permission error). On organize
-              they will be routed to <code className="rounded bg-amber-100 px-1">People/_unsorted/</code> and left
-              untouched until reviewed.
+              they will be routed to <code className="rounded bg-amber-100 px-1">People/Needs Review/</code> and
+              left untouched until reviewed.
             </p>
           </div>
         </div>
@@ -261,14 +300,55 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
       {selectMode && (
         <div className="fixed bottom-6 left-1/2 z-20 -translate-x-28">
           <div className="flex items-center gap-3 rounded-2xl border border-zinc-200 bg-white px-5 py-3 shadow-xl">
-            <span className="text-sm text-zinc-600">
-              {selected.length === 0
-                ? 'Select 2 people to merge'
-                : selected.length === 1
-                  ? 'Select 1 more person'
-                  : 'Merge these 2 people?'}
-            </span>
+            {selected.length < 2 ? (
+              <span className="text-sm text-zinc-600">
+                {selected.length === 0 ? 'Select 2 people to merge' : 'Select 1 more person'}
+              </span>
+            ) : (
+              <>
+                <span className="text-sm text-zinc-600">
+                  Merge <span className="font-medium text-zinc-900">{personDisplayName(selected[0])}</span> into{' '}
+                  <span className="font-medium text-zinc-900">{personDisplayName(selected[1])}</span>
+                </span>
+                <button
+                  onClick={swapMergeDirection}
+                  title="Swap which person survives"
+                  className="rounded-lg border border-zinc-200 p-1.5 text-zinc-500 hover:bg-zinc-50"
+                >
+                  <ArrowLeftRight className="h-3.5 w-3.5" />
+                </button>
+              </>
+            )}
             {selected.length === 2 && (
+              <button
+                onClick={() => setShowMergeConfirm(true)}
+                disabled={mergePersons.isPending}
+                className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50"
+              >
+                Merge
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {showMergeConfirm && selected.length === 2 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl">
+            <h3 className="mb-2 text-sm font-semibold">Merge these people?</h3>
+            <p className="mb-5 text-xs text-zinc-500">
+              <span className="font-medium text-zinc-700">{personDisplayName(selected[0])}</span> will be merged
+              into <span className="font-medium text-zinc-700">{personDisplayName(selected[1])}</span> —{' '}
+              {personDisplayName(selected[1])} is the name that survives; {personDisplayName(selected[0])} is
+              removed and all of their faces move to {personDisplayName(selected[1])}.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setShowMergeConfirm(false)}
+                className="rounded-lg border border-zinc-200 px-4 py-2 text-sm text-zinc-600 hover:bg-zinc-50"
+              >
+                Cancel
+              </button>
               <button
                 onClick={handleMerge}
                 disabled={mergePersons.isPending}
@@ -276,7 +356,7 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
               >
                 {mergePersons.isPending ? 'Merging…' : 'Merge'}
               </button>
-            )}
+            </div>
           </div>
         </div>
       )}

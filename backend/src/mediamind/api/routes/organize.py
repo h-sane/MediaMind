@@ -28,7 +28,11 @@ from mediamind.api.models import (
 from mediamind.config import library_data_dir
 from mediamind.core.jobs import JobContext, JobManager
 from mediamind.core.libraries import LibraryRegistry
-from mediamind.core.organize_plan import build_organize_plan, plan_hash as compute_plan_hash
+from mediamind.core.organize_plan import (
+    build_organize_plan,
+    build_organize_plan_with_stats,
+    plan_hash as compute_plan_hash,
+)
 from mediamind.core.safety import FileOp, execute as safety_execute, new_manifest_path
 from mediamind.store.audit import last_undoable, list_actions, mark_undone, record_action
 from mediamind.store.db import library_db_path, open_db
@@ -90,7 +94,7 @@ def organize_preview(library_id: str, request: Request):
     conn = _open_db(library_root)
     try:
         provider_id = _require_provider_id(conn, library_root)
-        moves = build_organize_plan(conn, provider_id)
+        moves, stayed_unrecognized = build_organize_plan_with_stats(conn, provider_id)
     finally:
         conn.close()
 
@@ -103,12 +107,14 @@ def organize_preview(library_id: str, request: Request):
         planned=len(moves),
         by_person=by_person,
         plan_hash=compute_plan_hash(moves),
+        stayed_unrecognized=stayed_unrecognized,
         moves=[
             PlannedMoveOut(
                 source_rel=m.source_rel,
                 dest_folder_rel=m.dest_folder_rel,
                 person_id=m.person_id,
                 person_name=m.person_name,
+                reason=m.reason,
             )
             for m in moves
         ],
@@ -142,6 +148,7 @@ def _make_organize_execute_runner(
     library_root: Path,
     expected_planned: int | None,
     expected_plan_hash: str | None,
+    excluded_sources: list[str] | None = None,
 ) -> Callable[[JobContext], dict]:
     """Real (non-dry-run) organize execution as a JobManager runner — shared
     by the synchronous `/execute` route (via `run_sync`) and the async
@@ -157,7 +164,17 @@ def _make_organize_execute_runner(
 
         if not moves:
             raise ValueError("Nothing to organize — run a face scan first or name some people")
+        # Guard against the previewed plan first — expected_planned/expected_plan_hash
+        # describe the FULL plan the user reviewed, before any per-file exclusions
+        # they made in the grouped review UI. Exclusions are applied after, since
+        # they're a deliberate "move everything except these" choice, not drift.
         _check_plan_guards(moves, expected_planned, expected_plan_hash)
+
+        if excluded_sources:
+            excluded = set(excluded_sources)
+            moves = [m for m in moves if m.source_rel not in excluded]
+        if not moves:
+            raise ValueError("Nothing to organize — every planned file was excluded")
 
         ops = [
             FileOp(
@@ -273,6 +290,10 @@ def organize_execute(library_id: str, body: OrganizeExecuteIn, request: Request)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+        if body.excluded_sources:
+            excluded = set(body.excluded_sources)
+            moves = [m for m in moves if m.source_rel not in excluded]
+
         ops = [
             FileOp(source=library_root / m.source_rel, dest_folder=library_root / m.dest_folder_rel, mode="move")
             for m in moves
@@ -304,7 +325,9 @@ def organize_execute(library_id: str, body: OrganizeExecuteIn, request: Request)
         )
 
     library_root = _get_library_root(request, library_id)
-    runner = _make_organize_execute_runner(library_root, body.expected_planned, body.expected_plan_hash)
+    runner = _make_organize_execute_runner(
+        library_root, body.expected_planned, body.expected_plan_hash, body.excluded_sources
+    )
     job = jm.run_sync(library_id, "organize-execute", runner)
     if job.state == "failed":
         raise HTTPException(status_code=_execute_error_status(job.error), detail=job.error)
@@ -326,7 +349,9 @@ def organize_execute_job(library_id: str, body: OrganizeExecuteIn, request: Requ
         )
 
     library_root = _get_library_root(request, library_id)
-    runner = _make_organize_execute_runner(library_root, body.expected_planned, body.expected_plan_hash)
+    runner = _make_organize_execute_runner(
+        library_root, body.expected_planned, body.expected_plan_hash, body.excluded_sources
+    )
     job = jm.start(library_id, "organize-execute", runner)
     return _snapshot(job)
 

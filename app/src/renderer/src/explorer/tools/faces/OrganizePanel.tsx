@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { ArrowLeft } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { ArrowLeft, ChevronDown, ChevronRight } from 'lucide-react'
 import {
   useOrganizePreview,
   useOrganizeExecute,
@@ -8,7 +8,7 @@ import {
   useOrganizeAudit
 } from '../../../api/hooks'
 import { useJobsStore } from '../../../stores/jobs'
-import type { ExecutionReport } from '../../../api/client'
+import type { ExecutionReport, PlannedMove } from '../../../api/client'
 
 interface Props {
   libraryId: string
@@ -22,7 +22,7 @@ interface Props {
 const ACTION_KIND_LABELS: Record<string, string> = {
   'organize-by-person': 'organize',
   'faces-merge-into-folder': 'merge into folder',
-  'faces-materialize': 'materialize',
+  'faces-materialize': 'create folder',
   'faces-prep-create-unsorted': 'create Unsorted folder'
 }
 
@@ -93,6 +93,97 @@ function ResultBanner({ report, onDismiss }: { report: ExecutionReport; onDismis
   )
 }
 
+interface Group {
+  key: string
+  label: string
+  moves: PlannedMove[]
+}
+
+function groupMoves(moves: PlannedMove[]): Group[] {
+  const byFolder = new Map<string, Group>()
+  for (const m of moves) {
+    const key = m.dest_folder_rel
+    const label = m.person_name || key.split('/').pop() || key
+    let g = byFolder.get(key)
+    if (!g) {
+      g = { key, label, moves: [] }
+      byFolder.set(key, g)
+    }
+    g.moves.push(m)
+  }
+  return [...byFolder.values()].sort((a, b) => b.moves.length - a.moves.length)
+}
+
+function PersonGroup({
+  group,
+  excluded,
+  onToggleFile,
+  onToggleGroup
+}: {
+  group: Group
+  excluded: Set<string>
+  onToggleFile: (sourceRel: string) => void
+  onToggleGroup: (moves: PlannedMove[], include: boolean) => void
+}): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false)
+  const isHolding = group.label.startsWith('_')
+  const displayLabel = isHolding ? group.label.slice(1) : group.label
+  const includedCount = group.moves.filter((m) => !excluded.has(m.source_rel)).length
+  const allIncluded = includedCount === group.moves.length
+  const noneIncluded = includedCount === 0
+
+  return (
+    <div className="rounded-xl border border-zinc-100">
+      <div className="flex items-center gap-2 px-3 py-2">
+        <input
+          type="checkbox"
+          checked={allIncluded}
+          ref={(el) => {
+            if (el) el.indeterminate = !allIncluded && !noneIncluded
+          }}
+          onChange={() => onToggleGroup(group.moves, noneIncluded || !allIncluded)}
+          className="h-4 w-4 rounded border-zinc-300"
+        />
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="flex flex-1 items-center gap-1.5 text-left"
+        >
+          {expanded ? (
+            <ChevronDown className="h-3.5 w-3.5 text-zinc-400" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 text-zinc-400" />
+          )}
+          <span className={`text-sm ${isHolding ? 'text-zinc-400' : 'text-zinc-700'}`}>
+            {isHolding ? displayLabel : `People/${displayLabel}`}
+          </span>
+        </button>
+        <span className="text-xs text-zinc-400">
+          {includedCount}/{group.moves.length} file{group.moves.length !== 1 ? 's' : ''}
+        </span>
+      </div>
+      {expanded && (
+        <div className="max-h-56 overflow-y-auto border-t border-zinc-100 bg-zinc-50 px-3 py-2">
+          {group.moves.map((m) => (
+            <label
+              key={m.source_rel}
+              title={m.reason}
+              className="flex items-center gap-2 py-1 text-xs text-zinc-600"
+            >
+              <input
+                type="checkbox"
+                checked={!excluded.has(m.source_rel)}
+                onChange={() => onToggleFile(m.source_rel)}
+                className="h-3.5 w-3.5 rounded border-zinc-300"
+              />
+              <span className="truncate">{m.source_rel.split('/').pop()}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** Organize-by-people panel — plan preview, dry run, execute, undo, and a
  * link to the full history. Round-1: the history list itself renders inline
  * at the bottom rather than a separate Audit sub-view (deferred). */
@@ -105,11 +196,14 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
 
   const [showConfirm, setShowConfirm] = useState(false)
   const [result, setResult] = useState<ExecutionReport | null>(null)
-  const [showMoves, setShowMoves] = useState(false)
   const [showRescanNotice, setShowRescanNotice] = useState(false)
   const [pendingJobId, setPendingJobId] = useState<string | null>(null)
+  const [excluded, setExcluded] = useState<Set<string>>(new Set())
 
   const lastAction = audit?.find((a) => !a.dry_run && !a.undone && a.ok)
+
+  const groups = useMemo(() => groupMoves(preview?.moves ?? []), [preview])
+  const includedCount = (preview?.moves.length ?? 0) - excluded.size
 
   const jobs = useJobsStore((s) => s.jobs)
   useEffect(() => {
@@ -124,8 +218,31 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
     }
   }, [jobs, pendingJobId])
 
+  const toggleFile = (sourceRel: string) => {
+    setExcluded((prev) => {
+      const next = new Set(prev)
+      if (next.has(sourceRel)) next.delete(sourceRel)
+      else next.add(sourceRel)
+      return next
+    })
+  }
+
+  const toggleGroup = (moves: PlannedMove[], include: boolean) => {
+    setExcluded((prev) => {
+      const next = new Set(prev)
+      for (const m of moves) {
+        if (include) next.delete(m.source_rel)
+        else next.add(m.source_rel)
+      }
+      return next
+    })
+  }
+
   const handleDryRun = () => {
-    execute.mutate({ dryRun: true }, { onSuccess: (data) => setResult(data) })
+    execute.mutate(
+      { dryRun: true, expectedPlanned: preview?.planned, expectedPlanHash: preview?.plan_hash, excludedSources: [...excluded] },
+      { onSuccess: (data) => setResult(data) }
+    )
   }
 
   // Real execution runs as a background job (see OrganizeProgressBubble) so
@@ -135,7 +252,7 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
   // pendingJobId above just watches for the rescan-notice trigger.
   const handleExecute = () => {
     executeJob.mutate(
-      { expectedPlanned: preview?.planned, expectedPlanHash: preview?.plan_hash },
+      { expectedPlanned: preview?.planned, expectedPlanHash: preview?.plan_hash, excludedSources: [...excluded] },
       {
         onSuccess: (snap) => {
           setPendingJobId(snap.id)
@@ -153,7 +270,7 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
     <div className="h-full overflow-y-auto p-6">
       {showConfirm && preview && (
         <ConfirmOrganizeDialog
-          planned={preview.planned}
+          planned={includedCount}
           onConfirm={handleExecute}
           onCancel={() => setShowConfirm(false)}
           isPending={executeJob.isPending}
@@ -168,7 +285,7 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
         <h2 className="text-lg font-semibold tracking-tight">Organize by people</h2>
         <p className="mt-1 text-sm text-zinc-500">
           Move your media into <code className="rounded bg-zinc-100 px-1 text-xs">People/</code> subfolders, one
-          folder per person.
+          folder per person. Uncheck anything you don't want moved yet — hover a file for why it's routed there.
         </p>
       </div>
 
@@ -230,63 +347,38 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
         {preview && preview.planned > 0 && (
           <>
             <p className="mb-4 text-sm text-zinc-700">
-              <span className="font-medium">{preview.planned}</span> files will be organized into{' '}
-              <span className="font-medium">{Object.keys(preview.by_person).length}</span> folders.
+              <span className="font-medium">{includedCount}</span> of{' '}
+              <span className="font-medium">{preview.planned}</span> files selected, into{' '}
+              <span className="font-medium">{groups.length}</span> folders.
             </p>
 
-            <div className="mb-4 space-y-1.5">
-              {Object.entries(preview.by_person).sort(([, a], [, b]) => b - a).map(([name, count]) => (
-                <div key={name} className="flex items-center justify-between">
-                  <span className={`text-sm ${name.startsWith('_') ? 'text-zinc-400' : 'text-zinc-700'}`}>
-                    {name.startsWith('_') ? name : `People/${name}`}
-                  </span>
-                  <span className="text-xs text-zinc-400">{count} file{count !== 1 ? 's' : ''}</span>
-                </div>
+            <div className="mb-4 space-y-2">
+              {groups.map((g) => (
+                <PersonGroup key={g.key} group={g} excluded={excluded} onToggleFile={toggleFile} onToggleGroup={toggleGroup} />
               ))}
             </div>
 
-            <button
-              onClick={() => setShowMoves((v) => !v)}
-              className="mb-4 text-xs text-zinc-400 underline hover:text-zinc-600"
-            >
-              {showMoves ? 'Hide file list' : `Show all ${preview.planned} files`}
-            </button>
-
-            {showMoves && (
-              <div className="mb-4 max-h-64 overflow-y-auto rounded-xl border border-zinc-100 bg-zinc-50 p-3">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-left text-zinc-400">
-                      <th className="pb-1 pr-4 font-normal">Source</th>
-                      <th className="pb-1 font-normal">Destination folder</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {preview.moves.map((m, i) => (
-                      <tr key={i} className="border-t border-zinc-100">
-                        <td className="max-w-[200px] truncate py-1 pr-4 text-zinc-600">{m.source_rel.split('/').pop()}</td>
-                        <td className="py-1 text-zinc-500">{m.dest_folder_rel}/</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+            {preview.stayed_unrecognized > 0 && (
+              <p className="mb-4 text-xs text-zinc-400">
+                {preview.stayed_unrecognized} file{preview.stayed_unrecognized !== 1 ? 's' : ''} stay in place
+                (unrecognized) — nobody in {preview.stayed_unrecognized !== 1 ? 'them' : 'it'} has been named yet.
+              </p>
             )}
 
             <div className="flex flex-wrap gap-2">
               <button
                 onClick={handleDryRun}
-                disabled={execute.isPending}
+                disabled={execute.isPending || includedCount === 0}
                 className="rounded-lg border border-zinc-200 px-4 py-2 text-sm text-zinc-600 hover:bg-zinc-50 disabled:opacity-50"
               >
                 {execute.isPending ? 'Running…' : 'Dry run'}
               </button>
               <button
                 onClick={() => setShowConfirm(true)}
-                disabled={executeJob.isPending || preview.planned === 0}
+                disabled={executeJob.isPending || includedCount === 0}
                 className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50"
               >
-                Organize {preview.planned} files
+                Organize {includedCount} files
               </button>
             </div>
           </>

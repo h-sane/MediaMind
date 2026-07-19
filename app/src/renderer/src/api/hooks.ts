@@ -796,8 +796,17 @@ export function useOrganizePreview(libraryId: string) {
 export function useOrganizeExecute(libraryId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ dryRun, expectedPlanned }: { dryRun: boolean; expectedPlanned?: number }) =>
-      api.organize.execute(libraryId, dryRun, expectedPlanned),
+    mutationFn: ({
+      dryRun,
+      expectedPlanned,
+      expectedPlanHash,
+      excludedSources
+    }: {
+      dryRun: boolean
+      expectedPlanned?: number
+      expectedPlanHash?: string
+      excludedSources?: string[]
+    }) => api.organize.execute(libraryId, dryRun, expectedPlanned, expectedPlanHash, excludedSources),
     onSuccess: (_data, vars) => {
       if (!vars.dryRun) {
         qc.invalidateQueries({ queryKey: ['organize-preview', libraryId] })
@@ -816,11 +825,13 @@ export function useOrganizeExecuteJob(libraryId: string) {
   return useMutation({
     mutationFn: ({
       expectedPlanned,
-      expectedPlanHash
+      expectedPlanHash,
+      excludedSources
     }: {
       expectedPlanned?: number
       expectedPlanHash?: string
-    }) => api.organize.executeJob(libraryId, expectedPlanned, expectedPlanHash),
+      excludedSources?: string[]
+    }) => api.organize.executeJob(libraryId, expectedPlanned, expectedPlanHash, excludedSources),
     onSuccess: (snap) => useJobsStore.getState().upsert(snap)
   })
 }
