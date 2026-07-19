@@ -3,13 +3,13 @@ import { useMergeSuggestion, useSuggestionMergePreview } from '../../../api/hook
 import { MediaViewer } from '../../../components/MediaViewer'
 import { FullscreenModalShell } from '../shared/FullscreenModalShell'
 import { MatchReviewCard } from './MatchReviewCard'
-import type { BindingSuggestion } from '../../../api/client'
+import type { BindingSuggestion, ExecutionReport } from '../../../api/client'
 
 interface Props {
   libraryId: string
   suggestion: BindingSuggestion
   onClose: () => void
-  onCommitted: () => void
+  onCommitted: (report: ExecutionReport) => void
 }
 
 /**
@@ -94,8 +94,23 @@ export function MatchReviewModal({ libraryId, suggestion, onClose, onCommitted }
       file_id,
       dest_folder_rel
     }))
+    const confirmed_outlier_file_ids = Array.from(outlierDecisions.entries())
+      .filter(([, decision]) => decision === 'confirm')
+      .map(([fileId]) => fileId)
+    const rejected_outlier_file_ids = Array.from(outlierDecisions.entries())
+      .filter(([, decision]) => decision === 'reject')
+      .map(([fileId]) => fileId)
     mergeSuggestion.mutate(
-      { suggestionId: suggestion.id, body: { excluded_file_ids, reassignments: reassignmentsList } },
+      {
+        suggestionId: suggestion.id,
+        body: {
+          excluded_file_ids,
+          reassignments: reassignmentsList,
+          confirmed_outlier_file_ids,
+          rejected_outlier_file_ids,
+          expected_move_count: incomingCount + redirectedCount
+        }
+      },
       { onSuccess: onCommitted }
     )
   }

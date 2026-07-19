@@ -23,7 +23,7 @@ from mediamind.api.models import (
 from mediamind.config import library_data_dir
 from mediamind.core.jobs import JobManager
 from mediamind.core.libraries import LibraryRegistry
-from mediamind.core.organize_plan import safe_folder_name
+from mediamind.core.organize_plan import safe_dest_folder_rel, safe_folder_name
 from mediamind.core.safety import FileOp, execute as safety_execute, new_manifest_path
 from mediamind.store import materialize as materialize_store
 from mediamind.store import rejected_persons
@@ -105,7 +105,12 @@ def materialize(library_id: str, person_id: int, body: MaterializeIn, request: R
 
         candidates = materialize_store.list_candidates(conn, provider_id, person_id)
         excluded = set(body.excluded_file_ids)
-        reassign_map = {r.file_id: r.dest_folder_rel for r in body.reassignments}
+        try:
+            reassign_map = {
+                r.file_id: safe_dest_folder_rel(r.dest_folder_rel, library_root) for r in body.reassignments
+            }
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         dest_folder_rel = safe_folder_name(name)
 
         moves: list[tuple[int, str, str]] = []  # (file_id, source_rel, dest_folder_rel)
@@ -123,6 +128,16 @@ def materialize(library_id: str, person_id: int, body: MaterializeIn, request: R
                     f"server computed {len(moves)}. Refresh and re-confirm."
                 ),
             )
+
+        # Bind before move (same rationale as merge_suggestion): a partial
+        # move against a correctly-created binding self-heals on the next
+        # organize plan; files moved without one do not. Also surfaces
+        # AlreadyBoundError as a clean 409 before anything is touched.
+        if not body.dry_run:
+            try:
+                materialize_store.materialize_person_folder(conn, person_id, name)
+            except AlreadyBoundError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
 
         ops = [
             FileOp(source=library_root / src, dest_folder=library_root / dest, mode="move")
@@ -156,13 +171,6 @@ def materialize(library_id: str, person_id: int, body: MaterializeIn, request: R
             rejected_persons.reject_person_files(conn, provider_id, person_id, rejected_ids)
 
             conn.commit()
-
-            # Binding + rename apply regardless of how many stray files moved,
-            # same rationale as merge_suggestion.
-            try:
-                materialize_store.materialize_person_folder(conn, person_id, name)
-            except AlreadyBoundError as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
 
         return ExecutionReportOut(
             planned=report.planned,

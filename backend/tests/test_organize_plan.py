@@ -94,7 +94,9 @@ def test_plan_routes_named_person_correctly(conn):
     assert moves[0].source_rel == "alice.jpg"
 
 
-def test_plan_routes_noise_to_noise_folder(conn):
+def test_plan_leaves_noise_files_in_place(conn):
+    """Fix F1: an all-noise file has nobody to route to and must stay in
+    place — it must NOT be moved into a People/_noise holding folder."""
     fid = upsert_file(conn, "noise.jpg", "photo", 100, 0.0, "h_n", True)
     conn.commit()
 
@@ -102,8 +104,47 @@ def test_plan_routes_noise_to_noise_folder(conn):
     _do_scan(conn, ff, [-1])
 
     moves = build_organize_plan(conn, PROVIDER)
-    assert len(moves) == 1
-    assert "_noise" in moves[0].dest_folder_rel
+    assert moves == []
+
+
+def test_plan_leaves_unnamed_person_file_in_place(conn):
+    """Fix F10: organize only ever moves files for people the user has
+    actually named — an auto_label-only person's photos stay put rather
+    than spawning a People/Person_NNN folder."""
+    fid = upsert_file(conn, "stranger.jpg", "photo", 100, 0.0, "h_s", True)
+    conn.commit()
+
+    ff = [FileFaces(file_id=fid, content_hash="h_s", decoded_ok=True, faces=[_face(1, 0, 0)])]
+    _do_scan(conn, ff, [0])
+    # Person is left unnamed on purpose (no UPDATE persons SET name = ...).
+
+    moves = build_organize_plan(conn, PROVIDER)
+    assert moves == []
+
+
+def test_plan_excludes_file_with_undecided_pending_match(conn):
+    """Fix F1: a new photo matched to a named person is staged as a pending
+    review (person_id NULL + a pending_matches row) — it must be excluded
+    from the plan entirely, not swept into People/_noise before the user
+    ever gets to confirm or reject it."""
+    fid = upsert_file(conn, "new_photo.jpg", "photo", 100, 0.0, "h_p", True)
+    conn.commit()
+
+    ff = [FileFaces(file_id=fid, content_hash="h_p", decoded_ok=True, faces=[_face(1, 0, 0)])]
+    _do_scan(conn, ff, [0])
+    pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
+    conn.execute("UPDATE persons SET name = 'Mom' WHERE id = ?", (pid,))
+    conn.commit()
+
+    face_id = conn.execute("SELECT id FROM faces WHERE file_id = ?", (fid,)).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO pending_matches (face_id, person_id, confidence) VALUES (?, ?, ?)",
+        (face_id, pid, 0.9),
+    )
+    conn.commit()
+
+    moves = build_organize_plan(conn, PROVIDER)
+    assert moves == []
 
 
 def test_plan_omits_files_with_no_face_records(conn):
@@ -136,9 +177,12 @@ def test_plan_multi_person_picks_dominant(conn):
     )]
     _do_scan(conn, ff, [0, 0, 1])
 
-    # Scan assigns labels but persons may not be named yet; get their IDs
+    # Both persons must be named — organize only routes named people (F10).
     person_rows = conn.execute("SELECT id FROM persons WHERE provider_id = ? ORDER BY id", (PROVIDER,)).fetchall()
     assert len(person_rows) == 2
+    conn.execute("UPDATE persons SET name = 'Dominant' WHERE id = ?", (person_rows[0]["id"],))
+    conn.execute("UPDATE persons SET name = 'Other' WHERE id = ?", (person_rows[1]["id"],))
+    conn.commit()
 
     moves = build_organize_plan(conn, PROVIDER)
     assert len(moves) == 1
@@ -324,6 +368,23 @@ def test_plan_includes_accepted_outlier_in_bound_folder(conn):
     assert len(moves) == 1
     assert moves[0].source_rel == "Family/Alice/stray.jpg"
     assert moves[0].person_name == "Other"
+
+
+def test_plan_excludes_files_in_bound_folder_subfolder(conn):
+    """Fix F2: a bound folder's subfolders (dated albums, event folders) must
+    stay frozen too — the old exact-parent check only froze the folder's
+    immediate contents and flattened everything nested underneath it."""
+    fid = upsert_file(conn, "Family/Alice/Wedding/one.jpg", "photo", 100, 0.0, "h1", True)
+    conn.commit()
+    ff = [FileFaces(file_id=fid, content_hash="h1", decoded_ok=True, faces=[_face(1, 0, 0)])]
+    _do_scan(conn, ff, [0])
+    pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
+    conn.execute("UPDATE persons SET name = 'Alice' WHERE id = ?", (pid,))
+    conn.commit()
+    _bind(conn, "Family/Alice", pid)
+
+    moves = build_organize_plan(conn, PROVIDER)
+    assert moves == []
 
 
 def test_plan_bound_folder_freezes_undecoded_files_too(conn):

@@ -486,6 +486,8 @@ class SuggestionMergeIn(BaseModel):
     expected_move_count: int | None = None  # safety guard: reject if plan size changed
     excluded_file_ids: list[int] = []
     reassignments: list[ReassignItemIn] = []
+    confirmed_outlier_file_ids: list[int] = []  # in-folder outliers user confirmed ARE this person
+    rejected_outlier_file_ids: list[int] = []  # in-folder outliers user confirmed are NOT this person
 
 
 class AcceptOutliersIn(BaseModel):

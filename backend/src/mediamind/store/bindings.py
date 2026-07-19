@@ -19,6 +19,7 @@ from mediamind.core.faces.folder_patterns import (
     group_by_folder,
     load_folder_files,
 )
+from mediamind.core.organize_plan import is_in_folder_subtree
 
 
 class BindingConflictError(Exception):
@@ -266,7 +267,7 @@ def build_suggestion_merge_moves(
     if row["kind"] == "person" and len(person_ids) == 1:
         person_id = person_ids[0]
         for f in load_folder_files(conn, row["provider_id"]):
-            if person_id in f.person_ids and PurePosixPath(f.path).parent.as_posix() != folder_rel:
+            if person_id in f.person_ids and not is_in_folder_subtree(f.path, folder_rel):
                 moves[f.file_id] = (f.path, folder_rel)
 
     if extra_reassignments:

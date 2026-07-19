@@ -131,11 +131,12 @@ def test_organize_preview_returns_plan(client, tmp_path):
     res = client.post(f"/v1/libraries/{lib_id}/organize/preview")
     assert res.status_code == 200
     body = res.json()
-    assert body["planned"] == 2  # red + blue files
+    # Only Alice's file is planned — the other person is unnamed and organize
+    # only ever routes named people (F10), so blue.jpg stays in place.
+    assert body["planned"] == 1
     assert "moves" in body
-    assert len(body["moves"]) == 2
+    assert len(body["moves"]) == 1
 
-    # Alice's file should be routed to People/Alice
     alice_moves = [m for m in body["moves"] if m["person_name"] == "Alice"]
     assert len(alice_moves) == 1
     assert alice_moves[0]["dest_folder_rel"] == "People/Alice"
@@ -149,7 +150,10 @@ def test_organize_dry_run_does_not_move_files(client, tmp_path):
     lib_dir = tmp_path / "lib"
     lib_dir.mkdir()
     _make_library(lib_dir)
-    _seed_persons_db(lib_dir)
+    # Organize only routes named people (F10) — name one so there's a plan
+    # to dry-run at all; this test is about dry_run not touching disk, not
+    # about the named-people-only routing rule.
+    _seed_persons_db(lib_dir, name_alice=True)
     lib_id = _add_library(client, lib_dir)
 
     res = client.post(f"/v1/libraries/{lib_id}/organize/execute", json={"dry_run": True})

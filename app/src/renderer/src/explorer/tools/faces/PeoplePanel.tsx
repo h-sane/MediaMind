@@ -5,7 +5,6 @@ import {
   useBindingSuggestions,
   useBindings,
   useRefreshBindings,
-  useMergeSuggestion,
   useAcceptBindingSuggestion,
   useDismissBindingSuggestion
 } from '../../../api/hooks'
@@ -64,7 +63,6 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
   const { data: suggestionsData } = useBindingSuggestions(libraryId)
   const { data: bindingsData } = useBindings(libraryId)
   const refreshBindings = useRefreshBindings(libraryId)
-  const mergeSuggestion = useMergeSuggestion(libraryId)
   const acceptSuggestion = useAcceptBindingSuggestion(libraryId)
   const dismissSuggestion = useDismissBindingSuggestion(libraryId)
 
@@ -123,18 +121,11 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
   })
   const isScanning = !!activeJob
 
-  const handleMergeIntoFolder = (suggestion: BindingSuggestion) => {
-    setMergingSuggestionId(suggestion.id)
-    mergeSuggestion.mutate(
-      { suggestionId: suggestion.id },
-      {
-        onSuccess: (data) => {
-          setMergeResult(data)
-          setMergingSuggestionId(null)
-        },
-        onError: () => setMergingSuggestionId(null)
-      }
-    )
+  // Merging is never one-click — it always opens the full review (invariant
+  // 6: review before finalize). "Merge into folder" and "Accept & organize"
+  // both just open the same modal Group suggestions' "Review" button does.
+  const handleReviewSuggestion = (suggestion: BindingSuggestion) => {
+    setReviewingSuggestion(suggestion)
   }
 
   // A suggestion with nothing to review (every file already matches, no
@@ -209,9 +200,7 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
       {!isScanning && !isLoading && persons.length > 0 && (
         <GroupSuggestionStrip
           suggestions={groupSuggestions}
-          busyId={mergingSuggestionId}
-          onAccept={handleMergeIntoFolder}
-          onReview={setReviewingSuggestion}
+          onReview={handleReviewSuggestion}
           onDismiss={(s) => dismissSuggestion.mutate(s.id)}
         />
       )}
@@ -233,9 +222,8 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
               isBound={boundPersonIds.has(p.id)}
               onToggleSelect={toggleSelect}
               onOpen={onOpenPerson}
-              onMergeIntoFolder={handleMergeIntoFolder}
+              onMergeIntoFolder={handleReviewSuggestion}
               onLockFolder={handleLockFolder}
-              onOpenDetails={setReviewingSuggestion}
               onDismissSuggestion={(s) => dismissSuggestion.mutate(s.id)}
               onMaterialize={setMaterializingPerson}
               mergeBusy={mergingSuggestionId === personSuggestions.get(p.id)?.id}
@@ -298,7 +286,8 @@ export function PeoplePanel({ libraryId, onOpenPerson, onOrganize }: Props): Rea
           libraryId={libraryId}
           suggestion={reviewingSuggestion}
           onClose={() => setReviewingSuggestion(null)}
-          onCommitted={() => {
+          onCommitted={(report) => {
+            setMergeResult(report)
             setReviewingSuggestion(null)
           }}
         />
