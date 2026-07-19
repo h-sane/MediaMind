@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { usePersons } from '../../../api/hooks'
 import { selectJobForLibrary, useJobsStore } from '../../../stores/jobs'
 import { ModelSelectPanel } from './ModelSelectPanel'
+import { MultiPersonPanel } from './MultiPersonPanel'
 import { OrganizePanel } from './OrganizePanel'
+import { PendingReviewPanel } from './PendingReviewPanel'
 import { PeoplePanel } from './PeoplePanel'
 import { PersonDetailPanel } from './PersonDetailPanel'
 import { PrepPanel } from './PrepPanel'
@@ -18,13 +20,14 @@ type FacesSub =
   | { name: 'people' }
   | { name: 'person'; personId: number }
   | { name: 'organize' }
+  | { name: 'pending' }
+  | { name: 'multi-person' }
 
 /**
  * Faces tool root — hosts the Prep (loose vs. pre-sorted check) → Setup
  * (model choice) → People → Person detail → Organize sub-navigation locally
  * (this replaces the orphaned `stores/app.ts` view machine the original
- * screens used). Round-1 scope omits Pending/Multi-person review (see
- * handoff).
+ * screens used).
  *
  * A scan never starts on its own: opening the tool on a folder with no prior
  * face scan lands on Prep first, then Setup, and Rescan always returns
@@ -80,12 +83,16 @@ export function FacesToolPanel({ libraryId, folderPath: _folderPath }: Props): R
             libraryId={libraryId}
             onOpenPerson={(personId) => setSub({ name: 'person', personId })}
             onOrganize={() => setSub({ name: 'organize' })}
+            onReviewPending={() => setSub({ name: 'pending' })}
+            onReviewMultiPerson={() => setSub({ name: 'multi-person' })}
           />
         )}
         {sub.name === 'person' && (
           <PersonDetailPanel libraryId={libraryId} personId={sub.personId} onBack={goToPeople} />
         )}
         {sub.name === 'organize' && <OrganizePanel libraryId={libraryId} onBack={goToPeople} />}
+        {sub.name === 'pending' && <PendingReviewPanel libraryId={libraryId} onBack={goToPeople} />}
+        {sub.name === 'multi-person' && <MultiPersonPanel libraryId={libraryId} onBack={goToPeople} />}
       </div>
     </div>
   )

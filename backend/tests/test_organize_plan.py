@@ -218,7 +218,7 @@ def test_plan_unreadable_file_goes_to_unsorted(conn):
     conn.commit()
 
     moves = build_organize_plan(conn, PROVIDER)
-    assert any("_unsorted" in m.dest_folder_rel for m in moves)
+    assert any("_Needs Review" in m.dest_folder_rel for m in moves)
 
 
 def test_plan_routes_real_decode_failure_to_unsorted(conn):
@@ -248,13 +248,13 @@ def test_plan_routes_real_decode_failure_to_unsorted(conn):
     moves = build_organize_plan(conn, PROVIDER)
     assert len(moves) == 1
     assert moves[0].source_rel == "bad.jpg"
-    assert "_unsorted" in moves[0].dest_folder_rel
+    assert "_Needs Review" in moves[0].dest_folder_rel
 
 
 def test_plan_skips_decode_failure_already_in_unsorted(conn):
-    fid = upsert_file(conn, "People/_unsorted/bad.jpg", "photo", 100, 0.0, "h_bad2", None)
+    fid = upsert_file(conn, "People/_Needs Review/bad.jpg", "photo", 100, 0.0, "h_bad2", None)
     conn.commit()
-    upsert_file(conn, "People/_unsorted/bad.jpg", "photo", 100, 0.0, "h_bad2", False)
+    upsert_file(conn, "People/_Needs Review/bad.jpg", "photo", 100, 0.0, "h_bad2", False)
     conn.commit()
     ff = [FileFaces(file_id=fid, content_hash="h_bad2", decoded_ok=False, faces=[])]
     _do_scan(conn, ff, labels=[])

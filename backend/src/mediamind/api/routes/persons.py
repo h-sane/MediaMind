@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from mediamind.api.models import (
     PersonMediaItemOut,
@@ -187,6 +188,20 @@ def reject_face_endpoint(library_id: str, face_id: int, request: Request):
     return {"ok": True}
 
 
+_THUMB_CACHE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
+
+
+def _face_thumb_cache_key(path: str, frame_no: int, bbox: tuple[float, float, float, float], size: int) -> str:
+    """Keyed by the face's actual crop inputs (file path, frame, bbox, size),
+    not `faces.id` — a rescan deletes and reinserts `faces` rows, so the same
+    id can be reused for an entirely different face after a rescan. Keying by
+    id would risk serving a stale cached crop for the wrong face forever;
+    keying by what actually determines the pixels means a same-face id churn
+    across rescans still hits the same cache entry (a feature, not a bug)."""
+    raw = f"{path}|{frame_no}|{bbox[0]:.2f},{bbox[1]:.2f},{bbox[2]:.2f},{bbox[3]:.2f}|{size}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
 @router.get("/libraries/{library_id}/faces/{face_id}/thumbnail")
 def face_thumbnail(
     library_id: str,
@@ -194,10 +209,14 @@ def face_thumbnail(
     request: Request,
     size: int = Query(default=192, ge=48, le=512),
 ):
-    """Return a cropped JPEG thumbnail of a face.
+    """Return a cropped JPEG thumbnail of a face, disk-cached under
+    `.mediamind/thumbs/faces/` so repeat requests (a People grid re-mounting,
+    scrolling back up) skip the full frame decode (F14).
 
-    Keyed by faces.id — the endpoint cannot read arbitrary files; only faces
-    from a scan are accessible (same rationale as duplicates thumbnail).
+    Keyed by faces.id for lookup — the endpoint cannot read arbitrary files;
+    only faces from a scan are accessible (same rationale as duplicates
+    thumbnail) — but the cache file itself is keyed by the crop's actual
+    inputs, see `_face_thumb_cache_key`.
     """
     _, library_root = _get_library_and_root(request, library_id)
     conn = _open_library_db(library_root)
@@ -209,6 +228,12 @@ def face_thumbnail(
     if info is None:
         raise HTTPException(status_code=404, detail="Unknown face id")
 
+    cache_dir = library_data_dir(library_root) / "thumbs" / "faces"
+    cache_key = _face_thumb_cache_key(info.path, info.frame_no, info.bbox, size)
+    cache_path = cache_dir / f"{cache_key}.jpg"
+    if cache_path.exists():
+        return FileResponse(cache_path, media_type="image/jpeg", headers=_THUMB_CACHE_HEADERS)
+
     abs_path = library_root / info.path
     frame = load_frame(abs_path, info.kind, info.frame_no)
     if frame is None:
@@ -216,7 +241,6 @@ def face_thumbnail(
 
     try:
         import cv2
-        import numpy as np
 
         h, w = frame.shape[:2]
         x1, y1, x2, y2 = info.bbox
@@ -245,7 +269,16 @@ def face_thumbnail(
         ok, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 85])
         if not ok:
             raise ValueError("JPEG encode failed")
-
-        return StreamingResponse(io.BytesIO(bytes(buf)), media_type="image/jpeg")
+        jpeg_bytes = bytes(buf)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Thumbnail error: {exc}")
+
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        tmp_path = cache_path.with_suffix(".tmp")
+        tmp_path.write_bytes(jpeg_bytes)
+        tmp_path.replace(cache_path)  # atomic — a concurrent request never sees a half-written file
+    except OSError:
+        pass  # cache is an optimization, not a correctness requirement — serve the thumbnail regardless
+
+    return StreamingResponse(io.BytesIO(jpeg_bytes), media_type="image/jpeg", headers=_THUMB_CACHE_HEADERS)

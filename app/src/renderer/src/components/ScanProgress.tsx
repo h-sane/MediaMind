@@ -17,7 +17,8 @@ const PHASE_LABELS: Record<string, string> = {
   detecting: 'Detecting faces',
   clustering: 'Grouping people',
   saving: 'Saving results',
-  reviewable: 'Results ready — finishing large videos in the background'
+  reviewable: 'Results ready — finishing large videos in the background',
+  moving: 'Moving files'
 }
 
 function phaseLabel(phase: string): string {
@@ -136,6 +137,16 @@ export function ScanProgress({ libraryId, job }: Props): React.JSX.Element {
           {(job.result.people as number).toLocaleString()} people ·{' '}
           {(job.result.faces as number).toLocaleString()} faces detected
         </p>
+      )}
+      {job.state === 'succeeded' && job.result && job.type === 'organize-execute' && (
+        <p className="mt-2 text-xs text-zinc-500">
+          {job.result.ok
+            ? `Moved ${(job.result.handled as number).toLocaleString()} files`
+            : `Moved ${(job.result.handled as number).toLocaleString()} of ${(job.result.planned as number).toLocaleString()} — some files had errors`}
+        </p>
+      )}
+      {job.state === 'failed' && job.type === 'organize-execute' && (
+        <p className="mt-2 text-xs text-red-600">{job.error}</p>
       )}
     </div>
   )

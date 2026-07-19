@@ -19,13 +19,21 @@ def record_action(
     manifest_path: str,
     report: ExecutionReport,
     dry_run: bool,
+    undo_data: str | None = None,
 ) -> int:
-    """Record an executed (or dry-run) organize action and its manifest entries."""
+    """Record an executed (or dry-run) organize action and its manifest entries.
+
+    `undo_data` is an opaque JSON string describing DB-side-effects this
+    action made beyond the file moves themselves (a binding created, a
+    person renamed, rejection rows inserted) — plain file-move-only kinds
+    (organize-by-person, faces-prep-create-unsorted) have none. `organize_undo`
+    reads it back to reverse those effects too, not just the moves.
+    """
     cur = conn.execute(
         """
         INSERT INTO organize_actions
-          (kind, created_at, manifest_path, planned, handled, ok, dry_run, undone)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+          (kind, created_at, manifest_path, planned, handled, ok, dry_run, undone, undo_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
         """,
         (
             kind,
@@ -35,6 +43,7 @@ def record_action(
             report.handled,
             int(report.ok),
             int(dry_run),
+            undo_data,
         ),
     )
     action_id: int = cur.lastrowid  # type: ignore[assignment]

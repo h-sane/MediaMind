@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Request
 from mediamind.api.models import JobSnapshot, ScanIn
 from mediamind.config import library_data_dir
 from mediamind.core.dedupe import DEFAULT_NEAR_THRESHOLD, find_duplicates, group_signature
-from mediamind.core.jobs import JobContext, JobManager
+from mediamind.core.jobs import EXCLUSIVE_JOB_TYPES, JobContext, JobManager
 from mediamind.core.libraries import LibraryRegistry
 from mediamind.core.scanner import scan_folder
 from mediamind.store.db import library_db_path, open_db
@@ -168,6 +168,14 @@ def start_scan(library_id: str, body: ScanIn, request: Request):
         raise HTTPException(
             status_code=409,
             detail=f"A {body.type} scan is already running for this library",
+        )
+    # An exclusive-write job (organize/merge/materialize/dedupe-execute) must
+    # never overlap a scan in either direction — see EXCLUSIVE_JOB_TYPES.
+    blocking = jm.running_for(library_id)
+    if blocking is not None and blocking.type in EXCLUSIVE_JOB_TYPES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A {blocking.type} operation is in progress — wait for it to finish",
         )
 
     if body.type == "dedupe":

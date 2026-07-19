@@ -13,9 +13,16 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from mediamind.store import face_assignments
 from mediamind.store.embeddings import CachedFace
 
-MATCH_SIM_THRESHOLD = 0.5  # = 1 - clustering.DEFAULT_EPS; keep in lockstep
+# Threshold for matching a new/reclustered cluster's centroid to an existing
+# person's centroid. Deliberately separate from clustering.DEFAULT_EPS (which
+# governs which faces DBSCAN groups together in the first place) and set
+# stricter than the old lockstepped 0.5 — a wrong auto-match here silently
+# hijacks a person's identity (finding F3), so borderline cases fall through
+# to a new Person_NNN for the user to merge manually instead of guessing.
+AUTO_MATCH_THRESHOLD = 0.6
 
 
 @dataclass(frozen=True)
@@ -126,11 +133,32 @@ def persist_face_scan(
 
     Steps:
     1. Delete all existing faces (and cascade pending_matches) for this provider.
-    2. Compute cluster centroids from current labels.
-    3. Greedy-match clusters to existing persons by cosine similarity.
-    4. Insert/update person rows.
-    5. Insert faces rows; create pending_matches for named persons if requested.
-    6. Upsert the scans row (replace any prior faces scan).
+    2. Look up any durable face_assignments for these faces (by content_hash +
+       IOU bbox match) — a face that was previously confirmed (by clustering
+       or by explicit user action) re-attaches directly to the same person,
+       regardless of what DBSCAN clusters it with this time. This is what
+       keeps identity stable across rescans (finding F3): re-clustering can
+       still group these faces however it likes, but a pre-assigned face's
+       own person_id is never decided by that cluster's aggregate match.
+    3. Compute cluster centroids from current labels (over ALL faces,
+       assigned or not — an anchor face already known to be person X pulls
+       its cluster's match towards X, which is the desired behavior when a
+       person's photos fragment into a second cluster on some scan).
+    4. Match clusters to existing persons by cosine similarity — many-to-one
+       (multiple clusters may each independently clear the bar for the same
+       person; no first-come-first-served exclusion), centroid updated as a
+       running mean weighted by prior durable assignment count, not
+       overwritten wholesale.
+    5. Insert/update person rows; never delete a person still referenced by
+       a durable assignment, folder binding, or route choice, even if
+       unnamed and unmatched this round.
+    6. Insert faces rows: pre-assigned faces get their durable person_id
+       directly (no pending review, they're already confirmed); otherwise
+       fall back to cluster-based matching with pending_matches for named
+       persons if requested. Any face that ends up with a concrete person_id
+       from fresh cluster-matching gets that recorded as a new durable
+       assignment for next time.
+    7. Upsert the scans row (replace any prior faces scan).
 
     Returns summary dict augmented with people/faces/pending counts.
     """
@@ -153,7 +181,22 @@ def persist_face_scan(
 
     conn.execute("DELETE FROM faces WHERE provider_id = ?", (provider_id,))
 
-    # --- 2. cluster centroids ---
+    # --- 2. durable re-attachment: find each face's prior assignment, if any ---
+    assignments_by_hash: dict[str, list[face_assignments.Assignment]] = {}
+    preassigned: dict[int, int] = {}  # flat_face_idx -> person_id
+
+    flat_face_idx = 0
+    for ff in file_faces:
+        hash_assignments = assignments_by_hash.setdefault(
+            ff.content_hash, face_assignments.assignments_for(conn, ff.content_hash, provider_id)
+        )
+        for cached_face in ff.faces:
+            match = face_assignments.find_assignment(hash_assignments, cached_face.bbox)
+            if match is not None:
+                preassigned[flat_face_idx] = match.person_id
+            flat_face_idx += 1
+
+    # --- 3. cluster centroids ---
     # Group label → list of (file_faces idx, face idx within that file)
     cluster_embeddings: dict[int, list[np.ndarray]] = {}
     cluster_file_faces: dict[int, list[tuple[int, int]]] = {}  # label → [(ff_idx, face_idx)]
@@ -177,7 +220,7 @@ def persist_face_scan(
     }
     cluster_sizes = {label: len(embs) for label, embs in cluster_embeddings.items()}
 
-    # --- 3. load existing persons, greedy match (largest cluster first) ---
+    # --- 4. load existing persons, many-to-one match (largest cluster first) ---
     existing_persons = conn.execute(
         "SELECT id, auto_label, name, centroid FROM persons WHERE provider_id = ?",
         (provider_id,),
@@ -189,33 +232,56 @@ def persist_face_scan(
         if p["centroid"]:
             person_centroids[p["id"]] = np.frombuffer(p["centroid"], dtype=np.float32).copy()
 
-    # greedy match: biggest clusters get first pick
+    # prior durable assignment count per person — the "weight" behind its
+    # current centroid, so a newly-matched cluster nudges it rather than
+    # overwriting it outright.
+    prior_weights: dict[int, int] = {
+        r["person_id"]: r["n"]
+        for r in conn.execute(
+            "SELECT person_id, COUNT(*) AS n FROM face_assignments WHERE provider_id = ? GROUP BY person_id",
+            (provider_id,),
+        )
+    }
+
+    # many-to-one match: every cluster picks its best person independently —
+    # no first-come-first-served exclusion, so a person's photos that split
+    # into a second cluster this scan can still both find their way home.
     sorted_labels = sorted(cluster_sizes.keys(), key=lambda l: cluster_sizes[l], reverse=True)
     cluster_to_person: dict[int, int] = {}  # cluster label → person id
-    matched_persons: set[int] = set()
 
     for label in sorted_labels:
         centroid = cluster_centroids[label]
-        best_sim = MATCH_SIM_THRESHOLD
+        best_sim = AUTO_MATCH_THRESHOLD
         best_pid = None
         for pid, pcent in person_centroids.items():
-            if pid in matched_persons:
-                continue
             sim = float(np.dot(centroid, pcent))
             if sim > best_sim:
                 best_sim = sim
                 best_pid = pid
         if best_pid is not None:
             cluster_to_person[label] = best_pid
-            matched_persons.add(best_pid)
 
-    # --- 4. upsert persons ---
-    # update matched persons' centroids
+    # --- 5. upsert persons ---
+    # matched persons' centroids move as a running mean, weighted by how many
+    # faces were already durably assigned to them, so one large new cluster
+    # can't redefine a person's identity outright.
+    clusters_by_person: dict[int, list[int]] = {}
     for label, pid in cluster_to_person.items():
-        centroid_blob = cluster_centroids[label].tobytes()
+        clusters_by_person.setdefault(pid, []).append(label)
+
+    for pid, labels_for_person in clusters_by_person.items():
+        new_size = sum(cluster_sizes[label] for label in labels_for_person)
+        new_centroid = _normalized_mean([cluster_centroids[label] for label in labels_for_person])
+        prior_weight = prior_weights.get(pid, 0)
+        if prior_weight > 0 and pid in person_centroids:
+            blended = (prior_weight * person_centroids[pid] + new_size * new_centroid) / (prior_weight + new_size)
+            norm = float(np.linalg.norm(blended))
+            final_centroid = (blended / norm if norm > 0 else blended).astype(np.float32)
+        else:
+            final_centroid = new_centroid
         conn.execute(
             "UPDATE persons SET centroid = ? WHERE id = ?",
-            (centroid_blob, pid),
+            (final_centroid.tobytes(), pid),
         )
 
     # new persons for unmatched clusters
@@ -229,15 +295,18 @@ def persist_face_scan(
             )
             cluster_to_person[label] = cur.lastrowid  # type: ignore[assignment]
 
-    # remove persons with no matching cluster
+    # remove persons with no matching cluster this round — but never one a
+    # durable assignment, folder binding, or route choice still points to
+    # (finding F3 scenario 3: an unnamed binding member missing one scan's
+    # match used to vanish and cascade out of the binding silently).
     matched_person_ids = set(cluster_to_person.values())
     for p in existing_persons:
         if p["id"] not in matched_person_ids:
-            if p["name"] is None:
+            if p["name"] is None and not face_assignments.person_is_referenced(conn, p["id"]):
                 conn.execute("DELETE FROM persons WHERE id = ?", (p["id"],))
-            # named persons kept with 0 faces (user knows who they are)
+            # named or still-referenced persons kept with 0 faces this round
 
-    # --- 5. insert faces ---
+    # --- 6. insert faces ---
     new_file_ids = new_file_ids or set()
     pending_count = 0
 
@@ -258,7 +327,11 @@ def persist_face_scan(
             else:
                 label = -1
 
-            assigned_pid = cluster_to_person.get(label)  # None for noise
+            prior_pid = preassigned.get(flat_face_idx)
+            # A durably re-attached face is already confirmed — skip cluster
+            # matching and pending review entirely for it, whatever DBSCAN
+            # clustered it with this time.
+            assigned_pid = prior_pid if prior_pid is not None else cluster_to_person.get(label)
 
             embedding_blob = np.asarray(cached_face.embedding, dtype=np.float32).tobytes()
             cur = conn.execute(
@@ -283,19 +356,25 @@ def persist_face_scan(
                 ),
             )
             face_db_id = cur.lastrowid
+            final_pid = assigned_pid
 
             # M6 pending logic: new file + assigned to a named person → stage as pending.
-            # A face the user already rejected (same content_hash + frame_no +
-            # person) must not be re-asked about, but it must also stay
-            # unassigned rather than silently falling back to assigned_pid —
-            # that person is exactly who the user said this face is NOT.
+            # Only applies to a *freshly* cluster-matched face — a durably
+            # re-attached face was already confirmed in an earlier session and
+            # must not be re-asked about.
             was_rejected = (ff.content_hash, cached_face.frame_no, assigned_pid) in rejected_pairs
-            if pending_for_named and assigned_pid in named_person_ids and ff.file_id in new_file_ids:
+            if (
+                prior_pid is None
+                and pending_for_named
+                and assigned_pid in named_person_ids
+                and ff.file_id in new_file_ids
+            ):
                 if was_rejected:
                     conn.execute(
                         "UPDATE faces SET person_id = NULL WHERE id = ?",
                         (face_db_id,),
                     )
+                    final_pid = None
                 else:
                     confidence = float(np.dot(cached_face.embedding, cluster_centroids[label]))
                     conn.execute(
@@ -307,6 +386,23 @@ def persist_face_scan(
                         (face_db_id,),
                     )
                     pending_count += 1
+                    final_pid = None
+
+            # Record a durable assignment for any face that lands on a
+            # concrete person_id via *this* scan's clustering (not a pending
+            # match awaiting review, not a rejection) — that's what makes it
+            # sticky for every future rescan. Already-durable re-attachments
+            # (prior_pid is not None) are left untouched, not re-recorded.
+            if prior_pid is None and final_pid is not None:
+                face_assignments.record_assignment(
+                    conn,
+                    ff.content_hash,
+                    provider_id,
+                    cached_face.bbox,
+                    final_pid,
+                    source="cluster",
+                    existing=assignments_by_hash.get(ff.content_hash),
+                )
 
             flat_face_idx += 1
 
@@ -404,6 +500,7 @@ def merge_persons(conn: sqlite3.Connection, source_id: int, target_id: int) -> b
         "UPDATE faces SET person_id = ? WHERE person_id = ?",
         (target_id, source_id),
     )
+    face_assignments.repoint_person(conn, source_id, target_id)
     conn.execute("DELETE FROM persons WHERE id = ?", (source_id,))
 
     # Recompute centroid for target from its faces' embeddings

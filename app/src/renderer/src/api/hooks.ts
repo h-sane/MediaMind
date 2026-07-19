@@ -796,14 +796,43 @@ export function useOrganizePreview(libraryId: string) {
 export function useOrganizeExecute(libraryId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ dryRun, expectedPlanned }: { dryRun: boolean; expectedPlanned?: number }) =>
-      api.organize.execute(libraryId, dryRun, expectedPlanned),
+    mutationFn: ({
+      dryRun,
+      expectedPlanned,
+      expectedPlanHash,
+      excludedSources
+    }: {
+      dryRun: boolean
+      expectedPlanned?: number
+      expectedPlanHash?: string
+      excludedSources?: string[]
+    }) => api.organize.execute(libraryId, dryRun, expectedPlanned, expectedPlanHash, excludedSources),
     onSuccess: (_data, vars) => {
       if (!vars.dryRun) {
         qc.invalidateQueries({ queryKey: ['organize-preview', libraryId] })
         qc.invalidateQueries({ queryKey: ['organize-audit', libraryId] })
       }
     }
+  })
+}
+
+// Kicks off real organize execution as a background job and returns
+// immediately — callers close their confirm dialog right after calling
+// mutate(), they don't await completion. Progress/completion is picked up
+// from the WS job broadcast by OrganizeProgressBubble, not from this hook's
+// return value (mirrors useExecuteJob for dedupe deletes).
+export function useOrganizeExecuteJob(libraryId: string) {
+  return useMutation({
+    mutationFn: ({
+      expectedPlanned,
+      expectedPlanHash,
+      excludedSources
+    }: {
+      expectedPlanned?: number
+      expectedPlanHash?: string
+      excludedSources?: string[]
+    }) => api.organize.executeJob(libraryId, expectedPlanned, expectedPlanHash, excludedSources),
+    onSuccess: (snap) => useJobsStore.getState().upsert(snap)
   })
 }
 

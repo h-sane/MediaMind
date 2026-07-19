@@ -6,6 +6,7 @@ import { useJobsStore } from './stores/jobs'
 import { ExplorerShell } from './explorer/ExplorerShell'
 import { DeleteProgressBubble } from './components/DeleteProgressBubble'
 import { FaceScanProgressBubble } from './components/FaceScanProgressBubble'
+import { OrganizeProgressBubble } from './components/OrganizeProgressBubble'
 import { DevLogPanel } from './components/DevLogPanel'
 import { DEV_LOG_PANEL_ENABLED } from './devLogConfig'
 
@@ -34,6 +35,9 @@ function JobInvalidator(): null {
           qc.invalidateQueries({ queryKey: ['multi-person', job.library_id] })
         } else if (job.type === 'provider-download') {
           qc.invalidateQueries({ queryKey: ['providers'] })
+        } else if (job.type === 'organize-execute') {
+          qc.invalidateQueries({ queryKey: ['organize-preview', job.library_id] })
+          qc.invalidateQueries({ queryKey: ['organize-audit', job.library_id] })
         }
       }
     }
@@ -96,6 +100,7 @@ export default function App(): React.JSX.Element {
       <ExplorerShell />
       <DeleteProgressBubble />
       <FaceScanProgressBubble />
+      <OrganizeProgressBubble />
       <DevLogGate />
     </div>
   )

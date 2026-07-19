@@ -335,17 +335,22 @@ class PlannedMoveOut(BaseModel):
     dest_folder_rel: str
     person_id: int | None
     person_name: str | None
+    reason: str
 
 
 class OrganizePreviewOut(BaseModel):
     planned: int
     by_person: dict[str, int]   # display label -> file count
     moves: list[PlannedMoveOut]
+    plan_hash: str  # re-verified by execute against a freshly-rebuilt plan
+    stayed_unrecognized: int  # files with faces that stay in place, nobody named
 
 
 class OrganizeExecuteIn(BaseModel):
     dry_run: bool = False
     expected_planned: int | None = None  # safety guard: reject if plan size changed
+    expected_plan_hash: str | None = None  # content guard: reject if plan contents changed
+    excluded_sources: list[str] = []  # source_rel values the user unchecked in the review UI
 
 
 class OrganizeActionOut(BaseModel):

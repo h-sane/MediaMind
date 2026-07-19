@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMergeSuggestion, useSuggestionMergePreview } from '../../../api/hooks'
 import { MediaViewer } from '../../../components/MediaViewer'
+import { FolderPickerDialog } from '../shared/FolderPickerDialog'
 import { FullscreenModalShell } from '../shared/FullscreenModalShell'
 import { MatchReviewCard } from './MatchReviewCard'
 import type { BindingSuggestion, ExecutionReport } from '../../../api/client'
@@ -32,6 +33,7 @@ export function MatchReviewModal({ libraryId, suggestion, onClose, onCommitted }
   const [reassignments, setReassignments] = useState<Map<number, string>>(new Map())
   const [reassignDraftFor, setReassignDraftFor] = useState<number | null>(null)
   const [reassignDraftValue, setReassignDraftValue] = useState('')
+  const [showFolderPicker, setShowFolderPicker] = useState(false)
   const [singleViewIndex, setSingleViewIndex] = useState<number | null>(null)
 
   const outliers = preview?.folder_outliers ?? []
@@ -147,7 +149,7 @@ export function MatchReviewModal({ libraryId, suggestion, onClose, onCommitted }
               <h3 className="mb-3 text-sm font-medium text-white">
                 In this folder, not yet matched to {suggestion.person_names.join(', ')}
               </h3>
-              <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+              <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))' }}>
                 {outliers.map((f, i) => {
                   const decision = outlierDecisions.get(f.file_id)
                   const reassignTo = reassignments.get(f.file_id)
@@ -211,7 +213,7 @@ export function MatchReviewModal({ libraryId, suggestion, onClose, onCommitted }
               <h3 className="mb-3 text-sm font-medium text-white">
                 {suggestion.person_names.join(', ')}&apos;s other photos, not yet in this folder
               </h3>
-              <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+              <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))' }}>
                 {moves.map((m, i) => {
                   const excluded = moveExcluded.has(m.file_id)
                   const reassignTo = reassignments.get(m.file_id)
@@ -298,19 +300,21 @@ export function MatchReviewModal({ libraryId, suggestion, onClose, onCommitted }
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
           <div className="w-full max-w-sm rounded-2xl border border-zinc-700 bg-zinc-900 p-6 shadow-2xl">
             <h3 className="mb-2 text-sm font-semibold text-white">Move to a different folder</h3>
-            <p className="mb-3 text-xs text-zinc-400">
-              Folder path relative to the library root, e.g. <code className="rounded bg-zinc-800 px-1">Family/Bob</code>.
+            <p className="mb-3 truncate text-xs text-zinc-400">
+              {reassignDraftValue ? (
+                <>
+                  Chosen: <code className="rounded bg-zinc-800 px-1 text-zinc-200">{reassignDraftValue}</code>
+                </>
+              ) : (
+                'No folder chosen yet.'
+              )}
             </p>
-            <input
-              autoFocus
-              value={reassignDraftValue}
-              onChange={(e) => setReassignDraftValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') saveReassignDraft()
-                if (e.key === 'Escape') setReassignDraftFor(null)
-              }}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-zinc-500"
-            />
+            <button
+              onClick={() => setShowFolderPicker(true)}
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-800"
+            >
+              Browse for a folder…
+            </button>
             <div className="mt-4 flex justify-end gap-2">
               <button
                 onClick={() => setReassignDraftFor(null)}
@@ -328,6 +332,18 @@ export function MatchReviewModal({ libraryId, suggestion, onClose, onCommitted }
             </div>
           </div>
         </div>
+      )}
+
+      {showFolderPicker && (
+        <FolderPickerDialog
+          libraryId={libraryId}
+          initialRel={reassignDraftValue}
+          onClose={() => setShowFolderPicker(false)}
+          onPick={(rel) => {
+            setReassignDraftValue(rel)
+            setShowFolderPicker(false)
+          }}
+        />
       )}
 
       {singleViewIndex !== null && (

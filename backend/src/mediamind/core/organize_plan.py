@@ -8,7 +8,7 @@ Routing rules:
   - File with exactly one assigned, NAMED person → People/<PersonName>/
   - File with multiple persons, dominant one named → that person's folder
                                                        (or route_choices override)
-  - File that failed to decode                    → People/_unsorted/
+  - File that failed to decode                    → People/_Needs Review/
   - Everything else (unnamed person, all-noise faces, an undecided
     pending-match review) stays in place — it is never silently moved into a
     developer-facing holding folder. "Everything routes somewhere" now means
@@ -27,6 +27,7 @@ despite the folder being frozen).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -40,6 +41,27 @@ class PlannedMove:
     dest_folder_rel: str     # destination folder relative to library_root (posix)
     person_id: int | None
     person_name: str | None  # display name shown to the user
+    reason: str = ""         # short, user-facing explanation of why this destination
+
+
+def plan_hash(moves: list[PlannedMove]) -> str:
+    """Content hash of a plan's (source, destination) pairs, order-independent.
+
+    Preview returns this; execute is given it back and re-verifies against a
+    freshly-rebuilt plan before touching disk. `expected_planned`/
+    `expected_move_count` guards elsewhere in this codebase only compare
+    *counts* — a same-count-but-different-contents drift (e.g. a rescan
+    reassigned who a cluster matched between preview and execute) passes
+    those silently. This catches that case too.
+    """
+    pairs = sorted((m.source_rel, m.dest_folder_rel) for m in moves)
+    h = hashlib.sha256()
+    for src, dest in pairs:
+        h.update(src.encode("utf-8"))
+        h.update(b"\0")
+        h.update(dest.encode("utf-8"))
+        h.update(b"\n")
+    return h.hexdigest()
 
 
 def safe_folder_name(name: str) -> str:
@@ -100,6 +122,24 @@ def build_organize_plan(
     Only files present in the `faces` table are included. Files with no face
     records (never scanned for faces, or scanned with zero detections) are left
     in place and do not appear in the plan.
+    """
+    moves, _stayed_unrecognized = build_organize_plan_with_stats(conn, provider_id, target_rel)
+    return moves
+
+
+def build_organize_plan_with_stats(
+    conn: sqlite3.Connection,
+    provider_id: str,
+    target_rel: str = "People",
+) -> tuple[list[PlannedMove], int]:
+    """Same as `build_organize_plan`, plus a count of files that have face
+    detections but stay in place because nobody in them is named yet (or the
+    only candidate was explicitly rejected) — the preview UI's "N files stay
+    in place (unrecognized)" line. Deliberately excludes files that stay in
+    place for other reasons (inside a respected folder, awaiting pending-match
+    review, already at their destination) since those already have their own
+    explicit UI surfacing elsewhere (Respected folders, the pending-review
+    panel) — double-counting them here would confuse more than it clarifies.
     """
     # Person display names: id -> name. Unnamed (auto_label-only) persons are
     # deliberately excluded — organize only ever moves files for people the
@@ -200,6 +240,7 @@ def build_organize_plan(
         return None
 
     plans: list[PlannedMove] = []
+    stayed_unrecognized = 0
     for fid, fd in file_data.items():
         source_rel: str = fd["path"]
         person_ids: set[int] = fd["person_ids"]
@@ -219,28 +260,36 @@ def build_organize_plan(
         rejected_pids = rejected_by_hash.get(fd["content_hash"] or "", set())
         effective_person_ids = person_ids - rejected_pids
         if person_ids and not effective_person_ids:
+            stayed_unrecognized += 1
             continue
 
+        reason: str
         if not decoded_ok:
-            dest_folder = "_unsorted"
+            dest_folder = "_Needs Review"
             dest_pid: int | None = None
             dest_name: str | None = None
+            reason = "Couldn't be read — needs manual review"
         elif not effective_person_ids:
             # Has face records but all person_id = NULL (noise cluster) —
             # nobody to route to; stays in place, same as a zero-face file.
+            stayed_unrecognized += 1
             continue
         elif len(effective_person_ids) == 1:
             dest_pid = next(iter(effective_person_ids))
             dest_name = person_display.get(dest_pid)
             if dest_name is None:
+                stayed_unrecognized += 1
                 continue  # person not yet named — leave file in place
             dest_folder = safe_folder_name(dest_name)
+            reason = f"Matched to {dest_name}"
         else:
             # Multiple persons in this file — use override or pick dominant
             # (excluding anyone rejected for this file from either path)
             if fid in route_choices and route_choices[fid] in effective_person_ids:
                 dest_pid = route_choices[fid]
+                chose_override = True
             else:
+                chose_override = False
                 eligible_placeholders = ",".join("?" * len(effective_person_ids))
                 row = conn.execute(
                     f"""
@@ -254,11 +303,18 @@ def build_organize_plan(
                 dest_pid = int(row["person_id"]) if row else None
             dest_name = person_display.get(dest_pid) if dest_pid is not None else None
             if dest_name is None:
+                stayed_unrecognized += 1
                 continue  # dominant person unknown/not yet named — leave file in place
             dest_folder = safe_folder_name(dest_name)
+            reason = (
+                f"You assigned this photo to {dest_name}"
+                if chose_override
+                else f"Most faces in this photo belong to {dest_name}"
+            )
 
         if dest_pid is not None and dest_pid in bound_folder_by_person:
             dest_folder_rel = bound_folder_by_person[dest_pid]
+            reason = f"{dest_name}'s folder is respected here" if dest_name else reason
         else:
             dest_folder_rel = f"{target_rel}/{dest_folder}"
 
@@ -272,6 +328,7 @@ def build_organize_plan(
                 dest_folder_rel=dest_folder_rel,
                 person_id=dest_pid,
                 person_name=dest_name,
+                reason=reason,
             )
         )
 
@@ -282,7 +339,7 @@ def build_organize_plan(
     # undecodable files would silently stay in place forever instead of
     # routing to the visible _unsorted holding area (safety invariant:
     # "everything routes somewhere").
-    unsorted_dest = f"{target_rel}/_unsorted"
+    unsorted_dest = f"{target_rel}/_Needs Review"
     for row in conn.execute("SELECT id, path FROM files WHERE decoded_ok = 0"):
         fid = int(row["id"])
         if fid in file_data:
@@ -301,7 +358,8 @@ def build_organize_plan(
                 dest_folder_rel=unsorted_dest,
                 person_id=None,
                 person_name=None,
+                reason="Couldn't be read — needs manual review",
             )
         )
 
-    return sorted(plans, key=lambda m: (m.dest_folder_rel, m.source_rel))
+    return sorted(plans, key=lambda m: (m.dest_folder_rel, m.source_rel)), stayed_unrecognized

@@ -8,8 +8,10 @@ on the next run, only files not yet in the cache need re-detection.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable
 
@@ -43,6 +45,12 @@ logger = logging.getLogger("mediamind.faces.scan")
 # flat cap — hash_timeout_for() scales it up for large files (see below).
 DEFAULT_HASH_TIMEOUT_SECONDS = 30.0
 MAX_LEAKED_STALL_THREADS = 64
+
+# Hashing is I/O-bound (hash_file releases the GIL during reads), so
+# oversubscribing cores pays off — mirrors dedupe.py's find_duplicates()
+# identical constant/rationale (F15's hashing half; detection itself stays
+# sequential, see detect_batch's docstring for why).
+_HASH_WORKERS = min(8, (os.cpu_count() or 4) * 2)
 
 # Same throttle as _make_dedupe_runner's — logging every tick would flood the
 # dev log on a large scan; this is just frequent enough to prove the walk is
@@ -135,32 +143,62 @@ def make_face_scan_runner(
             no_face_files = 0
             unreadable_files = 0
 
+            def _hash_one(scanned: ScannedFile) -> object | None:
+                """Just the I/O-bound read+hash — no DB access, so this is
+                safe to run from a worker thread. Returns TIMED_OUT, a
+                content-hash string, or None (stat/hash failure)."""
+                try:
+                    stat = scanned.path.stat()
+                    return run_with_timeout(
+                        lambda p=scanned.path: hash_file(p),
+                        hash_timeout_for(stat.st_size, floor=DEFAULT_HASH_TIMEOUT_SECONDS),
+                        hash_limiter,
+                    )
+                except Exception:
+                    return None
+
             def hash_batch(batch: list[ScannedFile]) -> bool:
-                """Hash + upsert one batch, appending to file_ids/content_hashes.
-                Returns False if cancelled partway through."""
-                for scanned in batch:
-                    if ctx.cancelled():
-                        return False
+                """Hash a batch in parallel (mirrors dedupe.py's
+                find_duplicates() — hash_file releases the GIL during reads,
+                so oversubscribing cores pays off), then upsert the results
+                serially on the single sqlite connection: sqlite3 connections
+                aren't safe for concurrent writes from multiple threads, so
+                the DB write phase stays single-threaded even though the slow
+                part (disk I/O) now runs concurrently. Returns False if
+                cancelled partway through either phase."""
+                base = len(file_ids)
+                results: list[object] = [None] * len(batch)
+                with ThreadPoolExecutor(max_workers=_HASH_WORKERS) as pool:
+                    futures = {pool.submit(_hash_one, scanned): i for i, scanned in enumerate(batch)}
+                    done = 0
+                    for fut in as_completed(futures):
+                        results[futures[fut]] = fut.result()
+                        done += 1
+                        ctx.report_progress(base + done, total, "hashing")
+                        if ctx.cancelled():
+                            for pending in futures:
+                                pending.cancel()
+                            return False
+
+                for scanned, outcome in zip(batch, results):
                     rel = scanned.path.relative_to(library_root).as_posix()
+                    if outcome is TIMED_OUT:
+                        logger.warning(
+                            "face scan: skipping %s - timed out after %.0fs reading it "
+                            "(likely a cloud-sync placeholder or a stalled network/encrypted-drive read)",
+                            scanned.path,
+                            hash_timeout_for(scanned.size, floor=DEFAULT_HASH_TIMEOUT_SECONDS),
+                        )
+                        file_ids.append(None)
+                        content_hashes.append(None)
+                        continue
+                    if outcome is None:
+                        file_ids.append(None)
+                        content_hashes.append(None)
+                        continue
+                    content_hash: str = outcome  # type: ignore[assignment]
                     try:
                         stat = scanned.path.stat()
-                        outcome = run_with_timeout(
-                            lambda p=scanned.path: hash_file(p),
-                            hash_timeout_for(stat.st_size, floor=DEFAULT_HASH_TIMEOUT_SECONDS),
-                            hash_limiter,
-                        )
-                        if outcome is TIMED_OUT:
-                            logger.warning(
-                                "face scan: skipping %s - timed out after %.0fs reading it "
-                                "(likely a cloud-sync placeholder or a stalled network/encrypted-drive read)",
-                                scanned.path,
-                                hash_timeout_for(stat.st_size, floor=DEFAULT_HASH_TIMEOUT_SECONDS),
-                            )
-                            file_ids.append(None)
-                            content_hashes.append(None)
-                            ctx.report_progress(len(file_ids), total, "hashing")
-                            continue
-                        content_hash: str | None = outcome  # type: ignore[assignment]
                         fid = upsert_file(conn, rel, scanned.kind,
                                          stat.st_size, stat.st_mtime, content_hash, None)
                         conn.commit()
@@ -169,7 +207,6 @@ def make_face_scan_runner(
                     except Exception:
                         file_ids.append(None)
                         content_hashes.append(None)
-                    ctx.report_progress(len(file_ids), total, "hashing")
                 return True
 
             def detect_batch(batch: list[ScannedFile], start_offset: int) -> bool:
@@ -344,6 +381,23 @@ def make_face_scan_runner(
                 conn.execute(
                     "DELETE FROM faces WHERE provider_id = ? AND file_id NOT IN (SELECT file_id FROM _scan_seen_file_ids)",
                     (provider_id,),
+                )
+                # Also prune `files` rows themselves for entries that are both
+                # unseen this walk AND reference no remaining face (any
+                # provider) — a file deleted/moved outside the app otherwise
+                # sits in the index forever (only `faces` rows were pruned
+                # above), and organize_plan.py routes every decoded_ok=0 row
+                # into People/_Needs Review, including these phantom entries
+                # (F10). Scoped to "no faces left" rather than "unseen" alone
+                # so a directory that merely timed out this one walk (see
+                # scan_folder's per-directory timeout) never loses a real
+                # person's face/identity data over a transient stall.
+                conn.execute(
+                    """
+                    DELETE FROM files
+                    WHERE id NOT IN (SELECT file_id FROM _scan_seen_file_ids)
+                      AND id NOT IN (SELECT DISTINCT file_id FROM faces)
+                    """
                 )
                 conn.execute("DROP TABLE _scan_seen_file_ids")
                 conn.commit()

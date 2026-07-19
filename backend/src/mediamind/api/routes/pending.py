@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException, Request
 from mediamind.api.models import PendingDecisionsIn, PendingMatchOut
 from mediamind.config import library_data_dir
 from mediamind.core.libraries import LibraryRegistry
+from mediamind.store import face_assignments
 from mediamind.store.db import library_db_path, open_db
 
 router = APIRouter(tags=["pending"])
@@ -92,7 +93,14 @@ def decide_pending(library_id: str, body: PendingDecisionsIn, request: Request):
                 )
 
             row = conn.execute(
-                "SELECT face_id, person_id FROM pending_matches WHERE id = ?",
+                """
+                SELECT pm.face_id, pm.person_id, f.provider_id,
+                       f.bbox_x1, f.bbox_y1, f.bbox_x2, f.bbox_y2, fi.content_hash
+                FROM pending_matches pm
+                JOIN faces f ON f.id = pm.face_id
+                JOIN files fi ON fi.id = f.file_id
+                WHERE pm.id = ?
+                """,
                 (item.pending_id,),
             ).fetchone()
             if row is None:
@@ -103,6 +111,13 @@ def decide_pending(library_id: str, body: PendingDecisionsIn, request: Request):
                     "UPDATE faces SET person_id = ? WHERE id = ?",
                     (row["person_id"], row["face_id"]),
                 )
+                # Durably record it — a user-confirmed match must never be
+                # un-named by re-clustering on a later rescan.
+                if row["content_hash"]:
+                    bbox = (row["bbox_x1"], row["bbox_y1"], row["bbox_x2"], row["bbox_y2"])
+                    face_assignments.record_assignment(
+                        conn, row["content_hash"], row["provider_id"], bbox, row["person_id"], source="user",
+                    )
 
             conn.execute(
                 "UPDATE pending_matches SET decision = ? WHERE id = ?",

@@ -1,11 +1,29 @@
-import { useState } from 'react'
-import { ArrowLeft } from 'lucide-react'
-import { useOrganizePreview, useOrganizeExecute, useOrganizeUndo, useOrganizeAudit } from '../../../api/hooks'
-import type { ExecutionReport } from '../../../api/client'
+import { useEffect, useMemo, useState } from 'react'
+import { ArrowLeft, ChevronDown, ChevronRight } from 'lucide-react'
+import {
+  useOrganizePreview,
+  useOrganizeExecute,
+  useOrganizeExecuteJob,
+  useOrganizeUndo,
+  useOrganizeAudit
+} from '../../../api/hooks'
+import { useJobsStore } from '../../../stores/jobs'
+import type { ExecutionReport, PlannedMove } from '../../../api/client'
 
 interface Props {
   libraryId: string
   onBack: () => void
+}
+
+// Backend action kinds (see store/audit.py) shown in plain language — F9:
+// the undo card used to say "Previous organize action" regardless of which
+// kind it actually was, which was misleading once merge/materialize actions
+// also became undoable here.
+const ACTION_KIND_LABELS: Record<string, string> = {
+  'organize-by-person': 'organize',
+  'faces-merge-into-folder': 'merge into folder',
+  'faces-materialize': 'create folder',
+  'faces-prep-create-unsorted': 'create Unsorted folder'
 }
 
 function ConfirmOrganizeDialog({
@@ -75,6 +93,97 @@ function ResultBanner({ report, onDismiss }: { report: ExecutionReport; onDismis
   )
 }
 
+interface Group {
+  key: string
+  label: string
+  moves: PlannedMove[]
+}
+
+function groupMoves(moves: PlannedMove[]): Group[] {
+  const byFolder = new Map<string, Group>()
+  for (const m of moves) {
+    const key = m.dest_folder_rel
+    const label = m.person_name || key.split('/').pop() || key
+    let g = byFolder.get(key)
+    if (!g) {
+      g = { key, label, moves: [] }
+      byFolder.set(key, g)
+    }
+    g.moves.push(m)
+  }
+  return [...byFolder.values()].sort((a, b) => b.moves.length - a.moves.length)
+}
+
+function PersonGroup({
+  group,
+  excluded,
+  onToggleFile,
+  onToggleGroup
+}: {
+  group: Group
+  excluded: Set<string>
+  onToggleFile: (sourceRel: string) => void
+  onToggleGroup: (moves: PlannedMove[], include: boolean) => void
+}): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false)
+  const isHolding = group.label.startsWith('_')
+  const displayLabel = isHolding ? group.label.slice(1) : group.label
+  const includedCount = group.moves.filter((m) => !excluded.has(m.source_rel)).length
+  const allIncluded = includedCount === group.moves.length
+  const noneIncluded = includedCount === 0
+
+  return (
+    <div className="rounded-xl border border-zinc-100">
+      <div className="flex items-center gap-2 px-3 py-2">
+        <input
+          type="checkbox"
+          checked={allIncluded}
+          ref={(el) => {
+            if (el) el.indeterminate = !allIncluded && !noneIncluded
+          }}
+          onChange={() => onToggleGroup(group.moves, noneIncluded || !allIncluded)}
+          className="h-4 w-4 rounded border-zinc-300"
+        />
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="flex flex-1 items-center gap-1.5 text-left"
+        >
+          {expanded ? (
+            <ChevronDown className="h-3.5 w-3.5 text-zinc-400" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 text-zinc-400" />
+          )}
+          <span className={`text-sm ${isHolding ? 'text-zinc-400' : 'text-zinc-700'}`}>
+            {isHolding ? displayLabel : `People/${displayLabel}`}
+          </span>
+        </button>
+        <span className="text-xs text-zinc-400">
+          {includedCount}/{group.moves.length} file{group.moves.length !== 1 ? 's' : ''}
+        </span>
+      </div>
+      {expanded && (
+        <div className="max-h-56 overflow-y-auto border-t border-zinc-100 bg-zinc-50 px-3 py-2">
+          {group.moves.map((m) => (
+            <label
+              key={m.source_rel}
+              title={m.reason}
+              className="flex items-center gap-2 py-1 text-xs text-zinc-600"
+            >
+              <input
+                type="checkbox"
+                checked={!excluded.has(m.source_rel)}
+                onChange={() => onToggleFile(m.source_rel)}
+                className="h-3.5 w-3.5 rounded border-zinc-300"
+              />
+              <span className="truncate">{m.source_rel.split('/').pop()}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** Organize-by-people panel — plan preview, dry run, execute, undo, and a
  * link to the full history. Round-1: the history list itself renders inline
  * at the bottom rather than a separate Audit sub-view (deferred). */
@@ -82,27 +191,72 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
   const { data: preview, isLoading, isError } = useOrganizePreview(libraryId)
   const { data: audit } = useOrganizeAudit(libraryId)
   const execute = useOrganizeExecute(libraryId)
+  const executeJob = useOrganizeExecuteJob(libraryId)
   const undo = useOrganizeUndo(libraryId)
 
   const [showConfirm, setShowConfirm] = useState(false)
   const [result, setResult] = useState<ExecutionReport | null>(null)
-  const [showMoves, setShowMoves] = useState(false)
   const [showRescanNotice, setShowRescanNotice] = useState(false)
+  const [pendingJobId, setPendingJobId] = useState<string | null>(null)
+  const [excluded, setExcluded] = useState<Set<string>>(new Set())
 
   const lastAction = audit?.find((a) => !a.dry_run && !a.undone && a.ok)
 
-  const handleDryRun = () => {
-    execute.mutate({ dryRun: true }, { onSuccess: (data) => setResult(data) })
+  const groups = useMemo(() => groupMoves(preview?.moves ?? []), [preview])
+  const includedCount = (preview?.moves.length ?? 0) - excluded.size
+
+  const jobs = useJobsStore((s) => s.jobs)
+  useEffect(() => {
+    if (!pendingJobId) return
+    const job = jobs[pendingJobId]
+    if (!job) return
+    if (job.state === 'succeeded') {
+      if (job.result?.ok) setShowRescanNotice(true)
+      setPendingJobId(null)
+    } else if (job.state === 'failed' || job.state === 'cancelled') {
+      setPendingJobId(null)
+    }
+  }, [jobs, pendingJobId])
+
+  const toggleFile = (sourceRel: string) => {
+    setExcluded((prev) => {
+      const next = new Set(prev)
+      if (next.has(sourceRel)) next.delete(sourceRel)
+      else next.add(sourceRel)
+      return next
+    })
   }
 
-  const handleExecute = () => {
+  const toggleGroup = (moves: PlannedMove[], include: boolean) => {
+    setExcluded((prev) => {
+      const next = new Set(prev)
+      for (const m of moves) {
+        if (include) next.delete(m.source_rel)
+        else next.add(m.source_rel)
+      }
+      return next
+    })
+  }
+
+  const handleDryRun = () => {
     execute.mutate(
-      { dryRun: false, expectedPlanned: preview?.planned },
+      { dryRun: true, expectedPlanned: preview?.planned, expectedPlanHash: preview?.plan_hash, excludedSources: [...excluded] },
+      { onSuccess: (data) => setResult(data) }
+    )
+  }
+
+  // Real execution runs as a background job (see OrganizeProgressBubble) so
+  // a large batch shows progress and can be cancelled instead of blocking
+  // this dialog — the confirm dialog closes immediately, mirroring the
+  // dedupe bulk-delete flow. Completion/errors surface on the bubble itself;
+  // pendingJobId above just watches for the rescan-notice trigger.
+  const handleExecute = () => {
+    executeJob.mutate(
+      { expectedPlanned: preview?.planned, expectedPlanHash: preview?.plan_hash, excludedSources: [...excluded] },
       {
-        onSuccess: (data) => {
-          setResult(data)
+        onSuccess: (snap) => {
+          setPendingJobId(snap.id)
           setShowConfirm(false)
-          if (data.ok && !data.dry_run) setShowRescanNotice(true)
         }
       }
     )
@@ -116,10 +270,10 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
     <div className="h-full overflow-y-auto p-6">
       {showConfirm && preview && (
         <ConfirmOrganizeDialog
-          planned={preview.planned}
+          planned={includedCount}
           onConfirm={handleExecute}
           onCancel={() => setShowConfirm(false)}
-          isPending={execute.isPending}
+          isPending={executeJob.isPending}
         />
       )}
 
@@ -131,7 +285,7 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
         <h2 className="text-lg font-semibold tracking-tight">Organize by people</h2>
         <p className="mt-1 text-sm text-zinc-500">
           Move your media into <code className="rounded bg-zinc-100 px-1 text-xs">People/</code> subfolders, one
-          folder per person.
+          folder per person. Uncheck anything you don't want moved yet — hover a file for why it's routed there.
         </p>
       </div>
 
@@ -162,6 +316,11 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
           {execute.error.message}
         </p>
       )}
+      {executeJob.isError && (
+        <p className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {executeJob.error.message}
+        </p>
+      )}
       {undo.isError && (
         <p className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {undo.error.message}
@@ -188,63 +347,38 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
         {preview && preview.planned > 0 && (
           <>
             <p className="mb-4 text-sm text-zinc-700">
-              <span className="font-medium">{preview.planned}</span> files will be organized into{' '}
-              <span className="font-medium">{Object.keys(preview.by_person).length}</span> folders.
+              <span className="font-medium">{includedCount}</span> of{' '}
+              <span className="font-medium">{preview.planned}</span> files selected, into{' '}
+              <span className="font-medium">{groups.length}</span> folders.
             </p>
 
-            <div className="mb-4 space-y-1.5">
-              {Object.entries(preview.by_person).sort(([, a], [, b]) => b - a).map(([name, count]) => (
-                <div key={name} className="flex items-center justify-between">
-                  <span className={`text-sm ${name.startsWith('_') ? 'text-zinc-400' : 'text-zinc-700'}`}>
-                    {name.startsWith('_') ? name : `People/${name}`}
-                  </span>
-                  <span className="text-xs text-zinc-400">{count} file{count !== 1 ? 's' : ''}</span>
-                </div>
+            <div className="mb-4 space-y-2">
+              {groups.map((g) => (
+                <PersonGroup key={g.key} group={g} excluded={excluded} onToggleFile={toggleFile} onToggleGroup={toggleGroup} />
               ))}
             </div>
 
-            <button
-              onClick={() => setShowMoves((v) => !v)}
-              className="mb-4 text-xs text-zinc-400 underline hover:text-zinc-600"
-            >
-              {showMoves ? 'Hide file list' : `Show all ${preview.planned} files`}
-            </button>
-
-            {showMoves && (
-              <div className="mb-4 max-h-64 overflow-y-auto rounded-xl border border-zinc-100 bg-zinc-50 p-3">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-left text-zinc-400">
-                      <th className="pb-1 pr-4 font-normal">Source</th>
-                      <th className="pb-1 font-normal">Destination folder</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {preview.moves.map((m, i) => (
-                      <tr key={i} className="border-t border-zinc-100">
-                        <td className="max-w-[200px] truncate py-1 pr-4 text-zinc-600">{m.source_rel.split('/').pop()}</td>
-                        <td className="py-1 text-zinc-500">{m.dest_folder_rel}/</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+            {preview.stayed_unrecognized > 0 && (
+              <p className="mb-4 text-xs text-zinc-400">
+                {preview.stayed_unrecognized} file{preview.stayed_unrecognized !== 1 ? 's' : ''} stay in place
+                (unrecognized) — nobody in {preview.stayed_unrecognized !== 1 ? 'them' : 'it'} has been named yet.
+              </p>
             )}
 
             <div className="flex flex-wrap gap-2">
               <button
                 onClick={handleDryRun}
-                disabled={execute.isPending}
+                disabled={execute.isPending || includedCount === 0}
                 className="rounded-lg border border-zinc-200 px-4 py-2 text-sm text-zinc-600 hover:bg-zinc-50 disabled:opacity-50"
               >
-                {execute.isPending && execute.variables?.dryRun === true ? 'Running…' : 'Dry run'}
+                {execute.isPending ? 'Running…' : 'Dry run'}
               </button>
               <button
                 onClick={() => setShowConfirm(true)}
-                disabled={execute.isPending || preview.planned === 0}
+                disabled={executeJob.isPending || includedCount === 0}
                 className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50"
               >
-                Organize {preview.planned} files
+                Organize {includedCount} files
               </button>
             </div>
           </>
@@ -255,7 +389,9 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
         <div className="mt-4 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium">Previous organize action</p>
+              <p className="text-sm font-medium">
+                Previous action: {ACTION_KIND_LABELS[lastAction.kind] ?? lastAction.kind}
+              </p>
               <p className="mt-0.5 text-xs text-zinc-500">
                 {lastAction.handled} files moved on {new Date(lastAction.created_at * 1000).toLocaleDateString()}
               </p>
