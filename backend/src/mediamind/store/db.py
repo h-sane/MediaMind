@@ -11,7 +11,7 @@ import sqlite3
 from pathlib import Path
 from typing import Callable
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 _V1_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -248,6 +248,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_rejected_person_files_key
     conn.commit()
 
 
+def _v8_migration(conn: sqlite3.Connection) -> None:
+    """Schema v8: durable per-face person assignments (Phase 1 of the
+    faces/organize audit — eliminates identity churn on rescan). Once a face
+    is confidently assigned to a person — by clustering or by explicit user
+    action — that assignment is recorded here so `persist_face_scan` can
+    re-attach it directly on every future rescan instead of re-deriving
+    identity from scratch, where a split/merged cluster could silently
+    reassign or hijack it. Keyed the same way as rejected_face_regions/
+    rejected_person_files (content_hash + provider_id, matched by IOU on
+    bbox) since faces rows are wiped and recreated wholesale every rescan."""
+    conn.executescript("""
+CREATE TABLE IF NOT EXISTS face_assignments (
+    id INTEGER PRIMARY KEY,
+    content_hash TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    bbox_x1 REAL NOT NULL, bbox_y1 REAL NOT NULL, bbox_x2 REAL NOT NULL, bbox_y2 REAL NOT NULL,
+    person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    source TEXT NOT NULL,                -- 'cluster' | 'user'
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_face_assignments_key ON face_assignments(content_hash, provider_id);
+CREATE INDEX IF NOT EXISTS idx_face_assignments_person ON face_assignments(person_id);
+""")
+    conn.commit()
+
+
 # v2 is a string; v3+ are callables (ALTER TABLE requires special handling).
 _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (2, _V2_ADDITIONS),
@@ -256,6 +282,7 @@ _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (5, _v5_migration),
     (6, _v6_migration),
     (7, _v7_migration),
+    (8, _v8_migration),
 ]
 
 

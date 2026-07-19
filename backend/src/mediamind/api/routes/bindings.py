@@ -40,6 +40,7 @@ from mediamind.core.libraries import LibraryRegistry
 from mediamind.core.organize_plan import safe_dest_folder_rel
 from mediamind.core.safety import FileOp, execute as safety_execute, new_manifest_path
 from mediamind.store import bindings as bindings_store
+from mediamind.store import face_assignments
 from mediamind.store import rejected_persons
 from mediamind.store.audit import record_action
 from mediamind.store.bindings import BindingConflictError
@@ -327,10 +328,27 @@ def merge_suggestion(library_id: str, suggestion_id: int, body: SuggestionMergeI
                 # on the floor and the same files resurface as outliers forever.
                 if body.confirmed_outlier_file_ids:
                     placeholders = ",".join("?" * len(body.confirmed_outlier_file_ids))
+                    confirmed_faces = conn.execute(
+                        f"""
+                        SELECT f.bbox_x1, f.bbox_y1, f.bbox_x2, f.bbox_y2, fi.content_hash
+                        FROM faces f JOIN files fi ON fi.id = f.file_id
+                        WHERE f.provider_id = ? AND f.file_id IN ({placeholders})
+                        """,
+                        (provider_id, *body.confirmed_outlier_file_ids),
+                    ).fetchall()
                     conn.execute(
                         f"UPDATE faces SET person_id = ? WHERE provider_id = ? AND file_id IN ({placeholders})",
                         (plan.person_id, provider_id, *body.confirmed_outlier_file_ids),
                     )
+                    # Durably record it — a user-confirmed outlier must never
+                    # be un-named by re-clustering on a later rescan.
+                    for cf in confirmed_faces:
+                        if not cf["content_hash"]:
+                            continue
+                        bbox = (cf["bbox_x1"], cf["bbox_y1"], cf["bbox_x2"], cf["bbox_y2"])
+                        face_assignments.record_assignment(
+                            conn, cf["content_hash"], provider_id, bbox, plan.person_id, source="user",
+                        )
 
             conn.commit()
 

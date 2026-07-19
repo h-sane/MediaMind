@@ -147,7 +147,7 @@ export function MatchReviewModal({ libraryId, suggestion, onClose, onCommitted }
               <h3 className="mb-3 text-sm font-medium text-white">
                 In this folder, not yet matched to {suggestion.person_names.join(', ')}
               </h3>
-              <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+              <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))' }}>
                 {outliers.map((f, i) => {
                   const decision = outlierDecisions.get(f.file_id)
                   const reassignTo = reassignments.get(f.file_id)
@@ -211,7 +211,7 @@ export function MatchReviewModal({ libraryId, suggestion, onClose, onCommitted }
               <h3 className="mb-3 text-sm font-medium text-white">
                 {suggestion.person_names.join(', ')}&apos;s other photos, not yet in this folder
               </h3>
-              <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+              <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))' }}>
                 {moves.map((m, i) => {
                   const excluded = moveExcluded.has(m.file_id)
                   const reassignTo = reassignments.get(m.file_id)

@@ -130,7 +130,7 @@ export function MaterializeReviewModal({ libraryId, person, onClose, onCommitted
           {candidates.length > 0 && (
             <section>
               <h3 className="mb-3 text-sm font-medium text-white">Confirm these are all the same person</h3>
-              <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+              <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))' }}>
                 {candidates.map((c, i) => {
                   const isExcluded = excluded.has(c.file_id)
                   const reassignTo = reassignments.get(c.file_id)
