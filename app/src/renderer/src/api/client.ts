@@ -353,6 +353,7 @@ export interface OrganizePreview {
   planned: number
   by_person: Record<string, number>
   moves: PlannedMove[]
+  plan_hash: string
 }
 
 export interface OrganizeAction {
@@ -683,13 +684,23 @@ export const api = {
   organize: {
     preview: (libraryId: string) =>
       request<OrganizePreview>('POST', `/v1/libraries/${libraryId}/organize/preview`),
-    execute: (libraryId: string, dryRun: boolean, expectedPlanned?: number) =>
+    execute: (libraryId: string, dryRun: boolean, expectedPlanned?: number, expectedPlanHash?: string) =>
       request<ExecutionReport>('POST', `/v1/libraries/${libraryId}/organize/execute`, {
         dry_run: dryRun,
-        expected_planned: expectedPlanned ?? null
+        expected_planned: expectedPlanned ?? null,
+        expected_plan_hash: expectedPlanHash ?? null
+      }),
+    // Real execution as a background job — the confirm dialog fires this and
+    // closes immediately; an OrganizeProgressBubble tracks it to completion
+    // via the WS job broadcast, same pattern as duplicates.executeJob.
+    executeJob: (libraryId: string, expectedPlanned?: number, expectedPlanHash?: string) =>
+      request<JobSnapshot>('POST', `/v1/libraries/${libraryId}/organize/execute-job`, {
+        dry_run: false,
+        expected_planned: expectedPlanned ?? null,
+        expected_plan_hash: expectedPlanHash ?? null
       }),
     undo: (libraryId: string) =>
-      request<{ ok: boolean; handled: number; planned: number; errors: number }>(
+      request<{ ok: boolean; handled: number; planned: number; errors: number; kind: string }>(
         'POST',
         `/v1/libraries/${libraryId}/organize/undo`
       ),

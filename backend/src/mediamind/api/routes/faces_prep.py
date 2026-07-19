@@ -18,6 +18,7 @@ from mediamind.core.faces.folder_prep import (
     build_unsorted_moves,
     scan_folder_prep,
 )
+from mediamind.core.jobs import JobManager
 from mediamind.core.safety import FileOp, execute as safety_execute, new_manifest_path
 from mediamind.store.audit import record_action
 from mediamind.store.db import library_db_path, open_db
@@ -32,6 +33,10 @@ def _get_library_root(request: Request, library_id: str) -> Path:
     return Path(lib.path)
 
 
+def _job_manager(request: Request) -> JobManager:
+    return request.app.state.job_manager
+
+
 @router.get("/libraries/{library_id}/faces/prep", response_model=FacesPrepOut)
 def get_faces_prep(library_id: str, request: Request):
     library_root = _get_library_root(request, library_id)
@@ -44,6 +49,13 @@ def get_faces_prep(library_id: str, request: Request):
     response_model=ExecutionReportOut,
 )
 def create_unsorted(library_id: str, body: CreateUnsortedIn, request: Request):
+    running = _job_manager(request).running_for(library_id)
+    if running:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A {running.type} scan is still running — wait for it to finish",
+        )
+
     library_root = _get_library_root(request, library_id)
     sources = build_unsorted_moves(library_root)
     ops = [

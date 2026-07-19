@@ -12,14 +12,29 @@ for the library via `running_for(library_id)` with no type filter.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Iterator
 
 logger = logging.getLogger("mediamind.jobs")
+
+# Job types that must never overlap ANY other job for the same library, in
+# either direction: a destructive move/delete batch racing a scan's
+# files.path rewrites, or two destructive batches racing each other, can
+# corrupt the index or duplicate a move (audit findings F8/F21). Two scans of
+# *different* type (dedupe/faces) may still run concurrently — both are
+# read-only filesystem walks touching disjoint tables, which is why this is a
+# separate, stricter set rather than folded into the same-type check below.
+EXCLUSIVE_JOB_TYPES = {
+    "dedupe-execute",
+    "organize-execute",
+    "faces-merge-execute",
+    "faces-materialize-execute",
+}
 
 
 @dataclass
@@ -83,6 +98,7 @@ class JobManager:
     def __init__(self) -> None:
         self._jobs: dict[str, Job] = {}
         self._cancel_events: dict[str, threading.Event] = {}
+        self._done_events: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         # Set by api/ws.py once the broadcast channel is ready.
@@ -139,18 +155,63 @@ class JobManager:
         job_id = uuid.uuid4().hex[:12]
         job = Job(id=job_id, library_id=library_id, type=job_type, state="queued")
         cancel_event = threading.Event()
+        done_event = threading.Event()
 
         with self._lock:
             self._jobs[job_id] = job
             self._cancel_events[job_id] = cancel_event
+            self._done_events[job_id] = done_event
 
         loop = self._loop or asyncio.get_event_loop()
         ctx = JobContext(job, cancel_event, loop, self._emit)
         thread = threading.Thread(
-            target=self._worker, args=(job, ctx, runner, cancel_event), daemon=True
+            target=self._worker, args=(job, ctx, runner, cancel_event, done_event), daemon=True
         )
         thread.start()
         return job
+
+    def run_sync(
+        self,
+        library_id: str,
+        job_type: str,
+        runner: Callable[["JobContext"], dict],
+    ) -> Job:
+        """Like `start()`, but blocks until the job reaches a terminal state
+        before returning.
+
+        Used by routes that keep a synchronous HTTP contract (the caller
+        awaits the response directly, no polling) but still need the
+        operation visible to `running_for()`/`EXCLUSIVE_JOB_TYPES` for its
+        whole duration, so a concurrent scan or another exclusive job can't
+        race it (F8/F21) — this only changes when the *route* returns, not
+        how the job itself runs. Progress is still broadcast over the WS as
+        usual; nothing currently listens for these job types, which is
+        harmless.
+        """
+        job = self.start(library_id, job_type, runner)
+        self._done_events[job.id].wait()
+        return job
+
+    @contextlib.contextmanager
+    def mark_busy(self, library_id: str, job_type: str) -> Iterator[None]:
+        """Register a bare presence in the job registry for the duration of
+        the `with` block — no thread, no progress, no cancellation, just
+        bookkeeping so `running_for()`/`EXCLUSIVE_JOB_TYPES` see this
+        library as busy. For routes (merge-into-folder, materialize) whose
+        batches are small enough that a caller-facing progress UI isn't
+        worth building, but which still must not race a concurrent scan or
+        another exclusive job (F8/F21) — `run_sync`/`start` are for routes
+        that *do* want progress reporting via JobContext.
+        """
+        job_id = uuid.uuid4().hex[:12]
+        job = Job(id=job_id, library_id=library_id, type=job_type, state="running")
+        with self._lock:
+            self._jobs[job_id] = job
+        try:
+            yield
+        finally:
+            job.state = "succeeded"
+            job.finished_at = time.time()
 
     def cancel(self, job_id: str) -> bool:
         with self._lock:
@@ -177,6 +238,7 @@ class JobManager:
         ctx: JobContext,
         runner: Callable[[JobContext], dict],
         cancel_event: threading.Event,
+        done_event: threading.Event,
     ) -> None:
         loop = self._loop or asyncio.get_event_loop()
         job.state = "running"
@@ -207,3 +269,4 @@ class JobManager:
                 loop.call_soon_threadsafe(self._emit, job)
             except RuntimeError:
                 pass  # loop closed (e.g. test teardown)
+            done_event.set()

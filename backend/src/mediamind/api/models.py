@@ -341,11 +341,13 @@ class OrganizePreviewOut(BaseModel):
     planned: int
     by_person: dict[str, int]   # display label -> file count
     moves: list[PlannedMoveOut]
+    plan_hash: str  # re-verified by execute against a freshly-rebuilt plan
 
 
 class OrganizeExecuteIn(BaseModel):
     dry_run: bool = False
     expected_planned: int | None = None  # safety guard: reject if plan size changed
+    expected_plan_hash: str | None = None  # content guard: reject if plan contents changed
 
 
 class OrganizeActionOut(BaseModel):

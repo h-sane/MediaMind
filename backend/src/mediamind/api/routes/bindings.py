@@ -239,7 +239,8 @@ def merge_suggestion(library_id: str, suggestion_id: int, body: SuggestionMergeI
     files.path rewrite) so a partial failure never loses data or diverges
     the DB from disk — it just leaves some files unmoved and reports them.
     """
-    running = _job_manager(request).running_for(library_id)
+    jm = _job_manager(request)
+    running = jm.running_for(library_id)
     if running:
         raise HTTPException(
             status_code=409,
@@ -247,124 +248,148 @@ def merge_suggestion(library_id: str, suggestion_id: int, body: SuggestionMergeI
         )
 
     library_root = _get_library_root(request, library_id)
-    conn = _open_db(library_root)
-    try:
-        provider_id = _require_provider_id(conn, library_root)
-
+    # Registered as a bare JobManager entry for the duration (not a full
+    # background job — see mark_busy's docstring) so a concurrent scan can't
+    # start mid-merge and race the files.path rewrite below (F8/F21).
+    with jm.mark_busy(library_id, "faces-merge-execute"):
+        conn = _open_db(library_root)
         try:
-            reassignments = {
-                r.file_id: safe_dest_folder_rel(r.dest_folder_rel, library_root) for r in body.reassignments
-            }
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            provider_id = _require_provider_id(conn, library_root)
 
-        try:
-            plan = bindings_store.build_suggestion_merge_moves(
-                conn, suggestion_id, extra_reassignments=reassignments,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-        excluded = set(body.excluded_file_ids)
-        moves = [m for m in plan.moves if m[0] not in excluded]
-
-        if body.expected_move_count is not None and len(moves) != body.expected_move_count:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"Plan changed: expected {body.expected_move_count} moves but "
-                    f"server computed {len(moves)}. Refresh and re-confirm."
-                ),
-            )
-
-        # Bind before move: a partial move against a correctly-created binding
-        # self-heals on the next organize plan (the file just gets picked up
-        # again); files moved without a binding do not. Doing this first also
-        # means an IntegrityError (person already bound elsewhere) is caught
-        # as a clean 409 before any file is touched.
-        if not body.dry_run:
             try:
-                bindings_store.accept_suggestion(conn, suggestion_id)
-            except (BindingConflictError, ValueError) as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
+                reassignments = {
+                    r.file_id: safe_dest_folder_rel(r.dest_folder_rel, library_root) for r in body.reassignments
+                }
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        ops = [
-            FileOp(source=library_root / src, dest_folder=library_root / dest, mode="move")
-            for _fid, src, dest, _kind in moves
-        ]
-
-        manifest_path = new_manifest_path(library_data_dir(library_root), "faces-merge")
-        report = safety_execute(ops, manifest_path=manifest_path, dry_run=body.dry_run)
-
-        if not body.dry_run:
-            record_action(
-                conn,
-                kind="faces-merge-into-folder",
-                manifest_path=str(manifest_path),
-                report=report,
-                dry_run=False,
-            )
-            for e in report.entries:
-                if e.action == "moved" and e.destination:
-                    try:
-                        old_rel = Path(e.source).relative_to(library_root).as_posix()
-                        new_rel = Path(e.destination).relative_to(library_root).as_posix()
-                        conn.execute("UPDATE files SET path = ? WHERE path = ?", (new_rel, old_rel))
-                    except ValueError:
-                        pass  # source outside library_root — skip gracefully
-
-            if plan.person_id is not None:
-                # Record "not this person" durably for everything the user kept
-                # out of the move (excluded, sent elsewhere, or rejected as an
-                # in-folder outlier) so a later organize run never silently
-                # re-files it under this person — see rejected_persons.py.
-                rejected_ids = (
-                    list(excluded) + [r.file_id for r in body.reassignments] + list(body.rejected_outlier_file_ids)
+            try:
+                plan = bindings_store.build_suggestion_merge_moves(
+                    conn, suggestion_id, extra_reassignments=reassignments,
                 )
-                rejected_persons.reject_person_files(conn, provider_id, plan.person_id, rejected_ids)
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-                # Outlier files the user confirmed ARE this person get assigned
-                # directly — otherwise the review the user just did is dropped
-                # on the floor and the same files resurface as outliers forever.
-                if body.confirmed_outlier_file_ids:
-                    placeholders = ",".join("?" * len(body.confirmed_outlier_file_ids))
-                    confirmed_faces = conn.execute(
-                        f"""
-                        SELECT f.bbox_x1, f.bbox_y1, f.bbox_x2, f.bbox_y2, fi.content_hash
-                        FROM faces f JOIN files fi ON fi.id = f.file_id
-                        WHERE f.provider_id = ? AND f.file_id IN ({placeholders})
-                        """,
-                        (provider_id, *body.confirmed_outlier_file_ids),
-                    ).fetchall()
-                    conn.execute(
-                        f"UPDATE faces SET person_id = ? WHERE provider_id = ? AND file_id IN ({placeholders})",
-                        (plan.person_id, provider_id, *body.confirmed_outlier_file_ids),
+            excluded = set(body.excluded_file_ids)
+            moves = [m for m in plan.moves if m[0] not in excluded]
+
+            if body.expected_move_count is not None and len(moves) != body.expected_move_count:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Plan changed: expected {body.expected_move_count} moves but "
+                        f"server computed {len(moves)}. Refresh and re-confirm."
+                    ),
+                )
+
+            # Captured before accept_suggestion() runs, so undo can restore it —
+            # accept_suggestion only auto-names a person whose name was NULL
+            # (see store/bindings.py), so this is always None when a rename
+            # actually happens, but we read it for real rather than assuming.
+            prior_name = None
+            if plan.person_id is not None:
+                prow = conn.execute("SELECT name FROM persons WHERE id = ?", (plan.person_id,)).fetchone()
+                prior_name = prow["name"] if prow else None
+
+            # Bind before move: a partial move against a correctly-created binding
+            # self-heals on the next organize plan (the file just gets picked up
+            # again); files moved without a binding do not. Doing this first also
+            # means an IntegrityError (person already bound elsewhere) is caught
+            # as a clean 409 before any file is touched.
+            binding_id = None
+            if not body.dry_run:
+                try:
+                    binding_record = bindings_store.accept_suggestion(conn, suggestion_id)
+                    binding_id = binding_record.id
+                except (BindingConflictError, ValueError) as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+            ops = [
+                FileOp(source=library_root / src, dest_folder=library_root / dest, mode="move")
+                for _fid, src, dest, _kind in moves
+            ]
+
+            manifest_path = new_manifest_path(library_data_dir(library_root), "faces-merge")
+            report = safety_execute(ops, manifest_path=manifest_path, dry_run=body.dry_run)
+
+            if not body.dry_run:
+                rejected_ids: list[int] = []
+                if plan.person_id is not None:
+                    # Record "not this person" durably for everything the user kept
+                    # out of the move (excluded, sent elsewhere, or rejected as an
+                    # in-folder outlier) so a later organize run never silently
+                    # re-files it under this person — see rejected_persons.py.
+                    rejected_ids = (
+                        list(excluded) + [r.file_id for r in body.reassignments] + list(body.rejected_outlier_file_ids)
                     )
-                    # Durably record it — a user-confirmed outlier must never
-                    # be un-named by re-clustering on a later rescan.
-                    for cf in confirmed_faces:
-                        if not cf["content_hash"]:
-                            continue
-                        bbox = (cf["bbox_x1"], cf["bbox_y1"], cf["bbox_x2"], cf["bbox_y2"])
-                        face_assignments.record_assignment(
-                            conn, cf["content_hash"], provider_id, bbox, plan.person_id, source="user",
+                    rejected_persons.reject_person_files(conn, provider_id, plan.person_id, rejected_ids)
+
+                    # Outlier files the user confirmed ARE this person get assigned
+                    # directly — otherwise the review the user just did is dropped
+                    # on the floor and the same files resurface as outliers forever.
+                    if body.confirmed_outlier_file_ids:
+                        placeholders = ",".join("?" * len(body.confirmed_outlier_file_ids))
+                        confirmed_faces = conn.execute(
+                            f"""
+                            SELECT f.bbox_x1, f.bbox_y1, f.bbox_x2, f.bbox_y2, fi.content_hash
+                            FROM faces f JOIN files fi ON fi.id = f.file_id
+                            WHERE f.provider_id = ? AND f.file_id IN ({placeholders})
+                            """,
+                            (provider_id, *body.confirmed_outlier_file_ids),
+                        ).fetchall()
+                        conn.execute(
+                            f"UPDATE faces SET person_id = ? WHERE provider_id = ? AND file_id IN ({placeholders})",
+                            (plan.person_id, provider_id, *body.confirmed_outlier_file_ids),
                         )
+                        # Durably record it — a user-confirmed outlier must never
+                        # be un-named by re-clustering on a later rescan.
+                        for cf in confirmed_faces:
+                            if not cf["content_hash"]:
+                                continue
+                            bbox = (cf["bbox_x1"], cf["bbox_y1"], cf["bbox_x2"], cf["bbox_y2"])
+                            face_assignments.record_assignment(
+                                conn, cf["content_hash"], provider_id, bbox, plan.person_id, source="user",
+                            )
 
-            conn.commit()
+                undo_data = json.dumps({
+                    "binding_id": binding_id,
+                    "person_id": plan.person_id,
+                    "prior_name": prior_name,
+                    "provider_id": provider_id,
+                    "rejected_file_ids": rejected_ids,
+                })
+                record_action(
+                    conn,
+                    kind="faces-merge-into-folder",
+                    manifest_path=str(manifest_path),
+                    report=report,
+                    dry_run=False,
+                    undo_data=undo_data,
+                )
+                for e in report.entries:
+                    if e.action == "moved" and e.destination:
+                        try:
+                            old_rel = Path(e.source).relative_to(library_root).as_posix()
+                            new_rel = Path(e.destination).relative_to(library_root).as_posix()
+                            conn.execute("UPDATE files SET path = ? WHERE path = ?", (new_rel, old_rel))
+                        except ValueError:
+                            pass  # source outside library_root — skip gracefully
 
-        return ExecutionReportOut(
-            planned=report.planned,
-            handled=report.handled,
-            ok=report.ok,
-            dry_run=body.dry_run,
-            manifest_path=str(report.manifest_path) if report.manifest_path else None,
-            entries=[
-                ManifestEntryOut(source=e.source, action=e.action, destination=e.destination, error=e.error)
-                for e in report.entries
-            ],
-        )
-    finally:
-        conn.close()
+                conn.commit()
+
+            return ExecutionReportOut(
+                planned=report.planned,
+                handled=report.handled,
+                ok=report.ok,
+                dry_run=body.dry_run,
+                manifest_path=str(report.manifest_path) if report.manifest_path else None,
+                entries=[
+                    ManifestEntryOut(source=e.source, action=e.action, destination=e.destination, error=e.error)
+                    for e in report.entries
+                ],
+            )
+        finally:
+            conn.close()
 
 
 @router.post("/libraries/{library_id}/bindings/suggestions/{suggestion_id}/dismiss")

@@ -807,6 +807,24 @@ export function useOrganizeExecute(libraryId: string) {
   })
 }
 
+// Kicks off real organize execution as a background job and returns
+// immediately — callers close their confirm dialog right after calling
+// mutate(), they don't await completion. Progress/completion is picked up
+// from the WS job broadcast by OrganizeProgressBubble, not from this hook's
+// return value (mirrors useExecuteJob for dedupe deletes).
+export function useOrganizeExecuteJob(libraryId: string) {
+  return useMutation({
+    mutationFn: ({
+      expectedPlanned,
+      expectedPlanHash
+    }: {
+      expectedPlanned?: number
+      expectedPlanHash?: string
+    }) => api.organize.executeJob(libraryId, expectedPlanned, expectedPlanHash),
+    onSuccess: (snap) => useJobsStore.getState().upsert(snap)
+  })
+}
+
 export function useOrganizeUndo(libraryId: string) {
   const qc = useQueryClient()
   return useMutation({

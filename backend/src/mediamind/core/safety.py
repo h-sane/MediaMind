@@ -63,6 +63,44 @@ def unique_destination(folder: Path, src: Path) -> Path:
     return dest
 
 
+def _same_volume(a: Path, b: Path) -> bool:
+    """Same check `fsops.py` already uses for its atomic-move fast path."""
+    try:
+        return os.stat(a).st_dev == os.stat(b).st_dev
+    except OSError:
+        return False
+
+
+def _fsync_file(path: Path) -> None:
+    """Flush a just-copied file's contents to disk before its source is
+    unlinked — `shutil.copy2` alone only guarantees the data has been
+    *written*, not that it has survived a crash/power-loss between the copy
+    and the delete (invariant 1's "even on power loss" clause). Opened
+    read-write (not O_RDONLY) because Windows' FlushFileBuffers requires a
+    handle with write access to succeed — a read-only handle raises "Bad
+    file descriptor" there, even though plain read-only fsync is fine on
+    POSIX. We just created this file ourselves, so we always own it."""
+    fd = os.open(str(path), os.O_RDWR)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _fsync_dir(path: Path) -> None:
+    """Flush a directory's own metadata (the new entry the copy just added)
+    so the entry itself survives a crash, not just the file's bytes. POSIX
+    only — Windows has no directory file descriptor to fsync (NTFS's own
+    metadata journaling covers this case there instead)."""
+    if sys.platform == "win32":
+        return
+    fd = os.open(str(path), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _write_manifest(path: Path, entries: list[ManifestEntry]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as fh:
@@ -76,12 +114,22 @@ def execute(
     ops: list[FileOp],
     manifest_path: Path | None = None,
     dry_run: bool = False,
+    on_progress: Callable[[int, int], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> ExecutionReport:
     """Execute delivery operations with copy-then-delete semantics.
 
     Multiple ops may share a source (e.g. copy to several folders); the
     original is deleted only after ALL its copies succeeded, and only for
     "move" mode. A per-op failure is recorded and never aborts the batch.
+
+    `on_progress(handled_plus_errored, total)` / `should_cancel()` mirror
+    `trash()`'s identical parameters — called once per *source* (a group of
+    ops sharing one file), so a background job can report progress and offer
+    cancellation on a large batch. Cooperative cancellation is safe here for
+    the same reason it is in `trash()`: each source's group of ops either
+    fully completes or is never started, so whatever hasn't been reached yet
+    is simply left untouched.
     """
     report = ExecutionReport(planned=len(ops))
 
@@ -91,7 +139,34 @@ def execute(
         by_source.setdefault(op.source, []).append(op)
 
     for source, source_ops in by_source.items():
+        if should_cancel is not None and should_cancel():
+            break
+        # Fast path: a lone same-volume move needs neither copy-then-delete
+        # nor fsync — os.replace() is itself atomic (the same rule
+        # fsops.move_one already uses), a *stronger* guarantee than
+        # copy-then-delete for this one-op case. Only applies when this
+        # source has exactly one planned op — a source fanning out to
+        # multiple destinations (a copy alongside a move) still needs the
+        # copy-then-delete path below so the original survives until every
+        # copy has succeeded.
+        if not dry_run and len(source_ops) == 1 and source_ops[0].mode == "move":
+            op = source_ops[0]
+            dest = unique_destination(op.dest_folder, source)
+            if _same_volume(source, dest.parent):
+                try:
+                    os.replace(str(source), str(dest))
+                    report.entries.append(ManifestEntry(str(source), "moved", str(dest)))
+                    report.handled += 1
+                except OSError as exc:
+                    entry = ManifestEntry(str(source), "error", "", error=str(exc))
+                    report.entries.append(entry)
+                    report.errors.append(entry)
+                if on_progress is not None:
+                    on_progress(report.handled + len(report.errors), len(ops))
+                continue
+
         all_copied = True
+        copied_dest_dirs: set[Path] = set()
         for op in source_ops:
             action = "moved" if op.mode == "move" else "copied"
             try:
@@ -101,6 +176,8 @@ def execute(
                 else:
                     dest = unique_destination(op.dest_folder, source)
                     shutil.copy2(str(source), str(dest))
+                    _fsync_file(dest)
+                    copied_dest_dirs.add(dest.parent)
                     entry = ManifestEntry(str(source), action, str(dest))
                 report.entries.append(entry)
                 report.handled += 1
@@ -109,14 +186,21 @@ def execute(
                 entry = ManifestEntry(str(source), "error", "", error=str(exc))
                 report.entries.append(entry)
                 report.errors.append(entry)
-        # copy-then-delete: originals only removed when every copy succeeded
+        # copy-then-delete: originals only removed when every copy succeeded,
+        # and only after each copy's bytes and its directory entry are
+        # durable — otherwise a crash between copy and delete could lose the
+        # not-yet-flushed copy while the source is already gone.
         if not dry_run and all_copied and any(op.mode == "move" for op in source_ops):
             try:
+                for d in copied_dest_dirs:
+                    _fsync_dir(d)
                 source.unlink()
             except OSError as exc:
                 entry = ManifestEntry(str(source), "error", "", error=f"copied but not deleted: {exc}")
                 report.entries.append(entry)
                 report.errors.append(entry)
+        if on_progress is not None:
+            on_progress(report.handled + len(report.errors), len(ops))
 
     if manifest_path is not None:
         _write_manifest(manifest_path, report.entries)

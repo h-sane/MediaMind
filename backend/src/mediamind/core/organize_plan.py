@@ -27,6 +27,7 @@ despite the folder being frozen).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -40,6 +41,26 @@ class PlannedMove:
     dest_folder_rel: str     # destination folder relative to library_root (posix)
     person_id: int | None
     person_name: str | None  # display name shown to the user
+
+
+def plan_hash(moves: list[PlannedMove]) -> str:
+    """Content hash of a plan's (source, destination) pairs, order-independent.
+
+    Preview returns this; execute is given it back and re-verifies against a
+    freshly-rebuilt plan before touching disk. `expected_planned`/
+    `expected_move_count` guards elsewhere in this codebase only compare
+    *counts* — a same-count-but-different-contents drift (e.g. a rescan
+    reassigned who a cluster matched between preview and execute) passes
+    those silently. This catches that case too.
+    """
+    pairs = sorted((m.source_rel, m.dest_folder_rel) for m in moves)
+    h = hashlib.sha256()
+    for src, dest in pairs:
+        h.update(src.encode("utf-8"))
+        h.update(b"\0")
+        h.update(dest.encode("utf-8"))
+        h.update(b"\n")
+    return h.hexdigest()
 
 
 def safe_folder_name(name: str) -> str:

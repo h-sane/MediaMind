@@ -345,6 +345,23 @@ def make_face_scan_runner(
                     "DELETE FROM faces WHERE provider_id = ? AND file_id NOT IN (SELECT file_id FROM _scan_seen_file_ids)",
                     (provider_id,),
                 )
+                # Also prune `files` rows themselves for entries that are both
+                # unseen this walk AND reference no remaining face (any
+                # provider) — a file deleted/moved outside the app otherwise
+                # sits in the index forever (only `faces` rows were pruned
+                # above), and organize_plan.py routes every decoded_ok=0 row
+                # into People/_unsorted, including these phantom entries
+                # (F10). Scoped to "no faces left" rather than "unseen" alone
+                # so a directory that merely timed out this one walk (see
+                # scan_folder's per-directory timeout) never loses a real
+                # person's face/identity data over a transient stall.
+                conn.execute(
+                    """
+                    DELETE FROM files
+                    WHERE id NOT IN (SELECT file_id FROM _scan_seen_file_ids)
+                      AND id NOT IN (SELECT DISTINCT file_id FROM faces)
+                    """
+                )
                 conn.execute("DROP TABLE _scan_seen_file_ids")
                 conn.commit()
 

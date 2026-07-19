@@ -1,11 +1,29 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
-import { useOrganizePreview, useOrganizeExecute, useOrganizeUndo, useOrganizeAudit } from '../../../api/hooks'
+import {
+  useOrganizePreview,
+  useOrganizeExecute,
+  useOrganizeExecuteJob,
+  useOrganizeUndo,
+  useOrganizeAudit
+} from '../../../api/hooks'
+import { useJobsStore } from '../../../stores/jobs'
 import type { ExecutionReport } from '../../../api/client'
 
 interface Props {
   libraryId: string
   onBack: () => void
+}
+
+// Backend action kinds (see store/audit.py) shown in plain language — F9:
+// the undo card used to say "Previous organize action" regardless of which
+// kind it actually was, which was misleading once merge/materialize actions
+// also became undoable here.
+const ACTION_KIND_LABELS: Record<string, string> = {
+  'organize-by-person': 'organize',
+  'faces-merge-into-folder': 'merge into folder',
+  'faces-materialize': 'materialize',
+  'faces-prep-create-unsorted': 'create Unsorted folder'
 }
 
 function ConfirmOrganizeDialog({
@@ -82,27 +100,46 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
   const { data: preview, isLoading, isError } = useOrganizePreview(libraryId)
   const { data: audit } = useOrganizeAudit(libraryId)
   const execute = useOrganizeExecute(libraryId)
+  const executeJob = useOrganizeExecuteJob(libraryId)
   const undo = useOrganizeUndo(libraryId)
 
   const [showConfirm, setShowConfirm] = useState(false)
   const [result, setResult] = useState<ExecutionReport | null>(null)
   const [showMoves, setShowMoves] = useState(false)
   const [showRescanNotice, setShowRescanNotice] = useState(false)
+  const [pendingJobId, setPendingJobId] = useState<string | null>(null)
 
   const lastAction = audit?.find((a) => !a.dry_run && !a.undone && a.ok)
+
+  const jobs = useJobsStore((s) => s.jobs)
+  useEffect(() => {
+    if (!pendingJobId) return
+    const job = jobs[pendingJobId]
+    if (!job) return
+    if (job.state === 'succeeded') {
+      if (job.result?.ok) setShowRescanNotice(true)
+      setPendingJobId(null)
+    } else if (job.state === 'failed' || job.state === 'cancelled') {
+      setPendingJobId(null)
+    }
+  }, [jobs, pendingJobId])
 
   const handleDryRun = () => {
     execute.mutate({ dryRun: true }, { onSuccess: (data) => setResult(data) })
   }
 
+  // Real execution runs as a background job (see OrganizeProgressBubble) so
+  // a large batch shows progress and can be cancelled instead of blocking
+  // this dialog — the confirm dialog closes immediately, mirroring the
+  // dedupe bulk-delete flow. Completion/errors surface on the bubble itself;
+  // pendingJobId above just watches for the rescan-notice trigger.
   const handleExecute = () => {
-    execute.mutate(
-      { dryRun: false, expectedPlanned: preview?.planned },
+    executeJob.mutate(
+      { expectedPlanned: preview?.planned, expectedPlanHash: preview?.plan_hash },
       {
-        onSuccess: (data) => {
-          setResult(data)
+        onSuccess: (snap) => {
+          setPendingJobId(snap.id)
           setShowConfirm(false)
-          if (data.ok && !data.dry_run) setShowRescanNotice(true)
         }
       }
     )
@@ -119,7 +156,7 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
           planned={preview.planned}
           onConfirm={handleExecute}
           onCancel={() => setShowConfirm(false)}
-          isPending={execute.isPending}
+          isPending={executeJob.isPending}
         />
       )}
 
@@ -160,6 +197,11 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
       {execute.isError && (
         <p className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {execute.error.message}
+        </p>
+      )}
+      {executeJob.isError && (
+        <p className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {executeJob.error.message}
         </p>
       )}
       {undo.isError && (
@@ -237,11 +279,11 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
                 disabled={execute.isPending}
                 className="rounded-lg border border-zinc-200 px-4 py-2 text-sm text-zinc-600 hover:bg-zinc-50 disabled:opacity-50"
               >
-                {execute.isPending && execute.variables?.dryRun === true ? 'Running…' : 'Dry run'}
+                {execute.isPending ? 'Running…' : 'Dry run'}
               </button>
               <button
                 onClick={() => setShowConfirm(true)}
-                disabled={execute.isPending || preview.planned === 0}
+                disabled={executeJob.isPending || preview.planned === 0}
                 className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50"
               >
                 Organize {preview.planned} files
@@ -255,7 +297,9 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
         <div className="mt-4 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium">Previous organize action</p>
+              <p className="text-sm font-medium">
+                Previous action: {ACTION_KIND_LABELS[lastAction.kind] ?? lastAction.kind}
+              </p>
               <p className="mt-0.5 text-xs text-zinc-500">
                 {lastAction.handled} files moved on {new Date(lastAction.created_at * 1000).toLocaleDateString()}
               </p>
