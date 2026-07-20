@@ -73,7 +73,7 @@ time, dedupe/faces window load time. Produce the "before" table.
   the `run-desktop` skill.
 - Deliverable: real numbers proving where the time goes.
 
-### Phase 1 — Fast decode + persistent cache (backend)
+### Phase 1 — Fast decode + persistent cache (backend) — ✅ DONE (session 37, after-table in `.claude/handoffs/2026-07-21_session_37.md`)
 Root-cause fix for the app-wide slowness.
 - **Decode small, not full.** In `core/thumbnails.py` / `core/loaders.py`: for
   JPEG use PIL `Image.draft('RGB', (size, size))` (libjpeg DCT downscale — 4–16×

@@ -8,11 +8,15 @@ crash a request or a run).
 
 from __future__ import annotations
 
+import hashlib
+import os
+import tempfile
 import threading
 from collections import OrderedDict
 from pathlib import Path
 from typing import NamedTuple
 
+from mediamind.config import thumbnail_cache_dir
 from mediamind.core import loaders
 from mediamind.core.scanner import KIND_GIF, KIND_IMAGE, KIND_VIDEO
 
@@ -37,6 +41,52 @@ def _cache_key(path: Path, kind: str, size: int) -> tuple | None:
     except OSError:
         return None
     return (str(path), kind, size, st.st_mtime_ns, st.st_size)
+
+
+def _mem_store(key: tuple, data: bytes) -> None:
+    global _cache_bytes
+    with _cache_lock:
+        if key in _cache:
+            return
+        _cache[key] = data
+        _cache.move_to_end(key)
+        _cache_bytes += len(data)
+        while _cache_bytes > _CACHE_MAX_BYTES and _cache:
+            _, evicted = _cache.popitem(last=False)
+            _cache_bytes -= len(evicted)
+
+
+# Persistent on-disk L2 cache: survives app relaunch, so the *second* time a
+# folder is opened its thumbnails load from disk instead of re-decoding every
+# original. Keyed by the same (path, kind, size, mtime, filesize) identity as
+# the in-memory L1 — a changed file gets a new filename, so a stale thumbnail
+# is never served. ponytail: unbounded on-disk growth (tiny JPEGs; ~5-15 KB a
+# grid tile). Add LRU/size-cap eviction when the cache dir measurably matters.
+
+def _disk_path(key: tuple) -> Path:
+    digest = hashlib.sha1(repr(key).encode("utf-8")).hexdigest()
+    return thumbnail_cache_dir() / digest[:2] / f"{digest}.jpg"
+
+
+def _disk_get(key: tuple) -> bytes | None:
+    try:
+        return _disk_path(key).read_bytes()
+    except OSError:
+        return None
+
+
+def _disk_put(key: tuple, data: bytes) -> None:
+    p = _disk_path(key)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic write: a crash mid-write never leaves a truncated JPEG that
+        # would later be served as a corrupt thumbnail.
+        fd, tmp = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, p)
+    except OSError:
+        pass  # best-effort cache; a write failure just costs a re-decode later
 
 
 class MediaMetadata(NamedTuple):
@@ -65,8 +115,6 @@ def media_thumbnail_jpeg(path: Path, kind: str, size: int) -> bytes | None:
     re-opening a review screen or re-scrolling a grid never re-decodes a file
     it has already thumbnailed.
     """
-    global _cache_bytes
-
     key = _cache_key(path, kind, size)
     if key is not None:
         with _cache_lock:
@@ -74,24 +122,55 @@ def media_thumbnail_jpeg(path: Path, kind: str, size: int) -> bytes | None:
             if cached is not None:
                 _cache.move_to_end(key)
                 return cached
+        disk = _disk_get(key)
+        if disk is not None:
+            _mem_store(key, disk)  # promote L2 -> L1
+            return disk
 
     data = _generate_thumbnail_jpeg(path, kind, size)
 
     if key is not None and data is not None:
-        with _cache_lock:
-            _cache[key] = data
-            _cache.move_to_end(key)
-            _cache_bytes += len(data)
-            while _cache_bytes > _CACHE_MAX_BYTES and _cache:
-                _, evicted = _cache.popitem(last=False)
-                _cache_bytes -= len(evicted)
+        _mem_store(key, data)
+        _disk_put(key, data)
 
     return data
 
 
+def _draft_decode_bgr(path: Path, size: int):
+    """Decode a still image *small* via PIL `Image.draft`, returning a BGR
+    ndarray, or None to fall back to the full cv2/PIL chain.
+
+    `draft` asks libjpeg to DCT-scale a JPEG during decode to the nearest
+    1/2/4/8 >= the requested box, so we never materialise the full-resolution
+    pixels just to shrink them — 4-16x faster on large photos, which is the
+    Phase-1 win. It only *decodes* small; the existing cv2 resize+encode below
+    still runs (cv2's INTER_AREA + imencode is faster than PIL's for the final
+    step, so we keep it). A no-op scale on non-JPEG formats, which still decode
+    correctly. Orientation is applied via EXIF to match cv2.imread's default
+    auto-rotate. Any failure returns None -> unicode-safe cv2/PIL fallback
+    (which also registers HEIC)."""
+    try:
+        import numpy as np
+        from PIL import Image, ImageOps
+
+        with Image.open(str(path)) as im:
+            im.draft("RGB", (size, size))
+            im = ImageOps.exif_transpose(im)
+            rgb = np.asarray(im.convert("RGB"))
+        if rgb.ndim != 3 or rgb.shape[2] != 3:
+            return None
+        return np.ascontiguousarray(rgb[:, :, ::-1])  # BGR, like loaders
+    except Exception:
+        return None
+
+
 def _generate_thumbnail_jpeg(path: Path, kind: str, size: int) -> bytes | None:
     try:
-        frame = _first_frame(path, kind)
+        frame = None
+        if kind == KIND_IMAGE:
+            frame = _draft_decode_bgr(path, size)
+        if frame is None:
+            frame = _first_frame(path, kind)
         if frame is None:
             return None
 

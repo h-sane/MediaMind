@@ -119,6 +119,17 @@ def main() -> None:
         wt, _ = _time(lambda: thumbnails.media_thumbnail_jpeg(p, kind, GRID_SIZE))
         warm_ms.append(wt)
 
+    # Simulated relaunch: drop the in-memory L1 so the next call must read the
+    # persistent on-disk L2 — this is what the *second* app launch actually pays.
+    with thumbnails._cache_lock:
+        thumbnails._cache.clear()
+        thumbnails._cache_bytes = 0
+    disk_ms: list[float] = []
+    for p in files:
+        kind = kind_of(p)
+        dt, _ = _time(lambda: thumbnails.media_thumbnail_jpeg(p, kind, GRID_SIZE))
+        disk_ms.append(dt)
+
     n = len(decode_ms)
     med_grid = statistics.median(grid_cold_ms)
     avg_mb = statistics.mean(sizes) / (1024 * 1024) if sizes else 0
@@ -134,6 +145,7 @@ def main() -> None:
     print(_stats("Grid thumb 256px, cold", grid_cold_ms))
     print(_stats("Preview thumb 1024px, cold", preview_cold_ms))
     print(_stats("Grid thumb 256px, warm (mem cache)", warm_ms))
+    print(_stats("Grid thumb 256px, disk-cache hit (relaunch)", disk_ms))
     print()
     print(f"Decode scaling: ~{rate:.1f} ms per megapixel (median)")
     print(f"Extrapolated folder-open (first {SCREENFUL} tiles, 256px cold, sequential): "

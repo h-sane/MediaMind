@@ -270,6 +270,31 @@ def thumbnail(
     return Response(content=data, media_type="image/jpeg")
 
 
+@router.get("/preview")
+def preview(
+    path: str = Query(...),
+    size: int = Query(default=2560, ge=256, le=4096),
+):
+    """Screen-capped preview JPEG for the full-screen viewer — longest edge
+    <= `size` (~2560px), never upscaled. Distinct from `/raw` (true original,
+    loaded only on zoom / "view original"): opening a 24 MP photo shouldn't
+    decode and transfer 24 MP just to fill a 2560px screen. Shares the same
+    fast-decode + persistent cache as `/thumbnail`."""
+    resolved = resolve_os_path(path)
+    if resolved is None or not resolved.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    kind = kind_of(resolved)
+    if kind not in MEDIA_KINDS:
+        raise HTTPException(status_code=422, detail="Not a media file")
+
+    data = media_thumbnail_jpeg(resolved, kind, size)
+    if data is None:
+        raise HTTPException(status_code=422, detail="Cannot decode file")
+
+    return Response(content=data, media_type="image/jpeg")
+
+
 @router.get("/raw")
 def raw(path: str = Query(...)):
     resolved = resolve_os_path(path)

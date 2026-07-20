@@ -127,6 +127,38 @@ def file_thumbnail(
 
 
 # ---------------------------------------------------------------------------
+# Progressive preview (screen-capped, not the true original)
+# ---------------------------------------------------------------------------
+
+@router.get("/libraries/{library_id}/files/preview")
+def file_preview(
+    library_id: str,
+    request: Request,
+    path: str = Query(..., description="File path relative to the library root"),
+    size: int = Query(default=2560, ge=256, le=4096),
+):
+    """Screen-capped preview JPEG (longest edge <= `size`, never upscaled) for
+    the full-screen viewer — distinct from `/raw`, which stays the true
+    original loaded only on zoom. Same fast-decode + persistent cache and same
+    path-safety as the thumbnail endpoint."""
+    _, library_root = _get_library_and_root(request, library_id)
+
+    abs_path = _resolve_in_library(library_root, path)
+    if abs_path is None or not abs_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found in library")
+
+    kind = kind_of(abs_path)
+    if kind not in MEDIA_KINDS:
+        raise HTTPException(status_code=422, detail="Not a media file")
+
+    data = media_thumbnail_jpeg(abs_path, kind, size)
+    if data is None:
+        raise HTTPException(status_code=422, detail="Cannot decode file")
+
+    return Response(content=data, media_type="image/jpeg")
+
+
+# ---------------------------------------------------------------------------
 # Raw file (full-resolution image / video, for the in-app viewer)
 # ---------------------------------------------------------------------------
 
