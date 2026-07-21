@@ -4,9 +4,7 @@ import { useHealth } from './api/hooks'
 import { useProgressSocket } from './api/progress'
 import { useJobsStore } from './stores/jobs'
 import { ExplorerShell } from './explorer/ExplorerShell'
-import { DeleteProgressBubble } from './components/DeleteProgressBubble'
-import { FaceScanProgressBubble } from './components/FaceScanProgressBubble'
-import { OrganizeProgressBubble } from './components/OrganizeProgressBubble'
+import { JobProgressBubble } from './components/JobProgressBubble'
 import { DevLogPanel } from './components/DevLogPanel'
 import { DEV_LOG_PANEL_ENABLED } from './devLogConfig'
 
@@ -98,9 +96,7 @@ export default function App(): React.JSX.Element {
       <JobInvalidator />
       <EngineStatusBanner />
       <ExplorerShell />
-      <DeleteProgressBubble />
-      <FaceScanProgressBubble />
-      <OrganizeProgressBubble />
+      <JobProgressBubble />
       <DevLogGate />
     </div>
   )

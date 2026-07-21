@@ -278,7 +278,7 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
     )
   }
 
-  // Real execution runs as a background job (see OrganizeProgressBubble) so
+  // Real execution runs as a background job (see JobProgressBubble) so
   // a large batch shows progress and can be cancelled instead of blocking
   // this dialog — the confirm dialog closes immediately, mirroring the
   // dedupe bulk-delete flow. Completion/errors surface on the bubble itself;

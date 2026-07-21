@@ -185,13 +185,23 @@ only useful once fan-out exports exist; buildable off `manifest_entries` where
 `action='copied'` with no rework. See
 `.claude/handoffs/2026-07-21_session_41.md`.
 
-### Phase 7 — Background-jobs robustness
-- Extend `core/jobs.py`: **bounded worker pool** with heavy vs. light lanes
-  (few concurrent face scans; more concurrent I/O-bound dedupe/thumbnail work),
-  a **queued** state, and **folder-scoped concurrency** (non-overlapping folders
-  scan in parallel; overlapping ones serialize).
-- **General multi-job tile stack bottom-right** for all job types (extend the
-  existing bulk-delete bubble), each with live progress + cancel.
+### Phase 7 — Background-jobs robustness — ◑ part done (session 42)
+- **General multi-job tile stack bottom-right** — **DONE.** The three separate
+  fixed-position bubbles (delete / face-scan / organize), which each pinned
+  their own container to the same corner and drew on top of each other whenever
+  two were visible, are unified into one `JobProgressBubble` that stacks every
+  background job in a single column. Dedupe **scans** now get an app-root bubble
+  too (they had none before), so the one concurrent pair the guards allow
+  (dedupe scan + face scan) displays cleanly. Verified live.
+- **Bounded worker pool / heavy-light lanes / folder-scoped concurrency** —
+  **DEFERRED as YAGNI.** The route-level guards (`running_for` +
+  `EXCLUSIVE_JOB_TYPES` in `core/jobs.py`) already cap real concurrency at
+  exactly one dedupe scan + one face scan for a single library: same-type scans
+  and any write-vs-anything overlap are rejected with 409, so a bounded pool
+  would gate a load it can't reach, and making a queue ever *fill* would mean
+  unwinding those load-bearing safety guards (audit F8/F21). Add this only when
+  a real trigger appears — multiple concurrent libraries, or a new heavy job
+  type that can legitimately run alongside the existing scans.
 
 ### Phase 8 — Filesystem watcher / auto-ingest (later; the north star)
 Watch the chosen folders; auto-index, duplicate-check, and face-scan any new

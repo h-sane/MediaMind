@@ -1,7 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { useCancelJob, useExecuteJob } from '../api/hooks'
-import { selectJobsByType, useJobsStore } from '../stores/jobs'
+import { useJobsStore } from '../stores/jobs'
+import { ScanProgress } from './ScanProgress'
 import type { JobSnapshot } from '../api/client'
+
+// Every background job type that gets an app-root bubble. Mounted once so a
+// job's progress stays visible no matter which folder or tool the user
+// navigates to while it runs (F8), and so two concurrent jobs (the guards
+// allow a dedupe scan + a face scan at once) stack in one column instead of
+// three separate fixed containers drawing on top of each other.
+const BUBBLED_TYPES = ['dedupe', 'faces', 'dedupe-execute', 'organize-execute']
+
+const AUTO_DISMISS_MS = 5000
 
 interface ExecuteJobResult {
   planned: number
@@ -18,8 +28,8 @@ function resultOf(job: JobSnapshot): ExecuteJobResult | null {
   return (job.result as unknown as ExecuteJobResult | null) ?? null
 }
 
-const AUTO_DISMISS_MS = 5000
-
+/** Bulk-delete (dedupe-execute) card — keeps the permanent-delete retry and
+ * per-file error list the generic scan card doesn't have. */
 function DeleteProgressCard({
   job,
   onDismiss
@@ -135,15 +145,55 @@ function DeleteProgressCard({
   )
 }
 
-/** Bottom-right stack of background delete jobs (see useExecuteJob) — mounted
- * once at the app root so it stays visible across every folder/tool the user
- * navigates to while a bulk delete runs in the background. */
-export function DeleteProgressBubble(): React.JSX.Element | null {
+/** Scan / organize / export card — wraps the shared ScanProgress panel (which
+ * carries its own cancel button) with a terminal-state dismiss. */
+function ScanBubbleCard({
+  job,
+  onDismiss
+}: {
+  job: JobSnapshot
+  onDismiss: (jobId: string) => void
+}): React.JSX.Element {
+  const isTerminal = job.state === 'succeeded' || job.state === 'failed' || job.state === 'cancelled'
+  const dismissedRef = useRef(false)
+  useEffect(() => {
+    if (!isTerminal || dismissedRef.current) return
+    const id = setTimeout(() => {
+      dismissedRef.current = true
+      onDismiss(job.id)
+    }, AUTO_DISMISS_MS)
+    return () => clearTimeout(id)
+  }, [isTerminal, job.id, onDismiss])
+
+  return (
+    <div className="relative w-80">
+      <ScanProgress libraryId={job.library_id} job={job} />
+      {isTerminal && (
+        <button
+          type="button"
+          onClick={() => onDismiss(job.id)}
+          aria-label="Dismiss"
+          className="absolute right-2 top-2 text-zinc-400 hover:text-zinc-600"
+        >
+          ×
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** Single bottom-right stack for every background job — mounted once at the app
+ * root. Replaces the former three separate bubbles (delete / face-scan /
+ * organize), which each pinned their own fixed container to the same corner and
+ * overlapped whenever more than one was visible. */
+export function JobProgressBubble(): React.JSX.Element | null {
   const jobs = useJobsStore((s) => s.jobs)
-  const executeJobs = selectJobsByType(jobs, 'dedupe-execute')
   const [dismissed, setDismissed] = useState<Set<string>>(new Set())
 
-  const visible = executeJobs.filter((j) => !dismissed.has(j.id))
+  const visible = Object.values(jobs)
+    .filter((j) => BUBBLED_TYPES.includes(j.type) && !dismissed.has(j.id))
+    .sort((a, b) => a.created_at - b.created_at)
+
   if (visible.length === 0) return null
 
   function dismiss(jobId: string): void {
@@ -152,9 +202,13 @@ export function DeleteProgressBubble(): React.JSX.Element | null {
 
   return (
     <div className="fixed bottom-4 right-4 z-40 flex flex-col-reverse gap-2">
-      {visible.map((job) => (
-        <DeleteProgressCard key={job.id} job={job} onDismiss={dismiss} />
-      ))}
+      {visible.map((job) =>
+        job.type === 'dedupe-execute' ? (
+          <DeleteProgressCard key={job.id} job={job} onDismiss={dismiss} />
+        ) : (
+          <ScanBubbleCard key={job.id} job={job} onDismiss={dismiss} />
+        )
+      )}
     </div>
   )
 }

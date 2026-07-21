@@ -673,7 +673,7 @@ export const api = {
       }),
 
     // Real deletion as a background job — the confirm dialog fires this and
-    // closes immediately; a DeleteProgressBubble tracks it to completion via
+    // closes immediately; the JobProgressBubble tracks it to completion via
     // the WS job broadcast instead of the caller awaiting the request.
     executeJob: (libraryId: string, expectedTrashCount: number, permanent = false) =>
       request<JobSnapshot>('POST', `/v1/libraries/${libraryId}/duplicates/execute-job`, {
@@ -738,7 +738,7 @@ export const api = {
         group_scope: groupScope
       }),
     // Real execution as a background job — the confirm dialog fires this and
-    // closes immediately; an OrganizeProgressBubble tracks it to completion
+    // closes immediately; the JobProgressBubble tracks it to completion
     // via the WS job broadcast, same pattern as duplicates.executeJob.
     executeJob: (
       libraryId: string,
