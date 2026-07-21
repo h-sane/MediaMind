@@ -510,4 +510,11 @@ def get_thumbnail(
     if jpeg_bytes is None:
         raise HTTPException(status_code=422, detail="Cannot decode file")
 
-    return StreamingResponse(io.BytesIO(jpeg_bytes), media_type="image/jpeg")
+    # Same reasoning as the /fs thumbnail: let the browser reuse tiles across
+    # scroll-recycle instead of re-requesting. Bounded (not immutable) because a
+    # rescan can reassign member_id to a different file.
+    return StreamingResponse(
+        io.BytesIO(jpeg_bytes),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
