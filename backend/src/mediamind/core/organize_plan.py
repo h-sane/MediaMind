@@ -116,14 +116,22 @@ def build_organize_plan(
     conn: sqlite3.Connection,
     provider_id: str,
     target_rel: str = "People",
+    group_scope: str = "prominent",
 ) -> list[PlannedMove]:
     """Return one PlannedMove per file that has at least one face for this provider.
 
     Only files present in the `faces` table are included. Files with no face
     records (never scanned for faces, or scanned with zero detections) are left
     in place and do not appear in the plan.
+
+    `group_scope` controls how a group photo (multiple named people) is routed:
+    "prominent" sends it to the dominant person only (the move/organize
+    default); "all" emits one PlannedMove per named person — the export
+    fan-out, where the same source is *copied* into every person's folder.
     """
-    moves, _stayed_unrecognized = build_organize_plan_with_stats(conn, provider_id, target_rel)
+    moves, _stayed_unrecognized = build_organize_plan_with_stats(
+        conn, provider_id, target_rel, group_scope
+    )
     return moves
 
 
@@ -131,6 +139,7 @@ def build_organize_plan_with_stats(
     conn: sqlite3.Connection,
     provider_id: str,
     target_rel: str = "People",
+    group_scope: str = "prominent",
 ) -> tuple[list[PlannedMove], int]:
     """Same as `build_organize_plan`, plus a count of files that have face
     detections but stay in place because nobody in them is named yet (or the
@@ -241,6 +250,29 @@ def build_organize_plan_with_stats(
 
     plans: list[PlannedMove] = []
     stayed_unrecognized = 0
+
+    def _emit(source_rel: str, dest_pid: int, dest_name: str, reason: str) -> None:
+        """Route one (file, named person) pair to a folder and append a move,
+        applying the bound-folder override and the already-at-destination
+        skip. Shared by the single-person, prominent, and fan-out paths."""
+        if dest_pid in bound_folder_by_person:
+            dest_folder_rel = bound_folder_by_person[dest_pid]
+            reason = f"{dest_name}'s folder is respected here"
+        else:
+            dest_folder_rel = f"{target_rel}/{safe_folder_name(dest_name)}"
+        # Skip files already in their destination folder — prevents _1 churn on re-run.
+        if PurePosixPath(source_rel).parent.as_posix() == dest_folder_rel:
+            return
+        plans.append(
+            PlannedMove(
+                source_rel=source_rel,
+                dest_folder_rel=dest_folder_rel,
+                person_id=dest_pid,
+                person_name=dest_name,
+                reason=reason,
+            )
+        )
+
     for fid, fd in file_data.items():
         source_rel: str = fd["path"]
         person_ids: set[int] = fd["person_ids"]
@@ -263,74 +295,53 @@ def build_organize_plan_with_stats(
             stayed_unrecognized += 1
             continue
 
-        reason: str
         if not decoded_ok:
-            dest_folder = "_Needs Review"
-            dest_pid: int | None = None
-            dest_name: str | None = None
-            reason = "Couldn't be read — needs manual review"
-        elif not effective_person_ids:
-            # Has face records but all person_id = NULL (noise cluster) —
-            # nobody to route to; stays in place, same as a zero-face file.
+            # Failed decode — no person to route to; goes to the visible
+            # _Needs Review holding area (person_name stays None so the UI
+            # groups it as a holding folder, not a person).
+            dest_folder_rel = f"{target_rel}/_Needs Review"
+            if PurePosixPath(source_rel).parent.as_posix() != dest_folder_rel:
+                plans.append(
+                    PlannedMove(source_rel, dest_folder_rel, None, None,
+                                "Couldn't be read — needs manual review")
+                )
+            continue
+
+        # Named persons in this file (rejected already subtracted above).
+        named_pids = [pid for pid in effective_person_ids if person_display.get(pid)]
+        if not named_pids:
+            # Has faces but nobody named (noise clusters or unnamed people) —
+            # stays in place, same as a zero-face file.
             stayed_unrecognized += 1
             continue
-        elif len(effective_person_ids) == 1:
-            dest_pid = next(iter(effective_person_ids))
-            dest_name = person_display.get(dest_pid)
-            if dest_name is None:
-                stayed_unrecognized += 1
-                continue  # person not yet named — leave file in place
-            dest_folder = safe_folder_name(dest_name)
-            reason = f"Matched to {dest_name}"
+
+        if len(named_pids) == 1:
+            pid = named_pids[0]
+            _emit(source_rel, pid, person_display[pid], f"Matched to {person_display[pid]}")
+        elif group_scope == "all":
+            # Export fan-out: copy into every named person's folder.
+            for pid in named_pids:
+                _emit(source_rel, pid, person_display[pid],
+                      f"Also appears in this photo with others")
         else:
-            # Multiple persons in this file — use override or pick dominant
-            # (excluding anyone rejected for this file from either path)
-            if fid in route_choices and route_choices[fid] in effective_person_ids:
-                dest_pid = route_choices[fid]
-                chose_override = True
+            # Prominent (move/organize default): override or dominant person.
+            if fid in route_choices and route_choices[fid] in named_pids:
+                pid = route_choices[fid]
+                reason = f"You assigned this photo to {person_display[pid]}"
             else:
-                chose_override = False
-                eligible_placeholders = ",".join("?" * len(effective_person_ids))
+                placeholders = ",".join("?" * len(named_pids))
                 row = conn.execute(
                     f"""
                     SELECT person_id, COUNT(*) AS n
                     FROM faces
-                    WHERE file_id = ? AND provider_id = ? AND person_id IN ({eligible_placeholders})
+                    WHERE file_id = ? AND provider_id = ? AND person_id IN ({placeholders})
                     GROUP BY person_id ORDER BY n DESC LIMIT 1
                     """,
-                    (fid, provider_id, *effective_person_ids),
+                    (fid, provider_id, *named_pids),
                 ).fetchone()
-                dest_pid = int(row["person_id"]) if row else None
-            dest_name = person_display.get(dest_pid) if dest_pid is not None else None
-            if dest_name is None:
-                stayed_unrecognized += 1
-                continue  # dominant person unknown/not yet named — leave file in place
-            dest_folder = safe_folder_name(dest_name)
-            reason = (
-                f"You assigned this photo to {dest_name}"
-                if chose_override
-                else f"Most faces in this photo belong to {dest_name}"
-            )
-
-        if dest_pid is not None and dest_pid in bound_folder_by_person:
-            dest_folder_rel = bound_folder_by_person[dest_pid]
-            reason = f"{dest_name}'s folder is respected here" if dest_name else reason
-        else:
-            dest_folder_rel = f"{target_rel}/{dest_folder}"
-
-        # Skip files already in their destination folder — prevents _1 churn on re-run.
-        if PurePosixPath(source_rel).parent.as_posix() == dest_folder_rel:
-            continue
-
-        plans.append(
-            PlannedMove(
-                source_rel=source_rel,
-                dest_folder_rel=dest_folder_rel,
-                person_id=dest_pid,
-                person_name=dest_name,
-                reason=reason,
-            )
-        )
+                pid = int(row["person_id"]) if row else named_pids[0]
+                reason = f"Most faces in this photo belong to {person_display[pid]}"
+            _emit(source_rel, pid, person_display[pid], reason)
 
     # Files that failed to decode never get a `faces` row at all — a failed
     # decode always yields zero detected faces (engine.extract_file_faces),

@@ -191,6 +191,31 @@ def test_plan_multi_person_picks_dominant(conn):
     assert moves[0].person_id == pid_0
 
 
+def test_plan_export_fanout_copies_group_photo_to_every_person(conn):
+    """group_scope='all' (the export fan-out): a group photo produces one
+    PlannedMove per named person, so it gets copied into every person's
+    folder — where 'prominent' would route it only to the dominant one."""
+    fid = upsert_file(conn, "both.jpg", "photo", 100, 0.0, "h_b", True)
+    conn.commit()
+    ff = [FileFaces(
+        file_id=fid, content_hash="h_b", decoded_ok=True,
+        faces=[_face(1, 0, 0), _face(1, 0, 0.1), _face(0, 0, 1)],
+    )]
+    _do_scan(conn, ff, [0, 0, 1])
+    persons = conn.execute("SELECT id FROM persons WHERE provider_id = ? ORDER BY id", (PROVIDER,)).fetchall()
+    conn.execute("UPDATE persons SET name = 'Dominant' WHERE id = ?", (persons[0]["id"],))
+    conn.execute("UPDATE persons SET name = 'Other' WHERE id = ?", (persons[1]["id"],))
+    conn.commit()
+
+    prominent = build_organize_plan(conn, PROVIDER, group_scope="prominent")
+    assert len(prominent) == 1
+
+    fanned = build_organize_plan(conn, PROVIDER, group_scope="all")
+    assert len(fanned) == 2
+    assert all(m.source_rel == "both.jpg" for m in fanned)
+    assert {m.dest_folder_rel for m in fanned} == {"People/Dominant", "People/Other"}
+
+
 def test_plan_unreadable_file_goes_to_unsorted(conn):
     fid = upsert_file(conn, "bad.jpg", "photo", 100, 0.0, "h_bad", False)
     conn.commit()

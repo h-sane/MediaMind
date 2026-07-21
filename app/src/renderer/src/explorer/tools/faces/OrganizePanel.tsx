@@ -21,6 +21,7 @@ interface Props {
 // also became undoable here.
 const ACTION_KIND_LABELS: Record<string, string> = {
   'organize-by-person': 'organize',
+  'export-by-person': 'export',
   'faces-merge-into-folder': 'merge into folder',
   'faces-materialize': 'create folder',
   'faces-prep-create-unsorted': 'create Unsorted folder'
@@ -28,11 +29,13 @@ const ACTION_KIND_LABELS: Record<string, string> = {
 
 function ConfirmOrganizeDialog({
   planned,
+  isExport,
   onConfirm,
   onCancel,
   isPending
 }: {
   planned: number
+  isExport: boolean
   onConfirm: () => void
   onCancel: () => void
   isPending: boolean
@@ -40,10 +43,21 @@ function ConfirmOrganizeDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl">
-        <h3 className="mb-2 text-sm font-semibold">Organize {planned} files?</h3>
+        <h3 className="mb-2 text-sm font-semibold">
+          {isExport ? `Export ${planned} files?` : `Organize ${planned} files?`}
+        </h3>
         <p className="mb-5 text-xs text-zinc-500">
-          Files will be moved into <code>People/</code> subfolders inside this folder. This operation is
-          reversible — you can undo it afterwards.
+          {isExport ? (
+            <>
+              Copies will be placed into <code>People/</code> subfolders. Your original files stay exactly
+              where they are — nothing is moved. You can undo this afterwards.
+            </>
+          ) : (
+            <>
+              Files will be moved into <code>People/</code> subfolders inside this folder. This operation is
+              reversible — you can undo it afterwards.
+            </>
+          )}
         </p>
         <div className="flex justify-end gap-2">
           <button
@@ -57,7 +71,7 @@ function ConfirmOrganizeDialog({
             disabled={isPending}
             className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50"
           >
-            {isPending ? 'Organizing…' : 'Organize'}
+            {isPending ? (isExport ? 'Exporting…' : 'Organizing…') : isExport ? 'Export' : 'Organize'}
           </button>
         </div>
       </div>
@@ -65,18 +79,19 @@ function ConfirmOrganizeDialog({
   )
 }
 
-function ResultBanner({ report, onDismiss }: { report: ExecutionReport; onDismiss: () => void }): React.JSX.Element {
+function ResultBanner({ report, isExport, onDismiss }: { report: ExecutionReport; isExport: boolean; onDismiss: () => void }): React.JSX.Element {
   const ok = report.ok
+  const verb = isExport ? 'copied' : 'moved'
   return (
     <div className={`mb-6 rounded-xl border px-5 py-4 ${ok ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
       <div className="flex items-start justify-between">
         <div>
           <p className={`text-sm font-medium ${ok ? 'text-emerald-800' : 'text-red-800'}`}>
             {ok
-              ? `Done — ${report.handled} of ${report.planned} files moved`
+              ? `Done — ${report.handled} of ${report.planned} files ${verb}`
               : `Partial — ${report.handled}/${report.planned} succeeded, ${report.entries.filter((e) => e.error).length} errors`}
           </p>
-          {report.dry_run && <p className="mt-1 text-xs text-zinc-500">Dry run — nothing was moved</p>}
+          {report.dry_run && <p className="mt-1 text-xs text-zinc-500">Dry run — nothing was {verb}</p>}
         </div>
         <button onClick={onDismiss} className="text-xs text-zinc-400 hover:text-zinc-600">
           Dismiss
@@ -188,7 +203,16 @@ function PersonGroup({
  * link to the full history. Round-1: the history list itself renders inline
  * at the bottom rather than a separate Audit sub-view (deferred). */
 export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
-  const { data: preview, isLoading, isError } = useOrganizePreview(libraryId)
+  // Export (copy) is the V3 default — the virtual person view is where you
+  // browse; export produces real, sendable per-person folders without
+  // touching your originals. "Move" is the older, destructive alternative.
+  const [mode, setMode] = useState<'copy' | 'move'>('copy')
+  const [groupScope, setGroupScope] = useState<'prominent' | 'all'>('all')
+  const isExport = mode === 'copy'
+  // A move can't fan one file into several folders, so it's always "prominent".
+  const effectiveScope = isExport ? groupScope : 'prominent'
+
+  const { data: preview, isLoading, isError } = useOrganizePreview(libraryId, effectiveScope)
   const { data: audit } = useOrganizeAudit(libraryId)
   const execute = useOrganizeExecute(libraryId)
   const executeJob = useOrganizeExecuteJob(libraryId)
@@ -211,7 +235,9 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
     const job = jobs[pendingJobId]
     if (!job) return
     if (job.state === 'succeeded') {
-      if (job.result?.ok) setShowRescanNotice(true)
+      // Only a move invalidates the DB paths (originals relocated). Export
+      // copies leave originals in place, so no rescan is needed.
+      if (job.result?.ok && !isExport) setShowRescanNotice(true)
       setPendingJobId(null)
     } else if (job.state === 'failed' || job.state === 'cancelled') {
       setPendingJobId(null)
@@ -240,7 +266,14 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
 
   const handleDryRun = () => {
     execute.mutate(
-      { dryRun: true, expectedPlanned: preview?.planned, expectedPlanHash: preview?.plan_hash, excludedSources: [...excluded] },
+      {
+        dryRun: true,
+        expectedPlanned: preview?.planned,
+        expectedPlanHash: preview?.plan_hash,
+        excludedSources: [...excluded],
+        mode,
+        groupScope: effectiveScope
+      },
       { onSuccess: (data) => setResult(data) }
     )
   }
@@ -252,7 +285,13 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
   // pendingJobId above just watches for the rescan-notice trigger.
   const handleExecute = () => {
     executeJob.mutate(
-      { expectedPlanned: preview?.planned, expectedPlanHash: preview?.plan_hash, excludedSources: [...excluded] },
+      {
+        expectedPlanned: preview?.planned,
+        expectedPlanHash: preview?.plan_hash,
+        excludedSources: [...excluded],
+        mode,
+        groupScope: effectiveScope
+      },
       {
         onSuccess: (snap) => {
           setPendingJobId(snap.id)
@@ -271,6 +310,7 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
       {showConfirm && preview && (
         <ConfirmOrganizeDialog
           planned={includedCount}
+          isExport={isExport}
           onConfirm={handleExecute}
           onCancel={() => setShowConfirm(false)}
           isPending={executeJob.isPending}
@@ -282,14 +322,59 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
       </button>
 
       <div className="mb-6">
-        <h2 className="text-lg font-semibold tracking-tight">Organize by people</h2>
+        <h2 className="text-lg font-semibold tracking-tight">
+          {isExport ? 'Export to folders' : 'Organize by people'}
+        </h2>
         <p className="mt-1 text-sm text-zinc-500">
-          Move your media into <code className="rounded bg-zinc-100 px-1 text-xs">People/</code> subfolders, one
-          folder per person. Uncheck anything you don't want moved yet — hover a file for why it's routed there.
+          {isExport ? (
+            <>
+              Copy your media into <code className="rounded bg-zinc-100 px-1 text-xs">People/</code> subfolders,
+              one folder per person — real, sendable copies. Your originals stay put. Uncheck anything you don't
+              want exported; hover a file for why it's routed there.
+            </>
+          ) : (
+            <>
+              Move your media into <code className="rounded bg-zinc-100 px-1 text-xs">People/</code> subfolders,
+              one folder per person. Uncheck anything you don't want moved yet — hover a file for why it's routed
+              there.
+            </>
+          )}
         </p>
       </div>
 
-      {result && <ResultBanner report={result} onDismiss={() => { setResult(null); setShowRescanNotice(false) }} />}
+      {/* Copy (export, non-destructive) vs Move (organize, changes originals) */}
+      <div className="mb-4 flex flex-wrap items-center gap-4">
+        <div className="inline-flex rounded-lg border border-zinc-200 p-0.5">
+          <button
+            onClick={() => setMode('copy')}
+            className={`rounded-md px-3 py-1.5 text-xs font-medium ${isExport ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-zinc-50'}`}
+          >
+            Copy for export
+          </button>
+          <button
+            onClick={() => setMode('move')}
+            className={`rounded-md px-3 py-1.5 text-xs font-medium ${!isExport ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-zinc-50'}`}
+          >
+            Move originals
+          </button>
+        </div>
+
+        {isExport && (
+          <label className="flex items-center gap-2 text-xs text-zinc-600">
+            Group photos:
+            <select
+              value={groupScope}
+              onChange={(e) => setGroupScope(e.target.value as 'prominent' | 'all')}
+              className="rounded-md border border-zinc-200 px-2 py-1 text-xs"
+            >
+              <option value="all">Copy into everyone&apos;s folder</option>
+              <option value="prominent">Only the main person</option>
+            </select>
+          </label>
+        )}
+      </div>
+
+      {result && <ResultBanner report={result} isExport={isExport} onDismiss={() => { setResult(null); setShowRescanNotice(false) }} />}
 
       {showRescanNotice && (
         <div className="mb-4 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
@@ -378,7 +463,7 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
                 disabled={executeJob.isPending || includedCount === 0}
                 className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50"
               >
-                Organize {includedCount} files
+                {isExport ? 'Export' : 'Organize'} {includedCount} files
               </button>
             </div>
           </>
@@ -393,7 +478,8 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
                 Previous action: {ACTION_KIND_LABELS[lastAction.kind] ?? lastAction.kind}
               </p>
               <p className="mt-0.5 text-xs text-zinc-500">
-                {lastAction.handled} files moved on {new Date(lastAction.created_at * 1000).toLocaleDateString()}
+                {lastAction.handled} files {lastAction.kind === 'export-by-person' ? 'copied' : 'moved'} on{' '}
+                {new Date(lastAction.created_at * 1000).toLocaleDateString()}
               </p>
             </div>
             <button

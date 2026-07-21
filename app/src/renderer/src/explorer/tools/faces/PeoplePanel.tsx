@@ -227,7 +227,7 @@ export function PeoplePanel({
               onClick={onOrganize}
               className="rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-600 transition hover:bg-zinc-50"
             >
-              Organize
+              Export
             </button>
           )}
           {persons.length >= 2 && !isScanning && (

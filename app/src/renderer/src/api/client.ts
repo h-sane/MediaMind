@@ -711,20 +711,31 @@ export const api = {
   },
 
   organize: {
-    preview: (libraryId: string) =>
-      request<OrganizePreview>('POST', `/v1/libraries/${libraryId}/organize/preview`),
+    // mode 'move' = organize in place (changes originals); 'copy' = export
+    // (leaves originals). groupScope 'all' copies a group photo into every
+    // named person's folder (export fan-out); 'prominent' routes to the
+    // dominant person only.
+    preview: (libraryId: string, groupScope: 'prominent' | 'all' = 'prominent') =>
+      request<OrganizePreview>(
+        'POST',
+        `/v1/libraries/${libraryId}/organize/preview?group_scope=${groupScope}`
+      ),
     execute: (
       libraryId: string,
       dryRun: boolean,
       expectedPlanned?: number,
       expectedPlanHash?: string,
-      excludedSources?: string[]
+      excludedSources?: string[],
+      mode: 'move' | 'copy' = 'move',
+      groupScope: 'prominent' | 'all' = 'prominent'
     ) =>
       request<ExecutionReport>('POST', `/v1/libraries/${libraryId}/organize/execute`, {
         dry_run: dryRun,
         expected_planned: expectedPlanned ?? null,
         expected_plan_hash: expectedPlanHash ?? null,
-        excluded_sources: excludedSources ?? []
+        excluded_sources: excludedSources ?? [],
+        mode,
+        group_scope: groupScope
       }),
     // Real execution as a background job — the confirm dialog fires this and
     // closes immediately; an OrganizeProgressBubble tracks it to completion
@@ -733,13 +744,17 @@ export const api = {
       libraryId: string,
       expectedPlanned?: number,
       expectedPlanHash?: string,
-      excludedSources?: string[]
+      excludedSources?: string[],
+      mode: 'move' | 'copy' = 'move',
+      groupScope: 'prominent' | 'all' = 'prominent'
     ) =>
       request<JobSnapshot>('POST', `/v1/libraries/${libraryId}/organize/execute-job`, {
         dry_run: false,
         expected_planned: expectedPlanned ?? null,
         expected_plan_hash: expectedPlanHash ?? null,
-        excluded_sources: excludedSources ?? []
+        excluded_sources: excludedSources ?? [],
+        mode,
+        group_scope: groupScope
       }),
     undo: (libraryId: string) =>
       request<{ ok: boolean; handled: number; planned: number; errors: number; kind: string }>(
