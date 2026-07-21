@@ -174,6 +174,17 @@ the Linux/Mac path. Only if Phase 2 leaves a gap on those formats.
   select-and-delete UI) driven by the export manifest: "this photo lives in N
   folders," prune per-photo or in bulk, safe delete only.
 
+**Status — part A DONE (session 41), part B DEFERRED.** Export shipped by
+threading `mode` (move|copy) + `group_scope` (prominent|all) through the
+existing organize plan/preview/execute/undo (the safety layer already does
+source→multi-folder copy fan-out). Export copies leave originals in place,
+record `kind="export-by-person"` copies in the manifest, and undo by trashing
+the copies. Verified live (copy 4→6 with originals intact; undo 6→4) + a
+fan-out unit test. The **duplicate-location manager (part B) is deferred** —
+only useful once fan-out exports exist; buildable off `manifest_entries` where
+`action='copied'` with no rework. See
+`.claude/handoffs/2026-07-21_session_41.md`.
+
 ### Phase 7 — Background-jobs robustness
 - Extend `core/jobs.py`: **bounded worker pool** with heavy vs. light lanes
   (few concurrent face scans; more concurrent I/O-bound dedupe/thumbnail work),
