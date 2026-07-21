@@ -167,10 +167,14 @@ class RecentFileRecordIn(BaseModel):
 
 class SettingsOut(BaseModel):
     recent_files_enabled: bool
+    auto_scan_enabled: bool
 
 
 class SettingsUpdateIn(BaseModel):
-    recent_files_enabled: bool
+    # Both optional so each toggle can be PATCHed independently — only the
+    # fields present in the body are applied.
+    recent_files_enabled: bool | None = None
+    auto_scan_enabled: bool | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -262,6 +262,7 @@ export interface RecentFilesList {
 
 export interface Settings {
   recent_files_enabled: boolean
+  auto_scan_enabled: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -596,8 +597,8 @@ export const api = {
 
     settings: {
       get: () => request<Settings>('GET', '/v1/fs/settings'),
-      update: (recentFilesEnabled: boolean) =>
-        request<Settings>('PATCH', '/v1/fs/settings', { recent_files_enabled: recentFilesEnabled })
+      update: (patch: Partial<Settings>) =>
+        request<Settings>('PATCH', '/v1/fs/settings', patch)
     }
   },
 

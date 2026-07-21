@@ -24,6 +24,7 @@ export function FolderOptionsDialog({ open, onClose }: Props): React.JSX.Element
   if (!open) return null
 
   const recentFilesEnabled = settings?.recent_files_enabled ?? true
+  const autoScanEnabled = settings?.auto_scan_enabled ?? false
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onClose}>
@@ -46,7 +47,7 @@ export function FolderOptionsDialog({ open, onClose }: Props): React.JSX.Element
             <input
               type="checkbox"
               checked={recentFilesEnabled}
-              onChange={(e) => updateSettings.mutate(e.target.checked)}
+              onChange={(e) => updateSettings.mutate({ recent_files_enabled: e.target.checked })}
               disabled={updateSettings.isPending}
               className="mt-0.5 h-4 w-4 rounded border-zinc-300"
             />
@@ -54,6 +55,26 @@ export function FolderOptionsDialog({ open, onClose }: Props): React.JSX.Element
               Show recently used files
               <span className="mt-0.5 block text-xs text-zinc-400">
                 Turning this off clears the Home page's Recent files list and stops tracking new ones.
+              </span>
+            </span>
+          </label>
+
+          <h3 className="mb-2 mt-4 text-xs font-medium uppercase tracking-wide text-zinc-400">
+            Auto-scan
+          </h3>
+          <label className="flex cursor-pointer items-start gap-2.5 py-1.5">
+            <input
+              type="checkbox"
+              checked={autoScanEnabled}
+              onChange={(e) => updateSettings.mutate({ auto_scan_enabled: e.target.checked })}
+              disabled={updateSettings.isPending}
+              className="mt-0.5 h-4 w-4 rounded border-zinc-300"
+            />
+            <span className="text-sm text-zinc-700">
+              Watch folders for new media
+              <span className="mt-0.5 block text-xs text-zinc-400">
+                When on, MediaMind re-runs duplicate and face detection automatically after new
+                photos or videos land in a folder you've opened. Off by default.
               </span>
             </span>
           </label>

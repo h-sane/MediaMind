@@ -52,6 +52,32 @@ async def _lifespan(app: FastAPI):
     if not hasattr(app.state, "providers") or app.state.providers is None:
         app.state.providers = ProviderManager(models_dir())
 
+    # Phase 8: filesystem watcher / auto-ingest. Idle (no walking) unless the
+    # user has opted in via the auto-scan setting. On a settled change it
+    # re-runs the existing dedupe + face scans, which do the whole ingest.
+    from mediamind.api.routes.scans import build_scan_runner
+    from mediamind.core.jobs import EXCLUSIVE_JOB_TYPES
+    from mediamind.core.watcher import LibraryWatcher
+
+    def _auto_scan(lib) -> None:
+        jm = app.state.job_manager
+        blocking = jm.running_for(lib.id)
+        if blocking is not None and blocking.type in EXCLUSIVE_JOB_TYPES:
+            return  # don't race a write op; the next change tick retries
+        for scan_type in ("dedupe", "faces"):
+            if jm.running_for(lib.id, scan_type) is not None:
+                continue
+            runner = build_scan_runner(app.state, lib, scan_type)
+            if runner is not None:
+                jm.start(lib.id, scan_type, runner)
+
+    app.state.watcher = LibraryWatcher(
+        app.state.registry,
+        _auto_scan,
+        enabled=lambda: app.state.settings.auto_scan_enabled,
+    )
+    app.state.watcher.start()
+
     yield
     # Daemon threads die with the process, nothing to join. The log handler
     # is the one thing that must be detached — it's registered on the root

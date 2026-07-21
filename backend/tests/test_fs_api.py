@@ -816,7 +816,7 @@ def test_fs_recent_hides_deleted_file(client: TestClient, tmp_path: Path):
 def test_fs_settings_recent_files_enabled_by_default(client: TestClient):
     res = client.get("/v1/fs/settings")
     assert res.status_code == 200
-    assert res.json() == {"recent_files_enabled": True}
+    assert res.json() == {"recent_files_enabled": True, "auto_scan_enabled": False}
 
 
 def test_fs_settings_disable_recent_files_hides_and_stops_tracking(client: TestClient, tmp_path: Path):
@@ -828,7 +828,7 @@ def test_fs_settings_disable_recent_files_hides_and_stops_tracking(client: TestC
 
     res = client.patch("/v1/fs/settings", json={"recent_files_enabled": False})
     assert res.status_code == 200
-    assert res.json() == {"recent_files_enabled": False}
+    assert res.json() == {"recent_files_enabled": False, "auto_scan_enabled": False}
 
     # Existing history is cleared, not just hidden.
     res = client.get("/v1/fs/recent")
@@ -837,7 +837,7 @@ def test_fs_settings_disable_recent_files_hides_and_stops_tracking(client: TestC
     # New opens aren't tracked while disabled either.
     client.post("/v1/fs/recent", json={"path": str(photo)})
     res = client.patch("/v1/fs/settings", json={"recent_files_enabled": True})
-    assert res.json() == {"recent_files_enabled": True}
+    assert res.json() == {"recent_files_enabled": True, "auto_scan_enabled": False}
     res = client.get("/v1/fs/recent")
     assert res.json()["files"] == []
 
