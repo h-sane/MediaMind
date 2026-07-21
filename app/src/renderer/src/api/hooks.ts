@@ -789,7 +789,7 @@ export function usePersonMedia(libraryId: string, personId: number) {
   return useQuery({
     queryKey: ['person-media', libraryId, personId],
     queryFn: () => api.persons.media(libraryId, personId),
-    enabled: personId > 0
+    enabled: personId > 0 && libraryId.length > 0
   })
 }
 

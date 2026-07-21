@@ -126,16 +126,26 @@ Use the OS thumbnail provider (`IShellItemImageFactory`) for video/RAW where the
 OS-cached thumbnail beats our decoder. Windows-only; the Phase-1 decoder remains
 the Linux/Mac path. Only if Phase 2 leaves a gap on those formats.
 
-### Phase 4 — The virtual person view (the model)
+### Phase 4 — The virtual person view (the model) — ◑ CORE DONE (session 39; handoff `.claude/handoffs/2026-07-21_session_39.md`)
 - Person → files index built from existing `persons`/`faces`/embeddings tables;
   no file movement. Group photo appears under every named person in it.
-- **"People" as a place inside the Explorer shell** (nav pane), reusing the same
-  window and tiles — not a separate screen. Re-home `screens/PeopleScreen.tsx`
-  logic into an Explorer place/view.
-- Two scopes: **library-wide** ("Mum everywhere") and **folder-scoped** ("just
-  the people in this folder" — the focused-sorting mode).
-- **Duplicate display-collapse:** identical copies on disk show once per person
-  in the view (the index still knows all copies).
+  **DONE** — backend `person_media` already delivers this (a file with two
+  persons' faces appears under both); it now also returns `abs_path` so the
+  library-free content grid can browse it.
+- **"People" as a place inside the Explorer shell**, reusing the same window and
+  tiles — not a separate screen. **DONE** — a `mediamind:person:` virtual path
+  renders one person's real files in the main content grid (all view modes,
+  virtualization, progressive viewer). Reached by clicking a person in the
+  Faces tool's People panel; verified end-to-end on `test/materialize_person`
+  (real thumbnails, correct count, files never moved). The old bespoke
+  `PersonDetailPanel` side panel was deleted.
+- Two scopes (library-wide vs folder-scoped): **DEFERRED** — thin in the current
+  folder-is-library model; needs a chosen library concept first.
+- Duplicate display-collapse: **DEFERRED** — `person_media` already dedups by
+  `file_id`; collapsing byte-identical copies at *different* paths is unbuilt.
+- Also deferred: a persistent nav-pane "People" row (global; entry point is the
+  Faces tool for now) and the per-tile "not a face" reject action that lived on
+  the deleted side panel (belongs in the review flows / a future context menu).
 
 ### Phase 5 — Accuracy & naming UX
 - **Bias clustering toward splitting** (tighten `clustering.py` `eps` / raise

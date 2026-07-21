@@ -27,11 +27,42 @@ export type IconSize = 'extra-large' | 'large' | 'medium' | 'small'
  */
 export const HOME_PATH = 'mediamind:home'
 
-/** True for an actual filesystem path — false for both "This PC" (`null`)
- * and the Home sentinel. Narrows `string | null` to `string` so callers can
- * pass the result straight to path-taking APIs. */
+/** Phase 4 — a virtual "place" showing one person's real media in the main
+ * content grid (no files moved; group photos appear under every person). The
+ * person's files all live under `folderRoot` (the folder-as-library the scan
+ * ran on), so `abs_path` from the backend resolves them for the library-free
+ * content grid. Format: `mediamind:person:<id>|<uriEncodedName>|<folderRoot>`
+ * — `|` is illegal in a Windows path, so it never collides with `folderRoot`. */
+const PERSON_PREFIX = 'mediamind:person:'
+
+export function personPath(folderRoot: string, personId: number, name: string): string {
+  return `${PERSON_PREFIX}${personId}|${encodeURIComponent(name)}|${folderRoot}`
+}
+
+export interface PersonView {
+  folderRoot: string
+  personId: number
+  name: string
+}
+
+export function parsePersonView(path: string | null): PersonView | null {
+  if (path === null || !path.startsWith(PERSON_PREFIX)) return null
+  const parts = path.slice(PERSON_PREFIX.length).split('|')
+  if (parts.length < 3) return null
+  const personId = Number(parts[0])
+  if (!Number.isFinite(personId)) return null
+  return {
+    personId,
+    name: decodeURIComponent(parts[1]),
+    folderRoot: parts.slice(2).join('|') // defensive; folderRoot has no '|'
+  }
+}
+
+/** True for an actual filesystem path — false for "This PC" (`null`) and every
+ * `mediamind:` sentinel (Home, person views). Narrows `string | null` to
+ * `string` so callers can pass the result straight to path-taking APIs. */
 export function isRealFolder(path: string | null): path is string {
-  return path !== null && path !== HOME_PATH
+  return path !== null && !path.startsWith('mediamind:')
 }
 
 /**
@@ -51,6 +82,8 @@ export function parentPath(path: string): string | null {
 export function tabTitle(path: string | null): string {
   if (path === null) return 'This PC'
   if (path === HOME_PATH) return 'Home'
+  const person = parsePersonView(path)
+  if (person) return person.name
   const trimmed = path.replace(/[\\/]+$/, '')
   const lastSep = Math.max(trimmed.lastIndexOf('\\'), trimmed.lastIndexOf('/'))
   return lastSep === -1 ? trimmed : trimmed.slice(lastSep + 1)

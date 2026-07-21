@@ -1,10 +1,10 @@
 import { useMemo } from 'react'
-import { useBrowseDir, useDrives } from '../../api/hooks'
+import { useBrowseDir, useDrives, useEnsureLibrary, usePersonMedia } from '../../api/hooks'
 import { useGalleryItems } from '../../api/useGallery'
 import { useRecursiveSearch } from '../../api/useSearch'
-import { HOME_PATH, isRealFolder, useExplorerStore } from '../../stores/explorer'
+import { HOME_PATH, isRealFolder, parsePersonView, useExplorerStore } from '../../stores/explorer'
 import type { FilterDate, FilterSize, FilterType, SortDir, SortKey } from '../../stores/explorer'
-import type { BrowseFile, BrowseFolder } from '../../api/client'
+import type { BrowseFile, BrowseFolder, PersonMediaItem } from '../../api/client'
 import type { GalleryItem } from '../../api/galleryClient'
 import type { SearchResult } from '../../api/searchClient'
 import { formatAttributes } from '../format'
@@ -136,6 +136,25 @@ function galleryToEntries(items: GalleryItem[]): DirEntry[] {
   }))
 }
 
+/** Phase 4 — one person's media as content-grid entries. The backend gives an
+ * absolute `abs_path` per file, so these render through the same library-free
+ * thumbnails/viewer as any real folder; a group photo naturally appears in
+ * every person it contains. Only files (no folders) — a person has no
+ * sub-folders — so `sortEntries`' folders-first split is unnecessary here. */
+function personMediaToEntries(items: PersonMediaItem[], sortKey: SortKey, sortDir: SortDir): DirEntry[] {
+  const entries: DirEntry[] = items.map((i) => ({
+    type: 'file',
+    name: i.abs_path.slice(Math.max(i.abs_path.lastIndexOf('\\'), i.abs_path.lastIndexOf('/')) + 1),
+    path: i.abs_path,
+    // The face pipeline's DB kind (image/gif/video) mostly matches the content
+    // grid's, but older libraries stored 'photo' for stills — normalize so the
+    // thumbnail component treats them as images rather than generic files.
+    kind: (i.kind === 'photo' ? 'image' : i.kind) as DirEntry['kind']
+  }))
+  entries.sort((a, b) => compareEntries(a, b, sortKey, sortDir))
+  return entries
+}
+
 interface FilterState {
   searchQuery: string
   filterType: FilterType
@@ -210,14 +229,24 @@ export function useDirectoryListing() {
   const recursiveSearchRoot = useExplorerStore((s) => s.recursiveSearchRoot)
   const isRoot = currentPath === null
   const isHome = currentPath === HOME_PATH
+  const personView = parsePersonView(currentPath)
   const galleryActive = viewMode === 'gallery' && isRealFolder(currentPath) && !recursiveSearchActive
 
   const dirQuery = useBrowseDir(isRealFolder(currentPath) ? currentPath : null)
   const drivesQuery = useDrives()
   const searchResultsQuery = useRecursiveSearch(recursiveSearchRoot, searchQuery, recursiveSearchActive)
   const galleryQuery = useGalleryItems(isRealFolder(currentPath) ? currentPath : null, galleryActive)
+  // A person view resolves its folder to the (already-ensured) library, then
+  // lists that person's media. useEnsureLibrary is idempotent + cached, so
+  // re-entering the place is instant.
+  const personLibrary = useEnsureLibrary(personView ? personView.folderRoot : null)
+  const personMediaQuery = usePersonMedia(personLibrary.data?.id ?? '', personView?.personId ?? -1)
 
   const entries = useMemo((): DirEntry[] => {
+    if (personView) {
+      const raw = personMediaToEntries(personMediaQuery.data ?? [], sortKey, sortDir)
+      return filterEntries(raw, { searchQuery, filterType, filterDate, filterSize })
+    }
     if (recursiveSearchActive && recursiveSearchRoot) {
       const raw = sortSearchResults(searchResultsQuery.data?.results ?? [], sortKey, sortDir)
       // The name match already happened server-side — only the type/date/size
@@ -237,6 +266,8 @@ export function useDirectoryListing() {
         : []
     return filterEntries(raw, { searchQuery, filterType, filterDate, filterSize })
   }, [
+    personView?.personId,
+    personMediaQuery.data,
     recursiveSearchActive,
     recursiveSearchRoot,
     searchResultsQuery.data,
@@ -261,7 +292,9 @@ export function useDirectoryListing() {
     // they're kept truthful (not a permanently-disabled query's stale
     // "pending") for any future consumer of this hook.
     isHome,
-    isPending: recursiveSearchActive
+    isPending: personView
+      ? personLibrary.isPending || personMediaQuery.isPending
+      : recursiveSearchActive
       ? searchResultsQuery.isPending
       : galleryActive
         ? galleryQuery.isPending
@@ -270,7 +303,9 @@ export function useDirectoryListing() {
           : isRoot
             ? drivesQuery.isPending
             : dirQuery.isPending,
-    isError: recursiveSearchActive
+    isError: personView
+      ? personLibrary.isError || personMediaQuery.isError
+      : recursiveSearchActive
       ? searchResultsQuery.isError
       : galleryActive
         ? galleryQuery.isError
@@ -279,7 +314,9 @@ export function useDirectoryListing() {
           : isRoot
             ? drivesQuery.isError
             : dirQuery.isError,
-    isFetching: recursiveSearchActive
+    isFetching: personView
+      ? personLibrary.isFetching || personMediaQuery.isFetching
+      : recursiveSearchActive
       ? searchResultsQuery.isFetching
       : galleryActive
         ? galleryQuery.isFetching
@@ -288,7 +325,9 @@ export function useDirectoryListing() {
           : isRoot
             ? drivesQuery.isFetching
             : dirQuery.isFetching,
-    refetch: recursiveSearchActive
+    refetch: personView
+      ? personMediaQuery.refetch
+      : recursiveSearchActive
       ? searchResultsQuery.refetch
       : galleryActive
         ? galleryQuery.refetch

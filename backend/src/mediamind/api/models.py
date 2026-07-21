@@ -320,7 +320,8 @@ class PersonMergeIn(BaseModel):
 
 class PersonMediaItemOut(BaseModel):
     file_id: int
-    path: str
+    path: str          # library-relative (posix)
+    abs_path: str      # absolute on-disk path, so the Explorer content grid can browse it library-free
     kind: str
     face_id: int
     bbox: tuple[float, float, float, float]

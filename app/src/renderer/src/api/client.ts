@@ -314,6 +314,7 @@ export interface PersonsOut {
 export interface PersonMediaItem {
   file_id: number
   path: string
+  abs_path: string
   kind: string
   face_id: number
   bbox: [number, number, number, number]

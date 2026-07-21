@@ -164,6 +164,7 @@ def list_person_media(library_id: str, person_id: int, request: Request):
         PersonMediaItemOut(
             file_id=fi.file_id,
             path=fi.path,
+            abs_path=str(library_root / fi.path),
             kind=fi.kind,
             face_id=fi.id,
             bbox=fi.bbox,

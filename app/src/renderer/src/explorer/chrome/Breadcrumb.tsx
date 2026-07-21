@@ -4,7 +4,7 @@ import { ChevronDown, Folder, HardDrive, Home, Laptop } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../../api/client'
 import { useDrives } from '../../api/hooks'
-import { HOME_PATH, useExplorerStore } from '../../stores/explorer'
+import { HOME_PATH, parsePersonView, useExplorerStore } from '../../stores/explorer'
 
 interface Segment {
   label: string
@@ -18,6 +18,13 @@ function buildSegments(
   // Home is its own root, parallel to (not nested under) "This PC" — a
   // single segment, same as real Explorer's own Home breadcrumb.
   if (path === HOME_PATH) return [{ label: 'Home', path: HOME_PATH }]
+  // A person view (Phase 4) breadcrumbs as its host folder's path plus a
+  // person leaf — clicking a folder segment leaves the person view back into
+  // the real filesystem where the files actually live.
+  const person = parsePersonView(path)
+  if (person) {
+    return [...buildSegments(person.folderRoot, driveLabel), { label: `👤 ${person.name}`, path }]
+  }
   const segments: Segment[] = [{ label: 'This PC', path: null }]
   if (!path) return segments
 

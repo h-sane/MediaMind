@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePersons } from '../../../api/hooks'
+import { personPath, useExplorerStore } from '../../../stores/explorer'
 import { selectJobForLibrary, useJobsStore } from '../../../stores/jobs'
 import { ModelSelectPanel } from './ModelSelectPanel'
 import { MultiPersonPanel } from './MultiPersonPanel'
 import { OrganizePanel } from './OrganizePanel'
 import { PendingReviewPanel } from './PendingReviewPanel'
 import { PeoplePanel } from './PeoplePanel'
-import { PersonDetailPanel } from './PersonDetailPanel'
 import { PrepPanel } from './PrepPanel'
 
 interface Props {
@@ -18,7 +18,6 @@ type FacesSub =
   | { name: 'prep' }
   | { name: 'setup' }
   | { name: 'people' }
-  | { name: 'person'; personId: number }
   | { name: 'organize' }
   | { name: 'pending' }
   | { name: 'multi-person' }
@@ -35,13 +34,22 @@ type FacesSub =
  * mix can call for a different model each time, so the choice isn't a
  * one-time global default.
  */
-export function FacesToolPanel({ libraryId, folderPath: _folderPath }: Props): React.JSX.Element {
+export function FacesToolPanel({ libraryId, folderPath }: Props): React.JSX.Element {
   const [sub, setSub] = useState<FacesSub>({ name: 'prep' })
+  const navigate = useExplorerStore((s) => s.navigate)
 
   const jobs = useJobsStore((s) => s.jobs)
   const activeJob = selectJobForLibrary(jobs, libraryId, 'faces')
   const { data: personsData, isLoading: personsLoading } = usePersons(libraryId)
   const initialSubResolved = useRef<string | null>(null)
+
+  // Phase 4: opening a person navigates the Explorer to a virtual "place" that
+  // shows their real files in the main content grid (all view modes, the
+  // progressive viewer, no files moved) rather than a bespoke side panel.
+  const openPerson = (personId: number) => {
+    const p = personsData?.persons.find((pp) => pp.id === personId)
+    navigate(personPath(folderPath, personId, p?.name ?? p?.auto_label ?? `Person ${personId}`))
+  }
 
   // Land on People if a scan already exists for this folder, Setup otherwise
   // — once per folder, so explicit navigation (Rescan, back) isn't overridden.
@@ -81,14 +89,11 @@ export function FacesToolPanel({ libraryId, folderPath: _folderPath }: Props): R
         {sub.name === 'people' && (
           <PeoplePanel
             libraryId={libraryId}
-            onOpenPerson={(personId) => setSub({ name: 'person', personId })}
+            onOpenPerson={openPerson}
             onOrganize={() => setSub({ name: 'organize' })}
             onReviewPending={() => setSub({ name: 'pending' })}
             onReviewMultiPerson={() => setSub({ name: 'multi-person' })}
           />
-        )}
-        {sub.name === 'person' && (
-          <PersonDetailPanel libraryId={libraryId} personId={sub.personId} onBack={goToPeople} />
         )}
         {sub.name === 'organize' && <OrganizePanel libraryId={libraryId} onBack={goToPeople} />}
         {sub.name === 'pending' && <PendingReviewPanel libraryId={libraryId} onBack={goToPeople} />}
