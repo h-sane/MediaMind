@@ -516,17 +516,26 @@ def record_recent_file(body: RecentFileRecordIn, request: Request) -> RecentFile
 @router.get("/settings", response_model=SettingsOut)
 def get_settings(request: Request) -> SettingsOut:
     settings: SettingsStore = request.app.state.settings
-    return SettingsOut(recent_files_enabled=settings.recent_files_enabled)
+    return SettingsOut(
+        recent_files_enabled=settings.recent_files_enabled,
+        auto_scan_enabled=settings.auto_scan_enabled,
+    )
 
 
 @router.patch("/settings", response_model=SettingsOut)
 def update_settings(body: SettingsUpdateIn, request: Request) -> SettingsOut:
     settings: SettingsStore = request.app.state.settings
-    enabled = settings.set_recent_files_enabled(body.recent_files_enabled)
-    if not enabled:
-        # Turning tracking off also clears what's already tracked — matches
-        # Explorer's "Clear File Explorer history" so nothing lingers that
-        # could resurface if the setting is switched back on later.
-        recent_store: RecentFilesStore = request.app.state.recent_files
-        recent_store.clear()
-    return SettingsOut(recent_files_enabled=enabled)
+    if body.recent_files_enabled is not None:
+        enabled = settings.set_recent_files_enabled(body.recent_files_enabled)
+        if not enabled:
+            # Turning tracking off also clears what's already tracked — matches
+            # Explorer's "Clear File Explorer history" so nothing lingers that
+            # could resurface if the setting is switched back on later.
+            recent_store: RecentFilesStore = request.app.state.recent_files
+            recent_store.clear()
+    if body.auto_scan_enabled is not None:
+        settings.set_auto_scan_enabled(body.auto_scan_enabled)
+    return SettingsOut(
+        recent_files_enabled=settings.recent_files_enabled,
+        auto_scan_enabled=settings.auto_scan_enabled,
+    )

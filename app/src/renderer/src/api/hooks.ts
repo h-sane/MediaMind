@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './client'
 import { isRealFolder } from '../stores/explorer'
 import { useJobsStore } from '../stores/jobs'
-import type { DuplicateFile, MaterializeBody, Person, SuggestionMergeBody } from './client'
+import type { DuplicateFile, MaterializeBody, Person, Settings, SuggestionMergeBody } from './client'
 
 // ---------------------------------------------------------------------------
 // Engine + libraries
@@ -575,7 +575,7 @@ export function useSettings() {
 export function useUpdateSettings() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (recentFilesEnabled: boolean) => api.fs.settings.update(recentFilesEnabled),
+    mutationFn: (patch: Partial<Settings>) => api.fs.settings.update(patch),
     onSuccess: (data) => {
       qc.setQueryData(['settings'], data)
       qc.invalidateQueries({ queryKey: ['recent-files'] })

@@ -232,11 +232,41 @@ only useful once fan-out exports exist; buildable off `manifest_entries` where
   a real trigger appears — multiple concurrent libraries, or a new heavy job
   type that can legitimately run alongside the existing scans.
 
-### Phase 8 — Filesystem watcher / auto-ingest (later; the north star)
+### Phase 8 — Filesystem watcher / auto-ingest — ✅ DONE (session 44)
 Watch the chosen folders; auto-index, duplicate-check, and face-scan any new
 media. Duplicates surface as suggestions; new faces auto-join the right named
 person. Foundation (persistent cache, background jobs, duplicate manifest) is
 built by earlier phases.
+
+**Shipped (lazy-but-real):** `core/watcher.py` `LibraryWatcher` — a polling
+daemon thread that snapshots each registered library's media-file set
+({path: mtime}) every 8 s and, on a *settled* change (debounced across one
+extra poll so a batch paste isn't scanned mid-copy), re-runs the existing
+dedupe + face scans via `JobManager`. Those scans already ARE the whole ingest
+pipeline: index, duplicate-check, face-cluster, and `pending_for_named` routing
+of new named-person faces into review — so auto-ingest is just re-triggering
+them. Wired in `api/app.py` lifespan behind an **opt-in** `auto_scan_enabled`
+setting (default **off** — heavy background jobs on a user's folders must be
+opted into; safety before performance). Toggle in the Folder Options dialog.
+Runner construction is shared with the manual scan route via
+`scans.build_scan_runner`. Firing respects the existing concurrency guards
+(same-type skip, `EXCLUSIVE_JOB_TYPES` back-off). Verified: deterministic
+detection/debounce unit tests + a wired end-to-end test that a settled change
+starts and completes a real dedupe scan (`tests/test_watcher.py`).
+
+**Deliberately deferred (ponytail ceilings, not gaps that block use):**
+- **OS-event watching (watchdog / ReadDirectoryChangesW)** instead of polling —
+  polling is zero-dependency, cross-platform, and costs *nothing* while the
+  feature is off (the default). Ceiling: on a very large tree the periodic walk
+  costs CPU and change latency is up to ~2×interval. Swap in watchdog only if
+  that bites a real library.
+- **Incremental per-file ingest.** The re-triggered scans are full idempotent
+  re-walks (the embedding cache makes the face pass cheap on unchanged files),
+  not a targeted "ingest only the N new files" path. Enough for desktop-scale
+  libraries; revisit if a huge library makes each full re-walk too costly.
+- **A dedicated "new media" suggestion surface.** New duplicates/faces show up
+  in the existing dedupe/faces review UIs after the auto-scan; there's no
+  separate "here's what just arrived" toast/inbox yet.
 
 ---
 

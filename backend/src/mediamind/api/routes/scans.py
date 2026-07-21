@@ -154,6 +154,37 @@ def _make_dedupe_runner(library_root: Path, threshold: int):
     return runner
 
 
+def build_scan_runner(app_state, lib, scan_type: str, near_threshold: int = DEFAULT_NEAR_THRESHOLD,
+                      provider_id: str | None = None):
+    """Build a scan runner for a library, or return None if it can't run.
+
+    Shared by the manual scan route and the Phase-8 auto-scan watcher
+    (core/watcher.py) so both go through one runner-construction path. Returns
+    None for "faces" when no provider is installed (the route turns that into a
+    422; the watcher just skips faces). Raises ValueError for an unknown type.
+    """
+    if scan_type == "dedupe":
+        return _make_dedupe_runner(Path(lib.path), near_threshold)
+    if scan_type == "faces":
+        from mediamind.core.faces.scan import make_face_scan_runner
+
+        pm = app_state.providers
+        if provider_id:
+            entry = pm.get_entry(provider_id)
+        else:
+            entry = next((e for e in pm.entries() if pm.is_installed(e.id)), None)
+        if entry is None or not pm.is_installed(entry.id):
+            return None
+        return make_face_scan_runner(
+            Path(lib.path),
+            lambda: pm.create(entry.id),
+            entry.id,
+            eps=entry.cluster_eps,
+            pending_for_named=True,
+        )
+    raise ValueError(f"Unknown scan type '{scan_type}'")
+
+
 @router.post("/libraries/{library_id}/scans", response_model=JobSnapshot, status_code=202)
 def start_scan(library_id: str, body: ScanIn, request: Request):
     lib = _registry(request).get(library_id)
@@ -178,36 +209,17 @@ def start_scan(library_id: str, body: ScanIn, request: Request):
             detail=f"A {blocking.type} operation is in progress — wait for it to finish",
         )
 
-    if body.type == "dedupe":
-        runner = _make_dedupe_runner(Path(lib.path), body.near_threshold)
-    elif body.type == "faces":
-        from mediamind.core.faces.scan import make_face_scan_runner
-        from mediamind.providers.manager import ProviderManager
-
-        pm: ProviderManager = request.app.state.providers
-
-        # Resolve which provider to use
-        if body.provider_id:
-            entry = pm.get_entry(body.provider_id)
-        else:
-            entry = next((e for e in pm.entries() if pm.is_installed(e.id)), None)
-
-        if entry is None or not pm.is_installed(entry.id):
-            raise HTTPException(
-                status_code=422,
-                detail="No face recognition provider installed — download one first",
-            )
-
-        provider_id = entry.id
-        runner = make_face_scan_runner(
-            Path(lib.path),
-            lambda: pm.create(provider_id),
-            provider_id,
-            eps=entry.cluster_eps,
-            pending_for_named=True,
+    try:
+        runner = build_scan_runner(
+            request.app.state, lib, body.type, body.near_threshold, body.provider_id
         )
-    else:
-        raise HTTPException(status_code=422, detail=f"Unknown scan type '{body.type}'")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if runner is None:
+        raise HTTPException(
+            status_code=422,
+            detail="No face recognition provider installed — download one first",
+        )
 
     job = jm.start(library_id, body.type, runner)
     return _snapshot(job)
