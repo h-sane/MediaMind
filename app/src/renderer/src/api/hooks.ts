@@ -886,10 +886,13 @@ export function useThumbnailUrl(
 // Organize (M6)
 // ---------------------------------------------------------------------------
 
-export function useOrganizePreview(libraryId: string) {
+export function useOrganizePreview(
+  libraryId: string,
+  groupScope: 'prominent' | 'all' = 'prominent'
+) {
   return useQuery({
-    queryKey: ['organize-preview', libraryId],
-    queryFn: () => api.organize.preview(libraryId),
+    queryKey: ['organize-preview', libraryId, groupScope],
+    queryFn: () => api.organize.preview(libraryId, groupScope),
     retry: false
   })
 }
@@ -901,13 +904,20 @@ export function useOrganizeExecute(libraryId: string) {
       dryRun,
       expectedPlanned,
       expectedPlanHash,
-      excludedSources
+      excludedSources,
+      mode,
+      groupScope
     }: {
       dryRun: boolean
       expectedPlanned?: number
       expectedPlanHash?: string
       excludedSources?: string[]
-    }) => api.organize.execute(libraryId, dryRun, expectedPlanned, expectedPlanHash, excludedSources),
+      mode?: 'move' | 'copy'
+      groupScope?: 'prominent' | 'all'
+    }) =>
+      api.organize.execute(
+        libraryId, dryRun, expectedPlanned, expectedPlanHash, excludedSources, mode, groupScope
+      ),
     onSuccess: (_data, vars) => {
       if (!vars.dryRun) {
         qc.invalidateQueries({ queryKey: ['organize-preview', libraryId] })
@@ -927,12 +937,19 @@ export function useOrganizeExecuteJob(libraryId: string) {
     mutationFn: ({
       expectedPlanned,
       expectedPlanHash,
-      excludedSources
+      excludedSources,
+      mode,
+      groupScope
     }: {
       expectedPlanned?: number
       expectedPlanHash?: string
       excludedSources?: string[]
-    }) => api.organize.executeJob(libraryId, expectedPlanned, expectedPlanHash, excludedSources),
+      mode?: 'move' | 'copy'
+      groupScope?: 'prominent' | 'all'
+    }) =>
+      api.organize.executeJob(
+        libraryId, expectedPlanned, expectedPlanHash, excludedSources, mode, groupScope
+      ),
     onSuccess: (snap) => useJobsStore.getState().upsert(snap)
   })
 }

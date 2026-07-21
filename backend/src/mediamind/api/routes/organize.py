@@ -33,7 +33,7 @@ from mediamind.core.organize_plan import (
     build_organize_plan_with_stats,
     plan_hash as compute_plan_hash,
 )
-from mediamind.core.safety import FileOp, execute as safety_execute, new_manifest_path
+from mediamind.core.safety import FileOp, execute as safety_execute, new_manifest_path, trash as safety_trash
 from mediamind.store.audit import last_undoable, list_actions, mark_undone, record_action
 from mediamind.store.db import library_db_path, open_db
 from mediamind.store.persons import latest_faces_scan
@@ -88,13 +88,21 @@ def _snapshot(job) -> JobSnapshot:
 
 
 @router.post("/libraries/{library_id}/organize/preview", response_model=OrganizePreviewOut)
-def organize_preview(library_id: str, request: Request):
-    """Return the organize plan without touching anything on disk."""
+def organize_preview(library_id: str, request: Request, group_scope: str = "prominent"):
+    """Return the organize plan without touching anything on disk.
+
+    `group_scope` (query param) controls group-photo routing so the preview
+    reflects the export fan-out: "prominent" routes a group photo to its
+    dominant person only; "all" plans a copy into every named person's folder.
+    """
+    group_scope = "all" if group_scope == "all" else "prominent"
     library_root = _get_library_root(request, library_id)
     conn = _open_db(library_root)
     try:
         provider_id = _require_provider_id(conn, library_root)
-        moves, stayed_unrecognized = build_organize_plan_with_stats(conn, provider_id)
+        moves, stayed_unrecognized = build_organize_plan_with_stats(
+            conn, provider_id, group_scope=group_scope
+        )
     finally:
         conn.close()
 
@@ -149,16 +157,24 @@ def _make_organize_execute_runner(
     expected_planned: int | None,
     expected_plan_hash: str | None,
     excluded_sources: list[str] | None = None,
+    mode: str = "move",
+    group_scope: str = "prominent",
 ) -> Callable[[JobContext], dict]:
-    """Real (non-dry-run) organize execution as a JobManager runner — shared
-    by the synchronous `/execute` route (via `run_sync`) and the async
-    `/execute-job` route, so both guard/execute/record logic lives once."""
+    """Real (non-dry-run) organize/export execution as a JobManager runner —
+    shared by the synchronous `/execute` route (via `run_sync`) and the async
+    `/execute-job` route, so both guard/execute/record logic lives once.
+
+    `mode="copy"` is the opt-in **export** path: files are copied (originals
+    left in place, so no files.path update), and with `group_scope="all"` a
+    group photo is copied into every named person's folder."""
+    is_export = mode == "copy"
+    verb = "copying" if is_export else "moving"
 
     def runner(ctx: JobContext) -> dict:
         conn = _open_db(library_root)
         try:
             provider_id = _require_provider_id(conn, library_root)
-            moves = build_organize_plan(conn, provider_id)
+            moves = build_organize_plan(conn, provider_id, group_scope=group_scope)
         finally:
             conn.close()
 
@@ -180,45 +196,46 @@ def _make_organize_execute_runner(
             FileOp(
                 source=library_root / m.source_rel,
                 dest_folder=library_root / m.dest_folder_rel,
-                mode="move",
+                mode=mode,
             )
             for m in moves
         ]
 
         data_dir = library_data_dir(library_root)
-        manifest_path = new_manifest_path(data_dir, "organize")
-        ctx.report_progress(0, len(ops), "moving")
+        manifest_path = new_manifest_path(data_dir, "export" if is_export else "organize")
+        ctx.report_progress(0, len(ops), verb)
         report = safety_execute(
             ops,
             manifest_path=manifest_path,
             dry_run=False,
-            on_progress=lambda done, total: ctx.report_progress(done, total, "moving"),
+            on_progress=lambda done, total: ctx.report_progress(done, total, verb),
             should_cancel=ctx.cancelled,
         )
 
         conn = _open_db(library_root)
         try:
-            # organize-by-person has no DB side effects beyond files.path (no
-            # binding/rename), so no undo_data — unlike faces-merge-into-folder
-            # and faces-materialize below.
+            # organize (move) has no DB side effects beyond files.path; export
+            # (copy) leaves originals untouched, so it has none at all — no
+            # undo_data for either, unlike faces-merge-into-folder/materialize.
             record_action(
                 conn,
-                kind="organize-by-person",
+                kind="export-by-person" if is_export else "organize-by-person",
                 manifest_path=str(manifest_path),
                 report=report,
                 dry_run=False,
             )
-            for e in report.entries:
-                if e.action == "moved" and e.destination:
-                    try:
-                        old_rel = Path(e.source).relative_to(library_root).as_posix()
-                        new_rel = Path(e.destination).relative_to(library_root).as_posix()
-                        conn.execute(
-                            "UPDATE files SET path = ? WHERE path = ?",
-                            (new_rel, old_rel),
-                        )
-                    except ValueError:
-                        pass  # source outside library_root — skip gracefully
+            if not is_export:
+                for e in report.entries:
+                    if e.action == "moved" and e.destination:
+                        try:
+                            old_rel = Path(e.source).relative_to(library_root).as_posix()
+                            new_rel = Path(e.destination).relative_to(library_root).as_posix()
+                            conn.execute(
+                                "UPDATE files SET path = ? WHERE path = ?",
+                                (new_rel, old_rel),
+                            )
+                        except ValueError:
+                            pass  # source outside library_root — skip gracefully
             conn.commit()
         finally:
             conn.close()
@@ -273,11 +290,12 @@ def organize_execute(library_id: str, body: OrganizeExecuteIn, request: Request)
     jm = _job_manager(request)
 
     if body.dry_run:
+        is_export = body.mode == "copy"
         library_root = _get_library_root(request, library_id)
         conn = _open_db(library_root)
         try:
             provider_id = _require_provider_id(conn, library_root)
-            moves = build_organize_plan(conn, provider_id)
+            moves = build_organize_plan(conn, provider_id, group_scope=body.group_scope)
         finally:
             conn.close()
         if not moves:
@@ -295,14 +313,20 @@ def organize_execute(library_id: str, body: OrganizeExecuteIn, request: Request)
             moves = [m for m in moves if m.source_rel not in excluded]
 
         ops = [
-            FileOp(source=library_root / m.source_rel, dest_folder=library_root / m.dest_folder_rel, mode="move")
+            FileOp(source=library_root / m.source_rel, dest_folder=library_root / m.dest_folder_rel, mode=body.mode)
             for m in moves
         ]
-        manifest_path = new_manifest_path(library_data_dir(library_root), "organize")
+        manifest_path = new_manifest_path(library_data_dir(library_root), "export" if is_export else "organize")
         report = safety_execute(ops, manifest_path=manifest_path, dry_run=True)
         conn = _open_db(library_root)
         try:
-            record_action(conn, kind="organize-by-person", manifest_path=str(manifest_path), report=report, dry_run=True)
+            record_action(
+                conn,
+                kind="export-by-person" if is_export else "organize-by-person",
+                manifest_path=str(manifest_path),
+                report=report,
+                dry_run=True,
+            )
         finally:
             conn.close()
         return ExecutionReportOut(
@@ -326,7 +350,8 @@ def organize_execute(library_id: str, body: OrganizeExecuteIn, request: Request)
 
     library_root = _get_library_root(request, library_id)
     runner = _make_organize_execute_runner(
-        library_root, body.expected_planned, body.expected_plan_hash, body.excluded_sources
+        library_root, body.expected_planned, body.expected_plan_hash, body.excluded_sources,
+        mode=body.mode, group_scope=body.group_scope
     )
     job = jm.run_sync(library_id, "organize-execute", runner)
     if job.state == "failed":
@@ -350,7 +375,8 @@ def organize_execute_job(library_id: str, body: OrganizeExecuteIn, request: Requ
 
     library_root = _get_library_root(request, library_id)
     runner = _make_organize_execute_runner(
-        library_root, body.expected_planned, body.expected_plan_hash, body.excluded_sources
+        library_root, body.expected_planned, body.expected_plan_hash, body.excluded_sources,
+        mode=body.mode, group_scope=body.group_scope
     )
     job = jm.start(library_id, "organize-execute", runner)
     return _snapshot(job)
@@ -373,10 +399,13 @@ def organize_undo(library_id: str, request: Request):
         if action is None:
             raise HTTPException(status_code=404, detail="No undoable organize action found")
 
+        # 'copied' entries come from an export (copy) action; 'moved' from an
+        # organize/merge/materialize (move) action. An action only ever
+        # produces one kind, so the presence of copies tells us which undo.
         entries = conn.execute(
             """
-            SELECT source, destination FROM manifest_entries
-            WHERE action_id = ? AND action = 'moved'
+            SELECT source, destination, action FROM manifest_entries
+            WHERE action_id = ? AND action IN ('moved', 'copied')
             """,
             (action["id"],),
         ).fetchall()
@@ -389,19 +418,25 @@ def organize_undo(library_id: str, request: Request):
             detail="Action recorded no successful moves — nothing to undo",
         )
 
-    # Reverse: move each destination back to its original source folder
-    ops = [
-        FileOp(
-            source=Path(e["destination"]),
-            dest_folder=Path(e["source"]).parent,
-            mode="move",
-        )
-        for e in entries
-    ]
-
     data_dir = library_data_dir(library_root)
     manifest_path = new_manifest_path(data_dir, "undo")
-    report = safety_execute(ops, manifest_path=manifest_path)
+
+    is_export_undo = any(e["action"] == "copied" for e in entries)
+    if is_export_undo:
+        # Undo an export by trashing the copies (recoverable via Recycle Bin);
+        # the originals were never touched, so there is nothing to move back.
+        report = safety_trash([Path(e["destination"]) for e in entries], manifest_path=manifest_path)
+    else:
+        # Reverse: move each destination back to its original source folder
+        ops = [
+            FileOp(
+                source=Path(e["destination"]),
+                dest_folder=Path(e["source"]).parent,
+                mode="move",
+            )
+            for e in entries
+        ]
+        report = safety_execute(ops, manifest_path=manifest_path)
 
     conn = _open_db(library_root)
     try:

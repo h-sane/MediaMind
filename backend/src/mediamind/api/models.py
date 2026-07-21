@@ -358,6 +358,8 @@ class OrganizeExecuteIn(BaseModel):
     expected_planned: int | None = None  # safety guard: reject if plan size changed
     expected_plan_hash: str | None = None  # content guard: reject if plan contents changed
     excluded_sources: list[str] = []  # source_rel values the user unchecked in the review UI
+    mode: str = "move"  # "move" (organize, changes originals) | "copy" (export, leaves originals)
+    group_scope: str = "prominent"  # "prominent" (dominant person) | "all" (copy into every person's folder)
 
 
 class OrganizeActionOut(BaseModel):
