@@ -188,7 +188,7 @@ function DuplicateGroupCard({
 // ---------------------------------------------------------------------------
 
 /** A static "are you sure?" — the real deletion runs as a background job
- * (useExecuteJob) that a DeleteProgressBubble tracks to completion, so this
+ * (useExecuteJob) that the JobProgressBubble tracks to completion, so this
  * dialog fires the mutation and closes immediately instead of waiting on it. */
 function ConfirmTrashDialog({
   libraryId,
