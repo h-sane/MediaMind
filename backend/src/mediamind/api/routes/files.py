@@ -123,7 +123,11 @@ def file_thumbnail(
     if data is None:
         raise HTTPException(status_code=422, detail="Cannot decode file")
 
-    return Response(content=data, media_type="image/jpeg")
+    return Response(
+        content=data,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +159,11 @@ def file_preview(
     if data is None:
         raise HTTPException(status_code=422, detail="Cannot decode file")
 
-    return Response(content=data, media_type="image/jpeg")
+    return Response(
+        content=data,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 
 # ---------------------------------------------------------------------------

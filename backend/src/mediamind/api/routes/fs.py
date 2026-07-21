@@ -250,6 +250,17 @@ async def gallery(
 # Thumbnail / raw file, by absolute path
 # ---------------------------------------------------------------------------
 
+# Let the browser reuse decoded thumbnails across navigations and scroll-recycle
+# instead of re-requesting every tile (the frontend fetches with an auth header,
+# so caching is governed entirely by this response header). Bounded, not
+# immutable, because the URL is keyed by path only: a file edited in place would
+# otherwise show a stale thumbnail forever; a one-hour window self-heals it and
+# the on-disk cache (keyed by path+mtime+size) still serves the correct image on
+# the next revalidation.
+# ponytail: 1h staleness ceiling on in-place edits; for instant-forever warm
+# reopen add the file mtime to the URL and switch to `immutable`.
+_THUMB_CACHE_HEADERS = {"Cache-Control": "private, max-age=3600"}
+
 @router.get("/thumbnail")
 def thumbnail(
     path: str = Query(...),
@@ -267,7 +278,7 @@ def thumbnail(
     if data is None:
         raise HTTPException(status_code=422, detail="Cannot decode file")
 
-    return Response(content=data, media_type="image/jpeg")
+    return Response(content=data, media_type="image/jpeg", headers=_THUMB_CACHE_HEADERS)
 
 
 @router.get("/preview")
@@ -292,7 +303,7 @@ def preview(
     if data is None:
         raise HTTPException(status_code=422, detail="Cannot decode file")
 
-    return Response(content=data, media_type="image/jpeg")
+    return Response(content=data, media_type="image/jpeg", headers=_THUMB_CACHE_HEADERS)
 
 
 @router.get("/raw")

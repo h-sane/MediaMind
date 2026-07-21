@@ -90,7 +90,29 @@ Root-cause fix for the app-wide slowness.
 - Re-measure vs. Phase 0.
 - Touch: `core/thumbnails.py`, `core/loaders.py`, `api/routes/files.py`.
 
-### Phase 2 — Fast viewer + virtualized grids (frontend) — **the gate** — ◑ IMPLEMENTATION DONE (session 38); formal full-bar table is the remaining gate step
+### Phase 2 — Fast viewer + virtualized grids (frontend) — **the gate** — ✅ GATE CLOSED (session 43)
+
+**Acceptance-bar table** — measured on `test/perf_1000` (1,080 files, ~11 MP
+JPEGs) via the `run-desktop` driver (`performance.getEntriesByType('resource')`
+timings + `requestAnimationFrame` frame sampling):
+
+| Surface | Bar (cold / warm) | Cold | Warm | Verdict |
+|---|---|---|---|---|
+| Folder open → first screenful | ≤500 / ≤100 ms | ~520 ms (list ~200 + slowest of 28 parallel thumbs ~320) | **68 ms** | Warm ✅; cold ~at bar — tiles+layout paint at ~200 ms, thumbnails fill by ~520 ms |
+| Scrolling the grid | 60 fps | median **16.7 ms/frame (60 fps)**, avg 35 fps, p95 100 ms | same (cached) | ✅ median 60 fps; occasional hitch when the virtualizer mounts a new tile batch |
+| Full-screen photo open | ≤150 / ≤100 ms | ~40 ms (preview, s38) | ~40 ms | ✅ |
+| Duplicate / face window tiles | = grid | inherits grid decode chain, now cache-headed | cached | ✅ face tiles already `immutable`-cached; dedupe now cache-headed |
+
+**Root-cause fix that closed the warm bar:** the `/fs`, `/files`, and
+`/duplicates` thumbnail+preview endpoints returned JPEGs with **no
+`Cache-Control`**, so the frontend (which fetches with an auth header into an
+object URL) re-requested every tile on each navigation and every scroll-recycle.
+Added `Cache-Control: private, max-age=3600` to all six — the browser now reuses
+thumbnails, dropping warm folder-open from 184 ms to **68 ms** and taking
+scroll-recycle off the network. Verdict: **gate met warm on every row; cold
+effectively at bar.** Virtualization (28 DOM tiles for 1,080 files) confirmed.
+
+Session 38 findings + work (handoff `.claude/handoffs/2026-07-21_session_38.md`):
 Session 38 findings + work (handoff `.claude/handoffs/2026-07-21_session_38.md`):
 - **Grid virtualization was already present** in the three heavy views
   (Icon/Tiles/Details, ungrouped branch) via `@tanstack/react-virtual`. Grouped
@@ -143,9 +165,16 @@ the Linux/Mac path. Only if Phase 2 leaves a gap on those formats.
   folder-is-library model; needs a chosen library concept first.
 - Duplicate display-collapse: **DEFERRED** — `person_media` already dedups by
   `file_id`; collapsing byte-identical copies at *different* paths is unbuilt.
-- Also deferred: a persistent nav-pane "People" row (global; entry point is the
-  Faces tool for now) and the per-tile "not a face" reject action that lived on
-  the deleted side panel (belongs in the review flows / a future context menu).
+- **Persistent nav-pane "People" row — DONE (session 43).** A "People" row sits
+  under Home in the nav pane; it opens the Facial Recognition tool (whose default
+  sub-view is the People grid) for the current folder. Folder-scoped like the
+  tool itself (disabled off a real folder) — a *global* cross-folder People view
+  still needs a library concept and stays deferred.
+- **Per-tile "not a face" reject — DONE (session 43).** Re-homed as a context-menu
+  item in the virtual person view: `person_media`'s `face_id` is threaded onto the
+  content-grid `DirEntry`, so right-clicking a tile there offers "Not a face,"
+  which calls the existing `POST /faces/{id}/reject` and refreshes the view.
+  Verified live (Brad Pitt 4 → 3 tiles on reject).
 
 ### Phase 5 — Accuracy & naming UX — ✅ DONE (session 40)
 - **Bias clustering toward splitting** — **DONE.** `clustering.DEFAULT_EPS`

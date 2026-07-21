@@ -14,10 +14,17 @@ import {
   Star,
   StarOff,
   Trash2,
-  Undo2
+  Undo2,
+  UserX
 } from 'lucide-react'
-import { usePinQuickAccess, useQuickAccess, useUnpinQuickAccess } from '../../api/hooks'
-import { isRealFolder, useExplorerStore } from '../../stores/explorer'
+import {
+  useEnsureLibrary,
+  usePinQuickAccess,
+  useQuickAccess,
+  useRejectFace,
+  useUnpinQuickAccess
+} from '../../api/hooks'
+import { isRealFolder, parsePersonView, useExplorerStore } from '../../stores/explorer'
 import type { GroupKey, SortKey, ViewMode } from '../../stores/explorer'
 import { useSelectionStore } from '../../stores/selection'
 import { GROUP_LABELS, SORT_LABELS, VIEW_OPTIONS } from '../chrome/viewMenuData'
@@ -57,6 +64,14 @@ export function ExplorerContextMenu({ entry, orderedPaths, onOpenFile, children 
   const { data: quickAccess } = useQuickAccess()
   const pinMutation = usePinQuickAccess()
   const unpinMutation = useUnpinQuickAccess()
+
+  // In the virtual person view, a file tile carries the detection it came from,
+  // so we can flag a false positive "not a face" straight from the grid — the
+  // action that lived on the old (deleted) person side panel.
+  const personView = parsePersonView(currentPath)
+  const { data: personLibrary } = useEnsureLibrary(personView ? personView.folderRoot : null)
+  const rejectFace = useRejectFace(personLibrary?.id ?? '')
+  const canReject = !!entry && entry.type === 'file' && entry.faceId != null && !!personLibrary
 
   function ensureSelected(): void {
     if (entry && !selected.has(entry.path)) {
@@ -198,6 +213,17 @@ export function ExplorerContextMenu({ entry, orderedPaths, onOpenFile, children 
                       Open with…
                     </RadixContextMenu.Item>
                   )}
+                  <div className={separatorClass} />
+                </>
+              )}
+              {canReject && entry.faceId != null && (
+                <>
+                  <RadixContextMenu.Item
+                    className={itemClass}
+                    onSelect={() => rejectFace.mutate(entry.faceId as number)}
+                  >
+                    <UserX className="h-4 w-4" /> Not a face
+                  </RadixContextMenu.Item>
                   <div className={separatorClass} />
                 </>
               )}

@@ -26,6 +26,9 @@ export interface DirEntry {
   readOnly?: boolean | null
   hidden?: boolean | null
   system?: boolean | null
+  /** Only set in the virtual person view — the detection this tile came from,
+   * so a right-click can flag it "not a face" (rejects that detection). */
+  faceId?: number
 }
 
 function compareEntries(a: DirEntry, b: DirEntry, sortKey: SortKey, sortDir: SortDir): number {
@@ -149,7 +152,8 @@ function personMediaToEntries(items: PersonMediaItem[], sortKey: SortKey, sortDi
     // The face pipeline's DB kind (image/gif/video) mostly matches the content
     // grid's, but older libraries stored 'photo' for stills — normalize so the
     // thumbnail component treats them as images rather than generic files.
-    kind: (i.kind === 'photo' ? 'image' : i.kind) as DirEntry['kind']
+    kind: (i.kind === 'photo' ? 'image' : i.kind) as DirEntry['kind'],
+    faceId: i.face_id
   }))
   entries.sort((a, b) => compareEntries(a, b, sortKey, sortDir))
   return entries

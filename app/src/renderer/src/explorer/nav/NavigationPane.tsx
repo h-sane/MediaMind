@@ -1,5 +1,5 @@
-import { Home } from 'lucide-react'
-import { HOME_PATH, useExplorerStore } from '../../stores/explorer'
+import { Home, Users } from 'lucide-react'
+import { HOME_PATH, isRealFolder, useExplorerStore } from '../../stores/explorer'
 import { TOOL_RAIL_MAX, TOOL_RAIL_MIN, usePaneLayoutStore } from '../../stores/paneLayout'
 import { PaneResizer } from '../layout/PaneResizer'
 import { ToolRail } from '../tools/ToolRail'
@@ -26,6 +26,33 @@ function HomeRow(): React.JSX.Element {
   )
 }
 
+/** People as a first-class place near Home — opens the Facial Recognition
+ * tool (its default sub-view is the People grid) for the current folder.
+ * Folder-scoped like the tool itself; a global cross-folder People view is a
+ * later feature (needs a library concept), so this is disabled off a folder. */
+function PeopleRow(): React.JSX.Element {
+  const currentPath = useExplorerStore((s) => s.currentPath)
+  const toolMode = useExplorerStore((s) => s.toolMode)
+  const setToolMode = useExplorerStore((s) => s.setToolMode)
+  const folderOpen = isRealFolder(currentPath)
+  const isActive = toolMode === 'faces'
+
+  return (
+    <button
+      type="button"
+      disabled={!folderOpen}
+      onClick={() => setToolMode(isActive ? 'none' : 'faces')}
+      title={folderOpen ? 'People in this folder' : 'Open a folder to see its people'}
+      className={`flex w-full items-center gap-1.5 py-1 pl-3 pr-2 text-left text-sm disabled:text-zinc-300 ${
+        isActive ? 'bg-blue-50 text-blue-700' : 'text-zinc-700 hover:bg-zinc-100'
+      }`}
+    >
+      <Users className={`h-4 w-4 shrink-0 ${isActive ? 'text-blue-600' : 'text-zinc-400'}`} />
+      <span className="truncate">People</span>
+    </button>
+  )
+}
+
 /** Left sidebar, split top/bottom: Home, pinned Quick Access folders, and the
  * live folder tree (rooted at This PC) scroll in the top half; the media
  * tools (dedupe, faces — see `ToolRail`) sit pinned in the bottom half,
@@ -44,6 +71,7 @@ export function NavigationPane(): React.JSX.Element {
     >
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         <HomeRow />
+        <PeopleRow />
         <QuickAccess />
         <FolderTree />
       </div>
