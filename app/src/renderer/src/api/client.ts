@@ -314,9 +314,16 @@ export interface PersonsOut {
 export interface PersonMediaItem {
   file_id: number
   path: string
+  abs_path: string
   kind: string
   face_id: number
   bbox: [number, number, number, number]
+}
+
+export interface MergeSuggestion {
+  person_a: number
+  person_b: number
+  similarity: number
 }
 
 // ---------------------------------------------------------------------------
@@ -774,6 +781,12 @@ export const api = {
         source_id: sourceId,
         target_id: targetId
       }),
+
+    mergeSuggestions: (libraryId: string) =>
+      request<MergeSuggestion[]>(
+        'GET',
+        `/v1/libraries/${libraryId}/persons/merge-suggestions`
+      ),
 
     media: (libraryId: string, personId: number) =>
       request<PersonMediaItem[]>('GET', `/v1/libraries/${libraryId}/persons/${personId}/media`),

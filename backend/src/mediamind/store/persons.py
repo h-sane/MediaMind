@@ -35,6 +35,22 @@ class PersonSummary:
     sample_face_ids: list[int]  # up to 4, largest-bbox-area first
 
 
+# Pairs of distinct persons whose centroids are at least this cosine-similar
+# surface as "are these the same person?" suggestions. Deliberately below
+# AUTO_MATCH_THRESHOLD (0.6): those are exactly the borderline pairs the
+# clustering split-bias (clustering.DEFAULT_EPS) leaves as separate persons for
+# the user to reconcile with one click, rather than risk a wrong auto-merge.
+MERGE_SUGGESTION_MIN_SIM = 0.5
+MAX_MERGE_SUGGESTIONS = 20
+
+
+@dataclass(frozen=True)
+class MergeSuggestion:
+    person_a: int
+    person_b: int
+    similarity: float
+
+
 @dataclass(frozen=True)
 class FaceInfo:
     id: int
@@ -517,6 +533,30 @@ def merge_persons(conn: sqlite3.Connection, source_id: int, target_id: int) -> b
 
     conn.commit()
     return True
+
+
+def merge_suggestions(
+    conn: sqlite3.Connection, provider_id: str, min_sim: float = MERGE_SUGGESTION_MIN_SIM
+) -> list[MergeSuggestion]:
+    """Person pairs likely to be the same person, most-similar first.
+
+    Centroids are stored normalized, so the dot product is cosine similarity.
+    O(n²) over persons is fine — a library has dozens of persons, not millions;
+    the result is capped so an over-split library can't flood the UI.
+    """
+    rows = conn.execute(
+        "SELECT id, centroid FROM persons WHERE provider_id = ? AND centroid IS NOT NULL",
+        (provider_id,),
+    ).fetchall()
+    persons = [(r["id"], np.frombuffer(r["centroid"], dtype=np.float32)) for r in rows]
+    out: list[MergeSuggestion] = []
+    for i in range(len(persons)):
+        for j in range(i + 1, len(persons)):
+            sim = float(np.dot(persons[i][1], persons[j][1]))
+            if sim >= min_sim:
+                out.append(MergeSuggestion(persons[i][0], persons[j][0], sim))
+    out.sort(key=lambda s: s.similarity, reverse=True)
+    return out[:MAX_MERGE_SUGGESTIONS]
 
 
 def get_face(conn: sqlite3.Connection, face_id: int) -> FaceInfo | None:
