@@ -90,7 +90,25 @@ Root-cause fix for the app-wide slowness.
 - Re-measure vs. Phase 0.
 - Touch: `core/thumbnails.py`, `core/loaders.py`, `api/routes/files.py`.
 
-### Phase 2 — Fast viewer + virtualized grids (frontend) — **the gate**
+### Phase 2 — Fast viewer + virtualized grids (frontend) — **the gate** — ◑ IMPLEMENTATION DONE (session 38); formal full-bar table is the remaining gate step
+Session 38 findings + work (handoff `.claude/handoffs/2026-07-21_session_38.md`):
+- **Grid virtualization was already present** in the three heavy views
+  (Icon/Tiles/Details, ungrouped branch) via `@tanstack/react-virtual`. Grouped
+  branches and Gallery are intentionally not windowed (documented trade-off in
+  `content/grouping.ts`); they still lazy-load thumbnails via `useNearViewport`
+  and now hit the Phase-1 cache, so off-screen tiles cost only a DOM node.
+- **Progressive viewer shipped + verified.** `MediaViewer` opens a still image
+  on `/preview` (fast, cached) and upgrades to `/raw` only on zoom. Live-app
+  measurement: open fired preview only (~40 ms, under the 150 ms bar), zoom
+  fired raw (~73 ms). gif/video/audio keep `/raw`.
+- **DedupeReview** already shows resolution/size per copy on cached thumbnails;
+  the "compare at full resolution" button is deferred (not an acceptance-bar
+  item).
+- **Remaining before Phase 4+:** a formal 4-row acceptance-bar table (folder
+  open, scroll fps, full-screen open, dedupe/face tiles) from the running app.
+  The viewer row is verified; the others rest on already-present virtualization
+  + Phase-1 cache and need a confirming measurement.
+
 - **Grid virtualization (windowing):** render only visible tiles across every
   grid (Explorer grid, Gallery, dedupe, faces). Confirm it is not already
   present; the lazy `useNearViewport` hook helps but does not window the DOM.
