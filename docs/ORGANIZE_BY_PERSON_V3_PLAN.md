@@ -147,14 +147,22 @@ the Linux/Mac path. Only if Phase 2 leaves a gap on those formats.
   Faces tool for now) and the per-tile "not a face" reject action that lived on
   the deleted side panel (belongs in the review flows / a future context menu).
 
-### Phase 5 — Accuracy & naming UX
-- **Bias clustering toward splitting** (tighten `clustering.py` `eps` / raise
-  `min_samples`) so a stranger is never folded into a named person.
-- **Name-who-matters:** clusters ranked by frequency; user names the recurring
-  people; strangers/one-offs stay unnamed and are never organized (backend
-  already only organizes named persons).
-- **Proactive merge suggestions** ("are these the same person?") + one-click
-  merge, making over-splitting cheap to resolve.
+### Phase 5 — Accuracy & naming UX — ✅ DONE (session 40)
+- **Bias clustering toward splitting** — **DONE.** `clustering.DEFAULT_EPS`
+  lowered 0.5 → 0.42 (min_samples kept at 2 so a lone stranger stays noise, not
+  a forced group). Left as a documented calibration knob, not a fixed law —
+  tune per real-media measurement.
+- **Name-who-matters** — **DONE.** `PeoplePanel` now ranks persons by
+  `media_count` (below any actionable folder-match suggestion), so recurring
+  people the user wants to name surface first and one-offs sink. Backend already
+  only organizes *named* persons, so unnamed strangers are never moved.
+- **Proactive merge suggestions** — **DONE.** New `store/persons.merge_suggestions`
+  (person pairs with cosine-similar centroids ≥ 0.5, below the 0.6 auto-match
+  bar, ranked most-similar first, capped at 20) → `GET …/persons/merge-suggestions`
+  → a `MergeSuggestionStrip` ("Are these the same person?") in the People panel
+  with one-click merge (survivor = named/most-photos person) and a session-local
+  "Not the same" dismiss. Verified live: strip renders "96% alike", correct
+  merge direction, 4→3 people after one click.
 
 ### Phase 6 — Opt-in export + duplicate manager
 - **Export to real folders** reuses `core/organize_plan.py` as the export path.

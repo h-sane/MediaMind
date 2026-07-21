@@ -318,6 +318,12 @@ class PersonMergeIn(BaseModel):
     target_id: int
 
 
+class MergeSuggestionOut(BaseModel):
+    person_a: int
+    person_b: int
+    similarity: float
+
+
 class PersonMediaItemOut(BaseModel):
     file_id: int
     path: str          # library-relative (posix)

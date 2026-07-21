@@ -320,6 +320,12 @@ export interface PersonMediaItem {
   bbox: [number, number, number, number]
 }
 
+export interface MergeSuggestion {
+  person_a: number
+  person_b: number
+  similarity: number
+}
+
 // ---------------------------------------------------------------------------
 // Multi-person types (M6 remainder)
 // ---------------------------------------------------------------------------
@@ -775,6 +781,12 @@ export const api = {
         source_id: sourceId,
         target_id: targetId
       }),
+
+    mergeSuggestions: (libraryId: string) =>
+      request<MergeSuggestion[]>(
+        'GET',
+        `/v1/libraries/${libraryId}/persons/merge-suggestions`
+      ),
 
     media: (libraryId: string, personId: number) =>
       request<PersonMediaItem[]>('GET', `/v1/libraries/${libraryId}/persons/${personId}/media`),

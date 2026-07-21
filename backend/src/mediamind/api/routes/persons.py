@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
 from mediamind.api.models import (
+    MergeSuggestionOut,
     PersonMediaItemOut,
     PersonMergeIn,
     PersonOut,
@@ -25,6 +26,7 @@ from mediamind.store.persons import (
     get_face,
     list_person_summaries,
     merge_persons,
+    merge_suggestions,
     person_media,
     rename_person,
     latest_faces_scan,
@@ -147,6 +149,30 @@ def merge_persons_endpoint(
             detail="Cannot merge: unknown persons, same person, or provider mismatch",
         )
     return {"ok": True}
+
+
+@router.get(
+    "/libraries/{library_id}/persons/merge-suggestions",
+    response_model=list[MergeSuggestionOut],
+)
+def merge_suggestions_endpoint(library_id: str, request: Request):
+    """Proactive "are these the same person?" pairs (Phase 5) — close centroids
+    the split-biased clustering left as separate persons, ranked most-similar
+    first, for one-click merge."""
+    _, library_root = _get_library_and_root(request, library_id)
+    conn = _open_library_db(library_root)
+    try:
+        scan = latest_faces_scan(conn)
+        if scan is None:
+            return []
+        provider_id = json.loads(scan["params"] or "{}").get("provider_id", "")
+        suggestions = merge_suggestions(conn, provider_id)
+    finally:
+        conn.close()
+    return [
+        MergeSuggestionOut(person_a=s.person_a, person_b=s.person_b, similarity=s.similarity)
+        for s in suggestions
+    ]
 
 
 @router.get(

@@ -11,7 +11,12 @@ from __future__ import annotations
 
 import numpy as np
 
-DEFAULT_EPS = 0.5  # V0 default; higher merges more, lower splits more
+# Split-bias knob (Phase 5). Lower than the V0 default of 0.5: higher merges
+# more, lower splits more. A false merge corrupts a folder you might send to
+# someone (tedious to un-mix); a false split is a one-click merge suggestion to
+# fix (see store/persons.merge_suggestions). Tune per real-media measurement —
+# this is a calibration value, not a fixed law.
+DEFAULT_EPS = 0.42
 DEFAULT_MIN_SAMPLES = 2
 NOISE_LABEL = -1
 

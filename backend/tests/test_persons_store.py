@@ -13,6 +13,7 @@ from mediamind.store.persons import (
     FileFaces,
     list_person_summaries,
     merge_persons,
+    merge_suggestions,
     next_auto_label,
     person_media,
     persist_face_scan,
@@ -309,6 +310,34 @@ def test_rejected_pending_match_stays_suppressed_across_rescans(conn):
         "SELECT person_id FROM faces WHERE file_id = ? AND provider_id = ?", (fid2, PROVIDER)
     ).fetchone()
     assert face_row["person_id"] is None, "rejected face must stay unassigned, not get silently auto-confirmed"
+
+
+# ---------------------------------------------------------------------------
+# merge_suggestions (Phase 5)
+# ---------------------------------------------------------------------------
+
+def test_merge_suggestions_flags_near_duplicate_persons(conn):
+    """Two persons with near-identical centroids are suggested for merge; a
+    third, distant person pairs with neither."""
+    fid1 = upsert_file(conn, "a.jpg", "photo", 100, 0.0, "h_a", True)
+    fid2 = upsert_file(conn, "b.jpg", "photo", 100, 0.0, "h_b", True)
+    fid3 = upsert_file(conn, "c.jpg", "photo", 100, 0.0, "h_c", True)
+    conn.commit()
+    file_faces = [
+        FileFaces(file_id=fid1, content_hash="h_a", decoded_ok=True, faces=[_fake_face(1, 0, 0)]),
+        FileFaces(file_id=fid2, content_hash="h_b", decoded_ok=True, faces=[_fake_face(0.98, 0.02, 0)]),
+        FileFaces(file_id=fid3, content_hash="h_c", decoded_ok=True, faces=[_fake_face(0, 0, 1)]),
+    ]
+    # Forced into three separate persons (as a split-biased clustering would).
+    _do_scan(conn, file_faces, labels=[0, 1, 2])
+
+    sugg = merge_suggestions(conn, PROVIDER)
+    assert len(sugg) == 1, "only the two near-identical red persons should be suggested"
+    assert sugg[0].similarity > 0.9
+    ids = {row["id"] for row in conn.execute(
+        "SELECT id FROM persons WHERE provider_id = ? ORDER BY id LIMIT 2", (PROVIDER,)
+    )}
+    assert {sugg[0].person_a, sugg[0].person_b} == ids
 
 
 # ---------------------------------------------------------------------------

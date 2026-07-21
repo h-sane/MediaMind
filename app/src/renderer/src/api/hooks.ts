@@ -781,7 +781,19 @@ export function useMergePersons(libraryId: string) {
   return useMutation({
     mutationFn: ({ sourceId, targetId }: { sourceId: number; targetId: number }) =>
       api.persons.merge(libraryId, sourceId, targetId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['persons', libraryId] })
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['persons', libraryId] })
+      qc.invalidateQueries({ queryKey: ['merge-suggestions', libraryId] })
+    }
+  })
+}
+
+export function useMergeSuggestions(libraryId: string) {
+  return useQuery({
+    queryKey: ['merge-suggestions', libraryId],
+    queryFn: () => api.persons.mergeSuggestions(libraryId),
+    enabled: libraryId.length > 0,
+    retry: false
   })
 }
 

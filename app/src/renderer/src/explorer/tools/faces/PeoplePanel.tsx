@@ -3,6 +3,7 @@ import { ArrowLeftRight } from 'lucide-react'
 import {
   usePersons,
   useMergePersons,
+  useMergeSuggestions,
   useBindingSuggestions,
   useBindings,
   useRefreshBindings,
@@ -13,6 +14,7 @@ import { selectJobForLibrary, useJobsStore } from '../../../stores/jobs'
 import { useZoomScale } from '../../../hooks/useZoomScale'
 import { PersonCard } from './PersonCard'
 import { GroupSuggestionStrip } from './GroupSuggestionStrip'
+import { MergeSuggestionStrip, pairKey } from './MergeSuggestionStrip'
 import { RespectedFolders } from './RespectedFolders'
 import { MatchReviewModal } from './MatchReviewModal'
 import { MaterializeReviewModal } from './MaterializeReviewModal'
@@ -68,6 +70,14 @@ export function PeoplePanel({
   const mergePersons = useMergePersons(libraryId)
   const hasFaceScan = !!personsData
 
+  const { data: mergeSuggestionsData } = useMergeSuggestions(libraryId)
+  // Session-only "not the same" dismissals: person ids churn across rescans, so
+  // a durable pair-suppression keyed by id would go stale immediately — not
+  // worth the persistence. Reappears on reload; one click re-dismisses.
+  // ponytail: session dismiss, add a durable store if the churn stops being one.
+  const [dismissedPairs, setDismissedPairs] = useState<Set<string>>(new Set())
+  const [mergingPairKey, setMergingPairKey] = useState<string | null>(null)
+
   const { data: suggestionsData } = useBindingSuggestions(libraryId)
   const { data: bindingsData } = useBindings(libraryId)
   const refreshBindings = useRefreshBindings(libraryId)
@@ -114,6 +124,17 @@ export function PeoplePanel({
     )
   }
 
+  // One-click merge from a "same person?" suggestion — no confirm modal: the
+  // survivor is chosen deterministically (named/most-photos) and an accidental
+  // merge is itself one Merge-mode click to undo by re-splitting later.
+  const handleSuggestionMerge = (sourceId: number, targetId: number) => {
+    setMergingPairKey(pairKey(sourceId, targetId))
+    mergePersons.mutate(
+      { sourceId, targetId },
+      { onSettled: () => setMergingPairKey(null) }
+    )
+  }
+
   const suggestions = suggestionsData?.suggestions ?? []
   const personSuggestions = new Map<number, BindingSuggestion>()
   for (const s of suggestions) {
@@ -128,13 +149,16 @@ export function PeoplePanel({
   const persons = personsData?.persons ?? []
   const personDisplayName = (id: number): string =>
     persons.find((p) => p.id === id)?.name ?? persons.find((p) => p.id === id)?.auto_label ?? `#${id}`
+  // Actionable folder-match suggestions float to the top; below them, rank by
+  // frequency (Phase 5 "name who matters") so the recurring people the user
+  // actually wants to name surface first and one-off strangers sink.
   const sortedPersons = [...persons].sort((a, b) => {
     const sa = personSuggestions.get(a.id)
     const sb = personSuggestions.get(b.id)
     if (sa && sb) return sb.coverage - sa.coverage
     if (sa) return -1
     if (sb) return 1
-    return 0
+    return b.media_count - a.media_count
   })
   const isScanning = !!activeJob
 
@@ -241,6 +265,18 @@ export function PeoplePanel({
           suggestions={groupSuggestions}
           onReview={handleReviewSuggestion}
           onDismiss={(s) => dismissSuggestion.mutate(s.id)}
+        />
+      )}
+
+      {!isScanning && !isLoading && persons.length > 0 && (
+        <MergeSuggestionStrip
+          libraryId={libraryId}
+          suggestions={mergeSuggestionsData ?? []}
+          persons={persons}
+          dismissed={dismissedPairs}
+          busyKey={mergingPairKey}
+          onMerge={handleSuggestionMerge}
+          onDismiss={(key) => setDismissedPairs((prev) => new Set(prev).add(key))}
         />
       )}
 
