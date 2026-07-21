@@ -43,6 +43,19 @@ def logs_dir() -> Path:
     return d
 
 
+def thumbnail_cache_dir() -> Path:
+    """Persistent on-disk thumbnail/preview cache, keyed by file identity.
+
+    Loose JPEGs under a hashed, sharded path so relaunching the app never
+    re-decodes a file it has already thumbnailed — the single biggest felt
+    speed win. Lives in the app data dir, same reasoning as
+    `browse_index_db_path`: whole-filesystem browsing must never write to the
+    folders it looks at. Rebuildable at any time (safe to delete)."""
+    d = app_data_dir() / "thumb_cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def library_data_dir(library_root: Path) -> Path:
     """`.mediamind/` inside a library (created on demand)."""
     d = library_root / LIBRARY_DATA_DIRNAME

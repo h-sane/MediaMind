@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { useBrowseRawUrl, useFileRawUrl } from '../api/hooks'
+import {
+  useBrowsePreviewUrl,
+  useBrowseRawUrl,
+  useFilePreviewUrl,
+  useFileRawUrl
+} from '../api/hooks'
 
 export interface MediaViewerFile {
   path: string
@@ -65,9 +70,24 @@ export function MediaViewer({ libraryId, files, index, onClose, onIndexChange }:
   const file = files[index]
   const hasPrev = index > 0
   const hasNext = index < files.length - 1
-  const libraryResult = useFileRawUrl(libraryId ?? '', file.path, !!libraryId)
-  const browseResult = useBrowseRawUrl(file.path, !libraryId)
-  const { url, failed } = libraryId ? libraryResult : browseResult
+
+  // Still images open on the fast, cached screen-sized preview and only pull
+  // the true original once the user zooms in (or if the preview can't decode).
+  // gif/video/audio never use the preview (a JPEG frame can't animate/play).
+  const isStill = file.kind === 'image'
+  const [wantOriginal, setWantOriginal] = useState(false)
+
+  const libPreview = useFilePreviewUrl(libraryId ?? '', file.path, 2560, !!libraryId && isStill)
+  const browsePreview = useBrowsePreviewUrl(file.path, 2560, !libraryId && isStill)
+  const preview = libraryId ? libPreview : browsePreview
+
+  const needRaw = !isStill || wantOriginal || preview.failed
+  const libRaw = useFileRawUrl(libraryId ?? '', file.path, !!libraryId && needRaw)
+  const browseRaw = useBrowseRawUrl(file.path, !libraryId && needRaw)
+  const raw = libraryId ? libRaw : browseRaw
+
+  const url = isStill ? raw.url ?? preview.url : raw.url
+  const failed = isStill ? preview.failed && raw.failed : raw.failed
 
   const mediaRef = useRef<HTMLElement | null>(null)
   const [scale, setScale] = useState(1)
@@ -86,11 +106,19 @@ export function MediaViewer({ libraryId, files, index, onClose, onIndexChange }:
   }, [scale])
 
   // A new file (navigated via prev/next, or the viewer reopened on a
-  // different item) always starts unzoomed.
+  // different item) always starts unzoomed and back on the preview.
   useEffect(() => {
     setScale(1)
     setOffset({ x: 0, y: 0 })
+    setWantOriginal(false)
   }, [index, file.path])
+
+  // Any zoom-in upgrades a still image from the preview to the true original,
+  // so magnifying never reveals preview softness. One-way for this file — once
+  // the original is loaded there's no reason to drop back to the preview.
+  useEffect(() => {
+    if (scale > 1) setWantOriginal(true)
+  }, [scale])
 
   // Zooming out must never leave the pan offset stranded outside the
   // (now smaller) allowed range.

@@ -140,6 +140,53 @@ export function useFileRawUrl(
   return { url, failed }
 }
 
+/**
+ * Screen-capped preview (longest edge ~2560px) for the full-screen viewer —
+ * fast and persistently cached (Phase 1), unlike `useFileRawUrl` which fetches
+ * the true original. Fetched only while `enabled` (viewer open on a still
+ * image); the viewer upgrades to the raw original on zoom.
+ */
+export function useFilePreviewUrl(
+  libraryId: string,
+  path: string,
+  size = 2560,
+  enabled: boolean
+): { url: string | null; failed: boolean } {
+  const [url, setUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  const urlRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    setUrl(null)
+    setFailed(false)
+    if (!enabled) return
+    let cancelled = false
+    api.files
+      .previewUrl(libraryId, path, size)
+      .then((objectUrl) => {
+        if (!cancelled) {
+          urlRef.current = objectUrl
+          setUrl(objectUrl)
+        } else {
+          URL.revokeObjectURL(objectUrl)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true)
+      })
+
+    return () => {
+      cancelled = true
+      if (urlRef.current) {
+        URL.revokeObjectURL(urlRef.current)
+        urlRef.current = null
+      }
+    }
+  }, [libraryId, path, size, enabled])
+
+  return { url, failed }
+}
+
 // ---------------------------------------------------------------------------
 // Explorer shell — right-sidebar tools bridge
 // ---------------------------------------------------------------------------
@@ -268,6 +315,48 @@ export function useBrowseRawUrl(
       }
     }
   }, [path, enabled])
+
+  return { url, failed }
+}
+
+/** Screen-capped preview by absolute path (Explorer shell). Mirror of
+ * `useFilePreviewUrl` for the library-free viewer. */
+export function useBrowsePreviewUrl(
+  path: string,
+  size = 2560,
+  enabled: boolean
+): { url: string | null; failed: boolean } {
+  const [url, setUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  const urlRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    setUrl(null)
+    setFailed(false)
+    if (!enabled) return
+    let cancelled = false
+    api.fs
+      .previewUrl(path, size)
+      .then((objectUrl) => {
+        if (!cancelled) {
+          urlRef.current = objectUrl
+          setUrl(objectUrl)
+        } else {
+          URL.revokeObjectURL(objectUrl)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true)
+      })
+
+    return () => {
+      cancelled = true
+      if (urlRef.current) {
+        URL.revokeObjectURL(urlRef.current)
+        urlRef.current = null
+      }
+    }
+  }, [path, size, enabled])
 
   return { url, failed }
 }
