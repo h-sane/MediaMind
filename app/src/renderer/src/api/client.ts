@@ -507,6 +507,16 @@ export const api = {
       return URL.createObjectURL(await res.blob())
     },
 
+    previewUrl: async (libraryId: string, path: string, size = 2560): Promise<string> => {
+      const { port, token } = await connectBackend()
+      const res = await fetch(
+        `http://127.0.0.1:${port}/v1/libraries/${libraryId}/files/preview?path=${encodeURIComponent(path)}&size=${size}`,
+        { headers: { 'X-MediaMind-Token': token } }
+      )
+      if (!res.ok) throw new Error('Preview unavailable')
+      return URL.createObjectURL(await res.blob())
+    },
+
     rawUrl: async (libraryId: string, path: string): Promise<string> => {
       const { port, token } = await connectBackend()
       const res = await fetch(
@@ -531,6 +541,16 @@ export const api = {
         { headers: { 'X-MediaMind-Token': token } }
       )
       if (!res.ok) throw new Error('Thumbnail unavailable')
+      return URL.createObjectURL(await res.blob())
+    },
+
+    previewUrl: async (path: string, size = 2560): Promise<string> => {
+      const { port, token } = await connectBackend()
+      const res = await fetch(
+        `http://127.0.0.1:${port}/v1/fs/preview?path=${encodeURIComponent(path)}&size=${size}`,
+        { headers: { 'X-MediaMind-Token': token } }
+      )
+      if (!res.ok) throw new Error('Preview unavailable')
       return URL.createObjectURL(await res.blob())
     },
 
