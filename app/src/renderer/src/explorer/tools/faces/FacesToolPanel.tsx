@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { usePersons } from '../../../api/hooks'
 import { personPath, useExplorerStore } from '../../../stores/explorer'
 import { selectJobForLibrary, useJobsStore } from '../../../stores/jobs'
+import { DuplicateLocationsPanel } from './DuplicateLocationsPanel'
 import { ModelSelectPanel } from './ModelSelectPanel'
 import { MultiPersonPanel } from './MultiPersonPanel'
 import { OrganizePanel } from './OrganizePanel'
@@ -21,6 +22,7 @@ type FacesSub =
   | { name: 'organize' }
   | { name: 'pending' }
   | { name: 'multi-person' }
+  | { name: 'duplicate-locations' }
 
 /**
  * Faces tool root — hosts the Prep (loose vs. pre-sorted check) → Setup
@@ -95,7 +97,16 @@ export function FacesToolPanel({ libraryId, folderPath }: Props): React.JSX.Elem
             onReviewMultiPerson={() => setSub({ name: 'multi-person' })}
           />
         )}
-        {sub.name === 'organize' && <OrganizePanel libraryId={libraryId} onBack={goToPeople} />}
+        {sub.name === 'organize' && (
+          <OrganizePanel
+            libraryId={libraryId}
+            onBack={goToPeople}
+            onManageDuplicateLocations={() => setSub({ name: 'duplicate-locations' })}
+          />
+        )}
+        {sub.name === 'duplicate-locations' && (
+          <DuplicateLocationsPanel libraryId={libraryId} onBack={() => setSub({ name: 'organize' })} />
+        )}
         {sub.name === 'pending' && <PendingReviewPanel libraryId={libraryId} onBack={goToPeople} />}
         {sub.name === 'multi-person' && <MultiPersonPanel libraryId={libraryId} onBack={goToPeople} />}
       </div>

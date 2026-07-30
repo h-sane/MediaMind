@@ -8,7 +8,7 @@ interface Props {
   dismissed: Set<string>
   busyKey: string | null
   onMerge: (sourceId: number, targetId: number) => void
-  onDismiss: (key: string) => void
+  onDismiss: (personAId: number, personBId: number) => void
 }
 
 export const pairKey = (a: number, b: number): string =>
@@ -88,7 +88,7 @@ export function MergeSuggestionStrip({
                   {busy ? 'Merging…' : `Merge → ${name(keep)}`}
                 </button>
                 <button
-                  onClick={() => onDismiss(key)}
+                  onClick={() => onDismiss(a.id, b.id)}
                   disabled={busy}
                   title="Not the same person"
                   className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 disabled:opacity-50"

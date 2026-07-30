@@ -90,7 +90,17 @@ export function ScanProgress({ libraryId, job }: Props): React.JSX.Element {
     <div className="rounded-xl border border-zinc-200 bg-white px-5 py-4 shadow-sm">
       <div className="mb-3 flex items-center justify-between">
         <div>
-          <p className="text-sm font-medium">{phaseLabel(phase)}</p>
+          <p className="flex items-center gap-1.5 text-sm font-medium">
+            {phaseLabel(phase)}
+            {job.triggered_by === 'watcher' && (
+              <span
+                className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-indigo-500"
+                title="Started automatically — new media was detected in this folder"
+              >
+                Auto
+              </span>
+            )}
+          </p>
           {job.total > 0 && (
             <p className="mt-0.5 text-xs text-zinc-400">
               {job.done.toLocaleString()} / {job.total.toLocaleString()} files
@@ -129,12 +139,14 @@ export function ScanProgress({ libraryId, job }: Props): React.JSX.Element {
 
       {job.state === 'succeeded' && job.result && job.type === 'dedupe' && (
         <p className="mt-2 text-xs text-zinc-500">
+          {job.triggered_by === 'watcher' && 'New media scanned — '}
           Found {(job.result.groups as number).toLocaleString()} groups ·{' '}
           {formatBytes(job.result.reclaimable_bytes as number)} reclaimable
         </p>
       )}
       {job.state === 'succeeded' && job.result && job.type === 'faces' && (
         <p className="mt-2 text-xs text-zinc-500">
+          {job.triggered_by === 'watcher' && 'New media scanned — '}
           {(job.result.people as number).toLocaleString()} people ·{' '}
           {(job.result.faces as number).toLocaleString()} faces detected
         </p>

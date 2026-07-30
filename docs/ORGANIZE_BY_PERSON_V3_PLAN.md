@@ -1,8 +1,12 @@
 # Organize-by-Person V3 — Fast, Non-Destructive, Background-First
 
-Status: **Plan agreed (grilling session, 2026-07-21).** Not yet started.
-Supersedes the "physically move files into `People/<Name>/`" direction as the
-*primary* experience; that move logic survives as the opt-in **Export** path.
+Status: **✅ Functionally complete (session 45, 2026-07-30).** All phases 0–8
+done or deliberately deferred with a stated re-trigger condition (Phase 4's
+library-wide scope; Phase 3's Windows shell fast-path; Phase 7's bounded
+worker pool; Phase 8's OS-event watching and incremental ingest) — none of it
+blocks calling V3 done. Supersedes the "physically move files into
+`People/<Name>/`" direction as the *primary* experience; that move logic
+survives as the opt-in **Export** path.
 
 ## Context — why this change
 
@@ -84,6 +88,11 @@ Root-cause fix for the app-wide slowness.
   Loose JPEG files under a hashed path (simplest; OS-cached; easy to evict).
   Replaces / backs the in-memory `_cache` in `thumbnails.py:28`. This is what
   makes the *second* open instant — the single biggest felt improvement.
+  **Size-cap LRU eviction added (session 45)** — was unbounded (ponytail-flagged
+  since session 37); now capped at 2 GiB with a 90%-target sweep, checked
+  probabilistically (1/500 writes) on `_disk_put` rather than every write, so
+  the full-tree walk it costs is amortized. A cache-hit `_disk_get` touches the
+  file's mtime so recently-viewed thumbnails outlive older ones under pressure.
 - **Progressive preview endpoint:** a screen-capped preview (longest edge
   ~2560px) distinct from `files/raw` (which stays the true original, loaded only
   on zoom / explicit "view original").
@@ -162,9 +171,13 @@ the Linux/Mac path. Only if Phase 2 leaves a gap on those formats.
   (real thumbnails, correct count, files never moved). The old bespoke
   `PersonDetailPanel` side panel was deleted.
 - Two scopes (library-wide vs folder-scoped): **DEFERRED** — thin in the current
-  folder-is-library model; needs a chosen library concept first.
-- Duplicate display-collapse: **DEFERRED** — `person_media` already dedups by
-  `file_id`; collapsing byte-identical copies at *different* paths is unbuilt.
+  folder-is-library model; needs a chosen library concept first (a genuine new
+  architectural feature, deliberately left out of the session 45 backlog pass).
+- **Duplicate display-collapse — DONE (session 45).** `person_media` now dedups
+  by `files.content_hash` (COALESCE'd to a per-file fallback key when unhashed,
+  so never-dedupe-scanned files never wrongly collapse into each other) instead
+  of `file.id` — a byte-identical copy of a photo at a different path collapses
+  to the single tile at the lexicographically-first path. `store/persons.py`.
 - **Persistent nav-pane "People" row — DONE (session 43).** A "People" row sits
   under Home in the nav pane; it opens the Facial Recognition tool (whose default
   sub-view is the People grid) for the current folder. Folder-scoped like the
@@ -189,9 +202,16 @@ the Linux/Mac path. Only if Phase 2 leaves a gap on those formats.
   (person pairs with cosine-similar centroids ≥ 0.5, below the 0.6 auto-match
   bar, ranked most-similar first, capped at 20) → `GET …/persons/merge-suggestions`
   → a `MergeSuggestionStrip` ("Are these the same person?") in the People panel
-  with one-click merge (survivor = named/most-photos person) and a session-local
-  "Not the same" dismiss. Verified live: strip renders "96% alike", correct
-  merge direction, 4→3 people after one click.
+  with one-click merge (survivor = named/most-photos person) and a "Not the
+  same" dismiss. Verified live: strip renders "96% alike", correct merge
+  direction, 4→3 people after one click.
+  **Dismiss made durable (session 45)** — a new `dismissed_merge_suggestions`
+  table (schema v9, cascade-deletes with either person row) persists the
+  choice past reload; `store/persons.merge_suggestions` filters it out
+  server-side. Normalized to (min, max) person-id order so dismiss order
+  doesn't matter. Keyed by `persons.id` the same way folder bindings and
+  `face_assignments.person_id` already are — accepts the same rare-churn
+  caveat (an unmatched/renamed identity on rescan) as those.
 
 ### Phase 6 — Opt-in export + duplicate manager
 - **Export to real folders** reuses `core/organize_plan.py` as the export path.
@@ -203,16 +223,34 @@ the Linux/Mac path. Only if Phase 2 leaves a gap on those formats.
   select-and-delete UI) driven by the export manifest: "this photo lives in N
   folders," prune per-photo or in bulk, safe delete only.
 
-**Status — part A DONE (session 41), part B DEFERRED.** Export shipped by
-threading `mode` (move|copy) + `group_scope` (prominent|all) through the
-existing organize plan/preview/execute/undo (the safety layer already does
-source→multi-folder copy fan-out). Export copies leave originals in place,
-record `kind="export-by-person"` copies in the manifest, and undo by trashing
-the copies. Verified live (copy 4→6 with originals intact; undo 6→4) + a
-fan-out unit test. The **duplicate-location manager (part B) is deferred** —
-only useful once fan-out exports exist; buildable off `manifest_entries` where
-`action='copied'` with no rework. See
-`.claude/handoffs/2026-07-21_session_41.md`.
+**Status — ✅ DONE, both parts (part A session 41, part B session 45).** Export
+shipped by threading `mode` (move|copy) + `group_scope` (prominent|all)
+through the existing organize plan/preview/execute/undo (the safety layer
+already does source→multi-folder copy fan-out). Export copies leave originals
+in place, record `kind="export-by-person"` copies in the manifest, and undo by
+trashing the copies. Verified live (copy 4→6 with originals intact; undo 6→4)
++ a fan-out unit test. See `.claude/handoffs/2026-07-21_session_41.md`.
+
+**Duplicate-location manager (part B) — DONE (session 45).** New
+`store/audit.list_export_copies` groups `manifest_entries` (`action='copied'`,
+non-undone `kind='export-by-person'`) by source; `GET
+…/organize/duplicate-locations` stat-checks every source/destination live off
+disk (the filesystem stays the source of truth — a copy pruned by hand or by
+an earlier call here just silently stops appearing) and returns groups with
+2+ still-existing locations. `POST …/organize/duplicate-locations/prune`
+safe-deletes (Recycle Bin) only the caller-named copy paths — the route only
+ever trashes what it's told, and the frontend never offers the source tile as
+selectable, so an original can't be pruned through this surface. Recorded in
+the same `organize_actions`/`manifest_entries` audit trail as every other file
+op (`kind="prune-duplicate-location"`). The live equivalents of `DedupeReview`
+(dead code — see repo map) had already moved to `explorer/tools/dedupe/`, so
+this shipped as a new `DuplicateLocationsPanel` sub-view off the Faces tool's
+Organize panel ("Manage duplicate locations" link) rather than literally
+reusing the orphaned screen — same tile-grid-plus-checkbox shape, built on the
+live `FileThumbnail` component. Verified: 7 API tests (grouping, solo/undone
+exclusion, live dropout on deletion, prune-only-copies, dry-run, path-
+traversal rejection) + a live `run-desktop` pass through the empty state and
+entry point.
 
 ### Phase 7 — Background-jobs robustness — ◑ part done (session 42)
 - **General multi-job tile stack bottom-right** — **DONE.** The three separate
@@ -231,6 +269,7 @@ only useful once fan-out exports exist; buildable off `manifest_entries` where
   unwinding those load-bearing safety guards (audit F8/F21). Add this only when
   a real trigger appears — multiple concurrent libraries, or a new heavy job
   type that can legitimately run alongside the existing scans.
+  Re-affirmed session 45: still no real trigger; still not built.
 
 ### Phase 8 — Filesystem watcher / auto-ingest — ✅ DONE (session 44)
 Watch the chosen folders; auto-index, duplicate-check, and face-scan any new
@@ -254,7 +293,18 @@ Runner construction is shared with the manual scan route via
 detection/debounce unit tests + a wired end-to-end test that a settled change
 starts and completes a real dedupe scan (`tests/test_watcher.py`).
 
-**Deliberately deferred (ponytail ceilings, not gaps that block use):**
+**"New media arrived" toast — DONE (session 45).** A `Job` now carries
+`triggered_by: "user" | "watcher"` (`core/jobs.py`, threaded through the WS
+broadcast and `JobSnapshot`); `_auto_scan` in `api/app.py` starts its dedupe/
+faces jobs with `triggered_by="watcher"`. `ScanProgress.tsx` shows a small
+"Auto" badge on a watcher-triggered job's bubble while it runs and prefixes
+its completion summary with "New media scanned — ". Piggybacks entirely on
+the existing `JobProgressBubble`/WS pipe from Phase 7 — no new channel.
+Verified: 2 new `JobManager.start()` unit tests + a `triggered_by` assertion
+added to the existing wired watcher integration test.
+
+**Still deliberately deferred (ponytail ceilings, not gaps that block use;
+re-affirmed session 45 — no real trigger for either yet):**
 - **OS-event watching (watchdog / ReadDirectoryChangesW)** instead of polling —
   polling is zero-dependency, cross-platform, and costs *nothing* while the
   feature is off (the default). Ceiling: on a very large tree the periodic walk
@@ -264,9 +314,6 @@ starts and completes a real dedupe scan (`tests/test_watcher.py`).
   re-walks (the embedding cache makes the face pass cheap on unchanged files),
   not a targeted "ingest only the N new files" path. Enough for desktop-scale
   libraries; revisit if a huge library makes each full re-walk too costly.
-- **A dedicated "new media" suggestion surface.** New duplicates/faces show up
-  in the existing dedupe/faces review UIs after the auto-scan; there's no
-  separate "here's what just arrived" toast/inbox yet.
 
 ---
 

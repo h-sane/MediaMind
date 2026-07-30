@@ -542,21 +542,43 @@ def merge_suggestions(
 
     Centroids are stored normalized, so the dot product is cosine similarity.
     O(n²) over persons is fine — a library has dozens of persons, not millions;
-    the result is capped so an over-split library can't flood the UI.
+    the result is capped so an over-split library can't flood the UI. Pairs the
+    user has dismissed as "not the same" (see dismiss_merge_suggestion) are
+    excluded.
     """
     rows = conn.execute(
         "SELECT id, centroid FROM persons WHERE provider_id = ? AND centroid IS NOT NULL",
         (provider_id,),
     ).fetchall()
+    dismissed = {
+        (r["person_a_id"], r["person_b_id"])
+        for r in conn.execute("SELECT person_a_id, person_b_id FROM dismissed_merge_suggestions")
+    }
     persons = [(r["id"], np.frombuffer(r["centroid"], dtype=np.float32)) for r in rows]
     out: list[MergeSuggestion] = []
     for i in range(len(persons)):
         for j in range(i + 1, len(persons)):
+            pid_a, pid_b = persons[i][0], persons[j][0]
+            if (min(pid_a, pid_b), max(pid_a, pid_b)) in dismissed:
+                continue
             sim = float(np.dot(persons[i][1], persons[j][1]))
             if sim >= min_sim:
-                out.append(MergeSuggestion(persons[i][0], persons[j][0], sim))
+                out.append(MergeSuggestion(pid_a, pid_b, sim))
     out.sort(key=lambda s: s.similarity, reverse=True)
     return out[:MAX_MERGE_SUGGESTIONS]
+
+
+def dismiss_merge_suggestion(conn: sqlite3.Connection, person_a_id: int, person_b_id: int) -> None:
+    """Record "not the same person" for this pair so merge_suggestions stops
+    offering it. Normalized to (min, max) id order so lookup doesn't care
+    which side of the pair the caller passes first."""
+    lo, hi = min(person_a_id, person_b_id), max(person_a_id, person_b_id)
+    conn.execute(
+        "INSERT OR IGNORE INTO dismissed_merge_suggestions (person_a_id, person_b_id, created_at) "
+        "VALUES (?, ?, ?)",
+        (lo, hi, time.time()),
+    )
+    conn.commit()
 
 
 def get_face(conn: sqlite3.Connection, face_id: int) -> FaceInfo | None:
@@ -585,7 +607,13 @@ def get_face(conn: sqlite3.Connection, face_id: int) -> FaceInfo | None:
 
 
 def person_media(conn: sqlite3.Connection, person_id: int) -> list[FaceInfo]:
-    """One FaceInfo per distinct file for this person (the face with largest bbox)."""
+    """One FaceInfo per distinct file for this person (the face with largest bbox).
+
+    Byte-identical copies at different paths (same files.content_hash) collapse
+    to a single tile, keyed on the lexicographically-first path so the pick is
+    deterministic. Files with no hash (never dedupe-scanned) never collapse
+    with anything, including each other.
+    """
     rows = conn.execute(
         """
         SELECT f.id, f.file_id, fi.path, fi.kind,
@@ -593,15 +621,24 @@ def person_media(conn: sqlite3.Connection, person_id: int) -> list[FaceInfo]:
                f.person_id, f.confidence
         FROM faces f JOIN files fi ON fi.id = f.file_id
         WHERE f.person_id = ?
+          AND fi.id = (
+              SELECT fi2.id
+              FROM faces f2 JOIN files fi2 ON fi2.id = f2.file_id
+              WHERE f2.person_id = ?
+                AND COALESCE(fi2.content_hash, 'file:' || fi2.id)
+                    = COALESCE(fi.content_hash, 'file:' || fi.id)
+              ORDER BY fi2.path
+              LIMIT 1
+          )
           AND f.id = (
-              SELECT f2.id FROM faces f2
-              WHERE f2.file_id = f.file_id AND f2.person_id = ?
-              ORDER BY (f2.bbox_x2 - f2.bbox_x1) * (f2.bbox_y2 - f2.bbox_y1) DESC
+              SELECT f3.id FROM faces f3
+              WHERE f3.file_id = fi.id AND f3.person_id = ?
+              ORDER BY (f3.bbox_x2 - f3.bbox_x1) * (f3.bbox_y2 - f3.bbox_y1) DESC
               LIMIT 1
           )
         ORDER BY fi.path
         """,
-        (person_id, person_id),
+        (person_id, person_id, person_id),
     ).fetchall()
     return [
         FaceInfo(

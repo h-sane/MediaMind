@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
 from mediamind.api.models import (
+    MergeSuggestionDismissIn,
     MergeSuggestionOut,
     PersonMediaItemOut,
     PersonMergeIn,
@@ -23,6 +24,7 @@ from mediamind.core.faces.engine import load_frame
 from mediamind.core.libraries import LibraryRegistry
 from mediamind.store.db import library_db_path, open_db
 from mediamind.store.persons import (
+    dismiss_merge_suggestion,
     get_face,
     list_person_summaries,
     merge_persons,
@@ -173,6 +175,19 @@ def merge_suggestions_endpoint(library_id: str, request: Request):
         MergeSuggestionOut(person_a=s.person_a, person_b=s.person_b, similarity=s.similarity)
         for s in suggestions
     ]
+
+
+@router.post("/libraries/{library_id}/persons/merge-suggestions/dismiss")
+def dismiss_merge_suggestion_endpoint(library_id: str, body: MergeSuggestionDismissIn, request: Request):
+    """"Not the same person" — durably suppress this pair from future
+    merge-suggestion results (survives reload and most rescans)."""
+    _, library_root = _get_library_and_root(request, library_id)
+    conn = _open_library_db(library_root)
+    try:
+        dismiss_merge_suggestion(conn, body.person_a_id, body.person_b_id)
+    finally:
+        conn.close()
+    return {"ok": True}
 
 
 @router.get(

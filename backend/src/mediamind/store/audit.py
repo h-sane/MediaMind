@@ -86,3 +86,19 @@ def list_actions(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM organize_actions ORDER BY created_at DESC"
     ).fetchall()
+
+
+def list_export_copies(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every (source, destination) pair from a non-undone export-by-person
+    action — the raw material for the duplicate-location manager (Phase 6B).
+    Rows are absolute-path strings, same as everything else `record_action`
+    stores; callers stat-check them since a copy may have since moved or
+    been deleted outside the app."""
+    return conn.execute(
+        """
+        SELECT me.source, me.destination
+        FROM manifest_entries me
+        JOIN organize_actions oa ON oa.id = me.action_id
+        WHERE oa.kind = 'export-by-person' AND oa.undone = 0 AND me.action = 'copied'
+        """
+    ).fetchall()

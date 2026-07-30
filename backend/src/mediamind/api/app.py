@@ -69,7 +69,7 @@ async def _lifespan(app: FastAPI):
                 continue
             runner = build_scan_runner(app.state, lib, scan_type)
             if runner is not None:
-                jm.start(lib.id, scan_type, runner)
+                jm.start(lib.id, scan_type, runner, triggered_by="watcher")
 
     app.state.watcher = LibraryWatcher(
         app.state.registry,

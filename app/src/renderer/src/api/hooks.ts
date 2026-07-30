@@ -797,6 +797,15 @@ export function useMergeSuggestions(libraryId: string) {
   })
 }
 
+export function useDismissMergeSuggestion(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ personAId, personBId }: { personAId: number; personBId: number }) =>
+      api.persons.dismissMergeSuggestion(libraryId, personAId, personBId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['merge-suggestions', libraryId] })
+  })
+}
+
 export function usePersonMedia(libraryId: string, personId: number) {
   return useQuery({
     queryKey: ['person-media', libraryId, personId],
@@ -970,6 +979,26 @@ export function useOrganizeAudit(libraryId: string) {
     queryKey: ['organize-audit', libraryId],
     queryFn: () => api.organize.audit(libraryId),
     retry: false
+  })
+}
+
+export function useDuplicateLocations(libraryId: string) {
+  return useQuery({
+    queryKey: ['duplicate-locations', libraryId],
+    queryFn: () => api.organize.duplicateLocations(libraryId),
+    enabled: libraryId.length > 0,
+    retry: false
+  })
+}
+
+export function usePruneDuplicateLocations(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ paths, dryRun }: { paths: string[]; dryRun: boolean }) =>
+      api.organize.pruneDuplicateLocations(libraryId, paths, dryRun),
+    onSuccess: (_data, { dryRun }) => {
+      if (!dryRun) qc.invalidateQueries({ queryKey: ['duplicate-locations', libraryId] })
+    }
   })
 }
 

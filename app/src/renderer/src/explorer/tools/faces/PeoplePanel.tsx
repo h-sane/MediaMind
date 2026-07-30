@@ -4,6 +4,7 @@ import {
   usePersons,
   useMergePersons,
   useMergeSuggestions,
+  useDismissMergeSuggestion,
   useBindingSuggestions,
   useBindings,
   useRefreshBindings,
@@ -71,10 +72,10 @@ export function PeoplePanel({
   const hasFaceScan = !!personsData
 
   const { data: mergeSuggestionsData } = useMergeSuggestions(libraryId)
-  // Session-only "not the same" dismissals: person ids churn across rescans, so
-  // a durable pair-suppression keyed by id would go stale immediately — not
-  // worth the persistence. Reappears on reload; one click re-dismisses.
-  // ponytail: session dismiss, add a durable store if the churn stops being one.
+  const dismissMergeSuggestion = useDismissMergeSuggestion(libraryId)
+  // Local optimistic hide for the instant between click and the invalidated
+  // query refetching — the backend dismissal (dismiss_merge_suggestion) is
+  // what actually makes "Not the same" survive reload.
   const [dismissedPairs, setDismissedPairs] = useState<Set<string>>(new Set())
   const [mergingPairKey, setMergingPairKey] = useState<string | null>(null)
 
@@ -276,7 +277,10 @@ export function PeoplePanel({
           dismissed={dismissedPairs}
           busyKey={mergingPairKey}
           onMerge={handleSuggestionMerge}
-          onDismiss={(key) => setDismissedPairs((prev) => new Set(prev).add(key))}
+          onDismiss={(personAId, personBId) => {
+            setDismissedPairs((prev) => new Set(prev).add(pairKey(personAId, personBId)))
+            dismissMergeSuggestion.mutate({ personAId, personBId })
+          }}
         />
       )}
 

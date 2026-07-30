@@ -36,6 +36,7 @@ def _job_to_msg(job: Job) -> str:
         "result": job.result,
         "created_at": job.created_at,
         "finished_at": job.finished_at,
+        "triggered_by": job.triggered_by,
     })
 
 

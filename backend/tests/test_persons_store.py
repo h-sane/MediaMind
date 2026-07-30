@@ -11,6 +11,7 @@ from mediamind.store.db import open_db
 from mediamind.store.embeddings import CachedFace
 from mediamind.store.persons import (
     FileFaces,
+    dismiss_merge_suggestion,
     list_person_summaries,
     merge_persons,
     merge_suggestions,
@@ -340,6 +341,27 @@ def test_merge_suggestions_flags_near_duplicate_persons(conn):
     assert {sugg[0].person_a, sugg[0].person_b} == ids
 
 
+def test_dismissed_merge_suggestion_is_excluded_and_survives_reorder(conn):
+    """A dismissed pair never reappears, regardless of which id is passed
+    first to dismiss_merge_suggestion (it normalizes to min/max)."""
+    fid1 = upsert_file(conn, "a.jpg", "photo", 100, 0.0, "h_a", True)
+    fid2 = upsert_file(conn, "b.jpg", "photo", 100, 0.0, "h_b", True)
+    conn.commit()
+    file_faces = [
+        FileFaces(file_id=fid1, content_hash="h_a", decoded_ok=True, faces=[_fake_face(1, 0, 0)]),
+        FileFaces(file_id=fid2, content_hash="h_b", decoded_ok=True, faces=[_fake_face(0.98, 0.02, 0)]),
+    ]
+    _do_scan(conn, file_faces, labels=[0, 1])
+
+    sugg = merge_suggestions(conn, PROVIDER)
+    assert len(sugg) == 1
+    pid_a, pid_b = sugg[0].person_a, sugg[0].person_b
+
+    dismiss_merge_suggestion(conn, pid_b, pid_a)  # reversed order on purpose
+
+    assert merge_suggestions(conn, PROVIDER) == []
+
+
 # ---------------------------------------------------------------------------
 # person_media determinism
 # ---------------------------------------------------------------------------
@@ -369,3 +391,50 @@ def test_person_media_picks_largest_bbox_face_per_file(conn):
     assert len(media) == 1  # one row per distinct file, not one per face
     area = (media[0].bbox[2] - media[0].bbox[0]) * (media[0].bbox[3] - media[0].bbox[1])
     assert area == 50.0 * 50.0, "did not pick the largest-bbox face for this file"
+
+
+def test_person_media_collapses_byte_identical_copies(conn):
+    """Two files with the same content_hash (a duplicate copy at a different
+    path) collapse to one tile, keyed on the lexicographically-first path.
+    """
+    fid_a = upsert_file(conn, "b_copy.jpg", "photo", 100, 0.0, "same_hash", True)
+    fid_b = upsert_file(conn, "a_original.jpg", "photo", 100, 0.0, "same_hash", True)
+    conn.commit()
+
+    file_faces = [
+        FileFaces(file_id=fid_a, content_hash="same_hash", decoded_ok=True, faces=[_fake_face(1, 0, 0)]),
+        FileFaces(file_id=fid_b, content_hash="same_hash", decoded_ok=True, faces=[_fake_face(0.99, 0.01, 0)]),
+    ]
+    persist_face_scan(
+        conn, scan_id="s1", provider_id=PROVIDER, file_faces=file_faces,
+        labels=np.array([0, 0]), owners=[0, 1],
+        started_at=0.0, finished_at=1.0, params={"provider_id": PROVIDER}, summary={},
+    )
+
+    pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
+    media = person_media(conn, pid)
+    assert len(media) == 1, "byte-identical copies at different paths must collapse to one tile"
+    assert media[0].path == "a_original.jpg", "must pick the lexicographically-first path deterministically"
+
+
+def test_person_media_never_collapses_unhashed_files(conn):
+    """Files with no content_hash (never dedupe-scanned) must never collapse
+    into each other via the NULL-coalesce fallback key.
+    """
+    fid_a = upsert_file(conn, "one.jpg", "photo", 100, 0.0, None, True)
+    fid_b = upsert_file(conn, "two.jpg", "photo", 100, 0.0, None, True)
+    conn.commit()
+
+    file_faces = [
+        FileFaces(file_id=fid_a, content_hash="", decoded_ok=True, faces=[_fake_face(1, 0, 0)]),
+        FileFaces(file_id=fid_b, content_hash="", decoded_ok=True, faces=[_fake_face(0.99, 0.01, 0)]),
+    ]
+    persist_face_scan(
+        conn, scan_id="s1", provider_id=PROVIDER, file_faces=file_faces,
+        labels=np.array([0, 0]), owners=[0, 1],
+        started_at=0.0, finished_at=1.0, params={"provider_id": PROVIDER}, summary={},
+    )
+
+    pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
+    media = person_media(conn, pid)
+    assert len(media) == 2, "unhashed files must stay distinct tiles"

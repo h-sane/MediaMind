@@ -27,6 +27,7 @@ class JobSnapshot(BaseModel):
     result: dict[str, Any] | None
     created_at: float
     finished_at: float | None
+    triggered_by: str = "user"  # "user" | "watcher" (Phase 8 auto-scan)
 
 
 class ScanIn(BaseModel):
@@ -328,6 +329,11 @@ class MergeSuggestionOut(BaseModel):
     similarity: float
 
 
+class MergeSuggestionDismissIn(BaseModel):
+    person_a_id: int
+    person_b_id: int
+
+
 class PersonMediaItemOut(BaseModel):
     file_id: int
     path: str          # library-relative (posix)
@@ -375,6 +381,23 @@ class OrganizeActionOut(BaseModel):
     ok: bool
     dry_run: bool
     undone: bool
+
+
+class DuplicateLocationOut(BaseModel):
+    path: str            # library-relative
+    kind: str             # image | video | gif | ...
+    is_source: bool       # the original vs. an export copy
+
+
+class DuplicateLocationGroupOut(BaseModel):
+    source: str           # library-relative path of the original (group key)
+    locations: list[DuplicateLocationOut]
+
+
+class DuplicateLocationsPruneIn(BaseModel):
+    paths: list[str]      # library-relative paths to trash
+    dry_run: bool = False
+    permanent: bool = False
 
 
 # ---------------------------------------------------------------------------

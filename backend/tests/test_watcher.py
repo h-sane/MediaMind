@@ -90,3 +90,4 @@ def test_wired_watcher_auto_starts_a_dedupe_scan(tmp_path: Path, monkeypatch: py
                 break
             time.sleep(0.1)
         assert job is not None and job.state == "succeeded"
+        assert job.triggered_by == "watcher", "auto-scan jobs must be tagged for the frontend's toast copy"

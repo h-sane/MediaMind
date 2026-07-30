@@ -81,6 +81,7 @@ export interface JobSnapshot {
   result: Record<string, unknown> | null
   created_at: number
   finished_at: number | null
+  triggered_by: 'user' | 'watcher'
 }
 
 export interface DuplicateFile {
@@ -128,6 +129,17 @@ export interface ExecutionReport {
   dry_run: boolean
   manifest_path: string | null
   entries: ManifestEntry[]
+}
+
+export interface DuplicateLocation {
+  path: string
+  kind: string
+  is_source: boolean
+}
+
+export interface DuplicateLocationGroup {
+  source: string
+  locations: DuplicateLocation[]
 }
 
 // ---------------------------------------------------------------------------
@@ -763,7 +775,18 @@ export const api = {
         `/v1/libraries/${libraryId}/organize/undo`
       ),
     audit: (libraryId: string) =>
-      request<OrganizeAction[]>('GET', `/v1/libraries/${libraryId}/organize/audit`)
+      request<OrganizeAction[]>('GET', `/v1/libraries/${libraryId}/organize/audit`),
+    duplicateLocations: (libraryId: string) =>
+      request<DuplicateLocationGroup[]>(
+        'GET',
+        `/v1/libraries/${libraryId}/organize/duplicate-locations`
+      ),
+    pruneDuplicateLocations: (libraryId: string, paths: string[], dryRun: boolean, permanent = false) =>
+      request<ExecutionReport>(
+        'POST',
+        `/v1/libraries/${libraryId}/organize/duplicate-locations/prune`,
+        { paths, dry_run: dryRun, permanent }
+      )
   },
 
   pending: {
@@ -802,6 +825,13 @@ export const api = {
       request<MergeSuggestion[]>(
         'GET',
         `/v1/libraries/${libraryId}/persons/merge-suggestions`
+      ),
+
+    dismissMergeSuggestion: (libraryId: string, personAId: number, personBId: number) =>
+      request<{ ok: boolean }>(
+        'POST',
+        `/v1/libraries/${libraryId}/persons/merge-suggestions/dismiss`,
+        { person_a_id: personAId, person_b_id: personBId }
       ),
 
     media: (libraryId: string, personId: number) =>
