@@ -60,6 +60,7 @@ export function useProgressSocket(): void {
               result: (msg.result ?? null) as Record<string, unknown> | null,
               created_at: (msg.created_at ?? Date.now() / 1000) as number,
               finished_at: (msg.finished_at ?? null) as number | null,
+              triggered_by: (msg.triggered_by ?? 'user') as 'user' | 'watcher',
             }
             useJobsStore.getState().upsert(snap)
             const isTerminal = ['succeeded', 'failed', 'cancelled'].includes(snap.state)

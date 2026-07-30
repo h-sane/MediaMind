@@ -50,6 +50,7 @@ class Job:
     result: dict | None = None
     created_at: float = field(default_factory=time.time)
     finished_at: float | None = None
+    triggered_by: str = "user"  # "user" | "watcher" (Phase 8 auto-scan) — UI copy only
 
 
 class JobContext:
@@ -151,9 +152,10 @@ class JobManager:
         library_id: str,
         job_type: str,
         runner: Callable[["JobContext"], dict],
+        triggered_by: str = "user",
     ) -> Job:
         job_id = uuid.uuid4().hex[:12]
-        job = Job(id=job_id, library_id=library_id, type=job_type, state="queued")
+        job = Job(id=job_id, library_id=library_id, type=job_type, state="queued", triggered_by=triggered_by)
         cancel_event = threading.Event()
         done_event = threading.Event()
 

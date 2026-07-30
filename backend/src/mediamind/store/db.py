@@ -11,7 +11,7 @@ import sqlite3
 from pathlib import Path
 from typing import Callable
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 _V1_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -274,6 +274,30 @@ CREATE INDEX IF NOT EXISTS idx_face_assignments_person ON face_assignments(perso
     conn.commit()
 
 
+def _v9_migration(conn: sqlite3.Connection) -> None:
+    """Schema v9: durable "not the same person" dismissals for the merge-
+    suggestion strip. Unlike faces/rejections (which key off content_hash
+    because faces rows are wiped and recreated every rescan), persons.id
+    itself is the reconciled, largely-stable identity persist_face_scan
+    maintains across rescans (a matched cluster keeps its existing person
+    row; only an unmatched/renamed identity churns) — same assumption every
+    other person_id-keyed table here already makes (folder bindings, face
+    assignments' person_id). Cascade-deletes with the person row it
+    references, so a stale dismissal for a person that no longer exists is
+    just gone, never a dangling row an app has to filter out."""
+    conn.executescript("""
+CREATE TABLE IF NOT EXISTS dismissed_merge_suggestions (
+    id INTEGER PRIMARY KEY,
+    person_a_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    person_b_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    created_at REAL NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dismissed_merge_suggestions_pair
+    ON dismissed_merge_suggestions(person_a_id, person_b_id);
+""")
+    conn.commit()
+
+
 # v2 is a string; v3+ are callables (ALTER TABLE requires special handling).
 _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (2, _V2_ADDITIONS),
@@ -283,6 +307,7 @@ _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (6, _v6_migration),
     (7, _v7_migration),
     (8, _v8_migration),
+    (9, _v9_migration),
 ]
 
 

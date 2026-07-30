@@ -1,4 +1,4 @@
-"""Organize routes: preview, execute, undo, audit.
+"""Organize routes: preview, execute, undo, audit, duplicate-location manager.
 
 Flow:
   POST /v1/libraries/{id}/organize/preview     -> OrganizePreviewOut (no side effects)
@@ -6,6 +6,8 @@ Flow:
   POST /v1/libraries/{id}/organize/execute-job -> JobSnapshot (real, async — polled via /scans/{job_id})
   POST /v1/libraries/{id}/organize/undo        -> {ok, handled, planned, errors, kind}
   GET  /v1/libraries/{id}/organize/audit       -> list[OrganizeActionOut]
+  GET  /v1/libraries/{id}/organize/duplicate-locations         -> list[DuplicateLocationGroupOut]
+  POST /v1/libraries/{id}/organize/duplicate-locations/prune   -> ExecutionReportOut
 """
 
 from __future__ import annotations
@@ -17,6 +19,9 @@ from typing import Callable
 from fastapi import APIRouter, HTTPException, Request
 
 from mediamind.api.models import (
+    DuplicateLocationGroupOut,
+    DuplicateLocationOut,
+    DuplicateLocationsPruneIn,
     ExecutionReportOut,
     JobSnapshot,
     ManifestEntryOut,
@@ -25,6 +30,7 @@ from mediamind.api.models import (
     OrganizePreviewOut,
     PlannedMoveOut,
 )
+from mediamind.api.routes.files import _resolve_in_library
 from mediamind.config import library_data_dir
 from mediamind.core.jobs import JobContext, JobManager
 from mediamind.core.libraries import LibraryRegistry
@@ -34,7 +40,8 @@ from mediamind.core.organize_plan import (
     plan_hash as compute_plan_hash,
 )
 from mediamind.core.safety import FileOp, execute as safety_execute, new_manifest_path, trash as safety_trash
-from mediamind.store.audit import last_undoable, list_actions, mark_undone, record_action
+from mediamind.core.scanner import kind_of
+from mediamind.store.audit import last_undoable, list_actions, list_export_copies, mark_undone, record_action
 from mediamind.store.db import library_db_path, open_db
 from mediamind.store.persons import latest_faces_scan
 
@@ -532,3 +539,120 @@ def organize_audit(library_id: str, request: Request):
         )
         for a in actions
     ]
+
+
+# ---------------------------------------------------------------------------
+# Duplicate-location manager (Phase 6B) — "this photo lives in N folders"
+# ---------------------------------------------------------------------------
+
+def _rel(library_root: Path, abs_path_str: str) -> str | None:
+    try:
+        return Path(abs_path_str).relative_to(library_root).as_posix()
+    except ValueError:
+        return None  # outside the library root — skip rather than 500
+
+
+@router.get(
+    "/libraries/{library_id}/organize/duplicate-locations",
+    response_model=list[DuplicateLocationGroupOut],
+)
+def list_duplicate_locations(library_id: str, request: Request):
+    """Photos exported into more than one person folder (Phase 6A), grouped
+    by original so the user can prune down to a single copy.
+
+    Driven entirely by the export manifest plus a live filesystem check —
+    the filesystem stays the source of truth, so a copy already deleted
+    (by hand, or by an earlier prune here) just silently stops appearing.
+    Only groups with 2+ still-existing locations are returned.
+    """
+    library_root = _get_library_root(request, library_id)
+    conn = _open_db(library_root)
+    try:
+        rows = list_export_copies(conn)
+    finally:
+        conn.close()
+
+    destinations_by_source: dict[str, list[str]] = {}
+    for r in rows:
+        destinations_by_source.setdefault(r["source"], []).append(r["destination"])
+
+    groups: list[DuplicateLocationGroupOut] = []
+    for source_abs, destinations in destinations_by_source.items():
+        source_rel = _rel(library_root, source_abs)
+        if source_rel is None:
+            continue
+        locations: list[DuplicateLocationOut] = []
+        if Path(source_abs).is_file():
+            locations.append(
+                DuplicateLocationOut(path=source_rel, kind=kind_of(Path(source_abs)), is_source=True)
+            )
+        seen: set[str] = set()
+        for dest_abs in destinations:
+            if dest_abs in seen:
+                continue
+            seen.add(dest_abs)
+            dest_rel = _rel(library_root, dest_abs)
+            if dest_rel is not None and Path(dest_abs).is_file():
+                locations.append(
+                    DuplicateLocationOut(path=dest_rel, kind=kind_of(Path(dest_abs)), is_source=False)
+                )
+        if len(locations) >= 2:
+            groups.append(DuplicateLocationGroupOut(source=source_rel, locations=locations))
+
+    groups.sort(key=lambda g: g.source)
+    return groups
+
+
+@router.post(
+    "/libraries/{library_id}/organize/duplicate-locations/prune",
+    response_model=ExecutionReportOut,
+)
+def prune_duplicate_locations(library_id: str, body: DuplicateLocationsPruneIn, request: Request):
+    """Safe-delete (Recycle Bin, unless `permanent`) the given export copies.
+
+    Copy-only by design — this endpoint only ever trashes paths the caller
+    names explicitly (from the GET above), so it can't be pointed at a
+    library-original by mistake; the frontend never offers a source tile as
+    prunable. Recorded in the same audit trail as every other file op.
+    """
+    library_root = _get_library_root(request, library_id)
+
+    resolved: list[Path] = []
+    for rel in body.paths:
+        abs_path = _resolve_in_library(library_root, rel)
+        if abs_path is not None and abs_path.is_file():
+            resolved.append(abs_path)
+
+    data_dir = library_data_dir(library_root)
+    manifest_path = new_manifest_path(data_dir, "prune-duplicate-location")
+    report = safety_trash(
+        resolved,
+        manifest_path=manifest_path,
+        dry_run=body.dry_run,
+        permanent=body.permanent,
+    )
+
+    conn = _open_db(library_root)
+    try:
+        record_action(
+            conn,
+            kind="prune-duplicate-location",
+            manifest_path=str(manifest_path),
+            report=report,
+            dry_run=body.dry_run,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return ExecutionReportOut(
+        planned=report.planned,
+        handled=report.handled,
+        ok=report.ok,
+        dry_run=body.dry_run,
+        manifest_path=str(report.manifest_path) if report.manifest_path else None,
+        entries=[
+            ManifestEntryOut(source=e.source, action=e.action, destination=e.destination, error=e.error)
+            for e in report.entries
+        ],
+    )

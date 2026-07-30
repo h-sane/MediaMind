@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import random
 import tempfile
 import threading
 from collections import OrderedDict
@@ -60,8 +61,13 @@ def _mem_store(key: tuple, data: bytes) -> None:
 # folder is opened its thumbnails load from disk instead of re-decoding every
 # original. Keyed by the same (path, kind, size, mtime, filesize) identity as
 # the in-memory L1 — a changed file gets a new filename, so a stale thumbnail
-# is never served. ponytail: unbounded on-disk growth (tiny JPEGs; ~5-15 KB a
-# grid tile). Add LRU/size-cap eviction when the cache dir measurably matters.
+# is never served. Size-capped with LRU eviction (below) so the cache dir
+# never grows unbounded.
+
+_DISK_CACHE_MAX_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB; tiles are ~5-15 KB, previews larger
+_DISK_CACHE_EVICT_TARGET = int(_DISK_CACHE_MAX_BYTES * 0.9)  # hysteresis: don't re-trigger next write
+_DISK_EVICT_CHECK_PROBABILITY = 1 / 500  # amortize the full-tree walk instead of walking every write
+
 
 def _disk_path(key: tuple) -> Path:
     digest = hashlib.sha1(repr(key).encode("utf-8")).hexdigest()
@@ -69,10 +75,16 @@ def _disk_path(key: tuple) -> Path:
 
 
 def _disk_get(key: tuple) -> bytes | None:
+    p = _disk_path(key)
     try:
-        return _disk_path(key).read_bytes()
+        data = p.read_bytes()
     except OSError:
         return None
+    try:
+        os.utime(p, None)  # mark as recently used for LRU eviction
+    except OSError:
+        pass
+    return data
 
 
 def _disk_put(key: tuple, data: bytes) -> None:
@@ -86,7 +98,35 @@ def _disk_put(key: tuple, data: bytes) -> None:
             fh.write(data)
         os.replace(tmp, p)
     except OSError:
-        pass  # best-effort cache; a write failure just costs a re-decode later
+        return  # best-effort cache; a write failure just costs a re-decode later
+    if random.random() < _DISK_EVICT_CHECK_PROBABILITY:
+        _evict_disk_cache_if_over_cap()
+
+
+def _evict_disk_cache_if_over_cap() -> None:
+    """Walk the on-disk cache and delete oldest-mtime entries until back under
+    the cap. A full-tree walk is not cheap at scale, so `_disk_put` only calls
+    this probabilistically rather than on every write."""
+    entries: list[tuple[int, int, Path]] = []  # (mtime_ns, size, path)
+    total = 0
+    for entry in thumbnail_cache_dir().rglob("*.jpg"):
+        try:
+            st = entry.stat()
+        except OSError:
+            continue
+        entries.append((st.st_mtime_ns, st.st_size, entry))
+        total += st.st_size
+    if total <= _DISK_CACHE_MAX_BYTES:
+        return
+    entries.sort(key=lambda e: e[0])  # least-recently-used first
+    for _, size, path in entries:
+        if total <= _DISK_CACHE_EVICT_TARGET:
+            break
+        try:
+            path.unlink()
+            total -= size
+        except OSError:
+            pass
 
 
 class MediaMetadata(NamedTuple):

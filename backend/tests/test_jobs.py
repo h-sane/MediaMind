@@ -43,6 +43,18 @@ def test_successful_job_reaches_succeeded():
     assert job.finished_at is not None
 
 
+def test_start_defaults_triggered_by_to_user():
+    jm = _make_manager()
+    job = jm.start("lib1", "dedupe", lambda ctx: {"groups": 0})
+    assert job.triggered_by == "user"
+
+
+def test_start_accepts_watcher_trigger():
+    jm = _make_manager()
+    job = jm.start("lib1", "dedupe", lambda ctx: {"groups": 0}, triggered_by="watcher")
+    assert job.triggered_by == "watcher"
+
+
 def test_failed_job_captures_error():
     jm = _make_manager()
 

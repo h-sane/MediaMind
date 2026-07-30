@@ -13,6 +13,7 @@ import type { ExecutionReport, PlannedMove } from '../../../api/client'
 interface Props {
   libraryId: string
   onBack: () => void
+  onManageDuplicateLocations: () => void
 }
 
 // Backend action kinds (see store/audit.py) shown in plain language — F9:
@@ -202,7 +203,7 @@ function PersonGroup({
 /** Organize-by-people panel — plan preview, dry run, execute, undo, and a
  * link to the full history. Round-1: the history list itself renders inline
  * at the bottom rather than a separate Audit sub-view (deferred). */
-export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
+export function OrganizePanel({ libraryId, onBack, onManageDuplicateLocations }: Props): React.JSX.Element {
   // Export (copy) is the V3 default — the virtual person view is where you
   // browse; export produces real, sendable per-person folders without
   // touching your originals. "Move" is the older, destructive alternative.
@@ -317,9 +318,14 @@ export function OrganizePanel({ libraryId, onBack }: Props): React.JSX.Element {
         />
       )}
 
-      <button onClick={onBack} className="mb-6 flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-600">
-        <ArrowLeft className="h-3.5 w-3.5" /> Back to people
-      </button>
+      <div className="mb-6 flex items-center justify-between">
+        <button onClick={onBack} className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-600">
+          <ArrowLeft className="h-3.5 w-3.5" /> Back to people
+        </button>
+        <button onClick={onManageDuplicateLocations} className="text-xs text-zinc-400 hover:text-zinc-600">
+          Manage duplicate locations
+        </button>
+      </div>
 
       <div className="mb-6">
         <h2 className="text-lg font-semibold tracking-tight">
