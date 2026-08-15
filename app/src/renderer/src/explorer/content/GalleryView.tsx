@@ -10,17 +10,21 @@ import { RenameInput } from '../interactions/RenameInput'
 import { useFileOps } from '../useFileOps'
 import { useSelectionModel } from '../selection/useSelectionModel'
 import { groupEntries } from './grouping'
+import { GroupedVirtualGrid } from './GroupedVirtualGrid'
 import { useIconSizeZoom } from './useIconSizeZoom'
 import type { DirEntry } from './useDirectoryListing'
 
 /** Same four icon-size tiers `IconGridView.tsx` uses (`Ctrl+Shift+1-4`) — a
  * gallery is visually the same kind of thumbnail grid, just always grouped
- * by date instead of respecting the independent Group-by setting. */
-const ICON_SIZE_CONFIG: Record<IconSize, { thumbClass: string; iconClass: string }> = {
-  'extra-large': { thumbClass: 'h-32 w-32', iconClass: 'h-14 w-14' },
-  large: { thumbClass: 'h-24 w-24', iconClass: 'h-10 w-10' },
-  medium: { thumbClass: 'h-16 w-16', iconClass: 'h-7 w-7' },
-  small: { thumbClass: 'h-9 w-9', iconClass: 'h-5 w-5' }
+ * by date instead of respecting the independent Group-by setting. `cellHeight`
+ * mirrors `IconGridView.tsx`'s `ICON_SIZE_CONFIG` (same tile markup, so the
+ * same measured row heights apply) — used by `GroupedVirtualGrid` to
+ * estimate virtualized row size. */
+const ICON_SIZE_CONFIG: Record<IconSize, { thumbClass: string; iconClass: string; cellHeight: number }> = {
+  'extra-large': { thumbClass: 'h-32 w-32', iconClass: 'h-14 w-14', cellHeight: 188 },
+  large: { thumbClass: 'h-24 w-24', iconClass: 'h-10 w-10', cellHeight: 150 },
+  medium: { thumbClass: 'h-16 w-16', iconClass: 'h-7 w-7', cellHeight: 116 },
+  small: { thumbClass: 'h-9 w-9', iconClass: 'h-5 w-5', cellHeight: 80 }
 }
 
 interface Props {
@@ -107,11 +111,11 @@ function Tile({
  * own Gallery, which is a flat photo/video timeline, not a folder browser.
  *
  * Structurally this is `IconGridView.tsx` with the grouping forced to
- * `'date'` instead of reading the store's independent Group-by setting, and
- * without that view's ungrouped/virtualized branch — grouped rendering in
- * this codebase has never been virtualized (see `content/grouping.ts` and
- * `IconGridView.tsx`'s own groupBy!=='none' branch), and Gallery is always
- * grouped, so there's no ungrouped case to support here.
+ * `'date'` instead of reading the store's independent Group-by setting.
+ * Rendering is windowed via the shared `GroupedVirtualGrid` (see
+ * `docs/PERFORMANCE_AND_INGEST_V4_PLAN.md` Phase 5) — only the section
+ * headers and tile rows near the viewport are ever mounted, regardless of
+ * how many files the recursive walk found.
  */
 export function GalleryView({ entries, onOpenFile }: Props): React.JSX.Element {
   const currentPath = useExplorerStore((s) => s.currentPath)
@@ -145,43 +149,33 @@ export function GalleryView({ entries, onOpenFile }: Props): React.JSX.Element {
     setContentColumns(columns)
   }, [columns, setContentColumns])
 
-  useEffect(() => {
-    if (!focusedPath) return
-    contentRef.current?.querySelector(`[data-entry-path="${CSS.escape(focusedPath)}"]`)?.scrollIntoView({ block: 'nearest' })
-  }, [focusedPath])
-
   return (
     <ExplorerContextMenu entry={null} orderedPaths={orderedPaths} onOpenFile={onOpenFile}>
       <div ref={scrollRef} className="h-full overflow-y-auto p-3">
-        <div ref={contentRef} style={{ position: 'relative', width: '100%' }}>
-          {groups.map((group) => (
-            <div key={group.key}>
-              {group.label && (
-                <div className="sticky top-0 z-10 bg-white px-1 py-1 text-xs font-semibold text-zinc-500">
-                  {group.label} <span className="font-normal text-zinc-400">({group.entries.length})</span>
-                </div>
-              )}
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
-                {group.entries.map((entry) => (
-                  <Tile
-                    key={entry.path}
-                    entry={entry}
-                    orderedPaths={orderedPaths}
-                    onOpenFile={onOpenFile}
-                    isSelected={isSelected(entry.path)}
-                    isCut={fileOps.isCut(entry.path)}
-                    isRenaming={renamingPath === entry.path}
-                    isFocused={focusedPath === entry.path}
-                    currentPath={currentPath}
-                    onItemClick={onItemClick}
-                    thumbClass={sizeConfig.thumbClass}
-                    iconClass={sizeConfig.iconClass}
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
+        <GroupedVirtualGrid
+          groups={groups}
+          columns={columns}
+          cellHeight={sizeConfig.cellHeight}
+          scrollRef={scrollRef}
+          containerRef={contentRef}
+          focusedPath={focusedPath}
+          renderTile={(entry) => (
+            <Tile
+              key={entry.path}
+              entry={entry}
+              orderedPaths={orderedPaths}
+              onOpenFile={onOpenFile}
+              isSelected={isSelected(entry.path)}
+              isCut={fileOps.isCut(entry.path)}
+              isRenaming={renamingPath === entry.path}
+              isFocused={focusedPath === entry.path}
+              currentPath={currentPath}
+              onItemClick={onItemClick}
+              thumbClass={sizeConfig.thumbClass}
+              iconClass={sizeConfig.iconClass}
+            />
+          )}
+        />
       </div>
     </ExplorerContextMenu>
   )

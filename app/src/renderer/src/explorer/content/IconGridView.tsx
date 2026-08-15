@@ -222,7 +222,16 @@ export function IconGridView({ entries, onOpenFile }: Props): React.JSX.Element 
                   </div>
                 )
               })
-            : groups.map((group) => (
+            : /* TODO(perf): this grouped branch still renders every DOM tile
+               * up front — same un-virtualized cost GalleryView.tsx had.
+               * Not windowed here (yet) because this view's marquee-select
+               * (`useMarqueeSelect` above) does live `[data-entry-path]` DOM
+               * queries and would silently stop selecting off-screen entries
+               * under virtualization; needs that solved first. See
+               * docs/PERFORMANCE_AND_INGEST_V4_PLAN.md Phase 5 — the
+               * `GroupedVirtualGrid` extracted for GalleryView.tsx is ready
+               * to reuse here once marquee is adapted. */
+              groups.map((group) => (
                 <div key={group.key}>
                   {group.label && (
                     <div className="sticky top-0 z-10 bg-white px-1 py-1 text-xs font-semibold text-zinc-500">

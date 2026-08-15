@@ -52,28 +52,33 @@ async def _lifespan(app: FastAPI):
     if not hasattr(app.state, "providers") or app.state.providers is None:
         app.state.providers = ProviderManager(models_dir())
 
-    # Phase 8: filesystem watcher / auto-ingest. Idle (no walking) unless the
-    # user has opted in via the auto-scan setting. On a settled change it
-    # re-runs the existing dedupe + face scans, which do the whole ingest.
-    from mediamind.api.routes.scans import build_scan_runner
-    from mediamind.core.jobs import EXCLUSIVE_JOB_TYPES
+    # Performance & Ingest V4: always-on incremental ingest. Idle (no walking,
+    # no model loaded) unless the user has opted in via the auto-scan setting.
+    # LibraryWatcher (native FS events, poll fallback) reports just the
+    # changed paths; IngestWorker processes only those paths through the
+    # shared per-file pipeline (core/ingest.py) instead of re-running a
+    # whole-folder scan. See docs/PERFORMANCE_AND_INGEST_V4_PLAN.md.
+    from mediamind.core.ingest_worker import IngestWorker
     from mediamind.core.watcher import LibraryWatcher
 
-    def _auto_scan(lib) -> None:
-        jm = app.state.job_manager
-        blocking = jm.running_for(lib.id)
-        if blocking is not None and blocking.type in EXCLUSIVE_JOB_TYPES:
-            return  # don't race a write op; the next change tick retries
-        for scan_type in ("dedupe", "faces"):
-            if jm.running_for(lib.id, scan_type) is not None:
-                continue
-            runner = build_scan_runner(app.state, lib, scan_type)
-            if runner is not None:
-                jm.start(lib.id, scan_type, runner, triggered_by="watcher")
+    pm = app.state.providers
+    _default_entry = next((e for e in pm.entries() if pm.is_installed(e.id)), None)
+
+    app.state.ingest_worker = IngestWorker(
+        app.state.registry,
+        app.state.job_manager,
+        provider_factory=(lambda: pm.create(_default_entry.id)) if _default_entry else None,
+        provider_id=_default_entry.id if _default_entry else None,
+        enabled=lambda: app.state.settings.auto_scan_enabled,
+    )
+    app.state.ingest_worker.start()
+
+    def _on_watcher_change(lib, changed_paths: list[str]) -> None:
+        app.state.ingest_worker.enqueue(lib.id, changed_paths)
 
     app.state.watcher = LibraryWatcher(
         app.state.registry,
-        _auto_scan,
+        _on_watcher_change,
         enabled=lambda: app.state.settings.auto_scan_enabled,
     )
     app.state.watcher.start()
@@ -177,6 +182,7 @@ def create_app(
     from mediamind.api.routes import bindings
     from mediamind.api.routes import faces_prep
     from mediamind.api.routes import materialize
+    from mediamind.api.routes import duplicate_flags
 
     app.include_router(libraries.router, prefix="/v1")
     app.include_router(files.router, prefix="/v1")
@@ -192,5 +198,6 @@ def create_app(
     app.include_router(bindings.router, prefix="/v1")
     app.include_router(faces_prep.router, prefix="/v1")
     app.include_router(materialize.router, prefix="/v1")
+    app.include_router(duplicate_flags.router, prefix="/v1")
 
     return app

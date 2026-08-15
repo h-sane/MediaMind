@@ -109,21 +109,85 @@ def upsert_file(
     mtime: float,
     content_hash: str | None,
     decoded_ok: bool | None,
+    phash: str | None = None,
 ) -> int:
-    """INSERT or UPDATE files row; returns stable files.id for the path."""
+    """INSERT or UPDATE files row; returns stable files.id for the path.
+
+    `phash` (schema v10, incremental near-dup cache) COALESCEs the same way
+    decoded_ok does: a caller that isn't touching phash (e.g. a face scan
+    updating decoded_ok only) passes None and the existing stored value
+    survives, rather than being clobbered to NULL.
+    """
     conn.execute(
         """
-        INSERT INTO files (path, kind, size, mtime, content_hash, decoded_ok)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO files (path, kind, size, mtime, content_hash, decoded_ok, phash)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET
             kind=excluded.kind, size=excluded.size, mtime=excluded.mtime,
             content_hash=excluded.content_hash,
-            decoded_ok=COALESCE(excluded.decoded_ok, files.decoded_ok)
+            decoded_ok=COALESCE(excluded.decoded_ok, files.decoded_ok),
+            phash=COALESCE(excluded.phash, files.phash)
         """,
-        (rel_path, kind, size, mtime, content_hash, int(decoded_ok) if decoded_ok is not None else None),
+        (rel_path, kind, size, mtime, content_hash, int(decoded_ok) if decoded_ok is not None else None, phash),
     )
     row = conn.execute("SELECT id FROM files WHERE path = ?", (rel_path,)).fetchone()
     return int(row["id"])
+
+
+def load_person_centroids(conn: sqlite3.Connection, provider_id: str) -> dict[int, np.ndarray]:
+    """person_id -> L2-normalized centroid, for every person with one."""
+    rows = conn.execute(
+        "SELECT id, centroid FROM persons WHERE provider_id = ? AND centroid IS NOT NULL",
+        (provider_id,),
+    ).fetchall()
+    return {r["id"]: np.frombuffer(r["centroid"], dtype=np.float32).copy() for r in rows}
+
+
+def named_person_ids(conn: sqlite3.Connection, provider_id: str) -> set[int]:
+    return {
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM persons WHERE provider_id = ? AND name IS NOT NULL", (provider_id,)
+        )
+    }
+
+
+@dataclass(frozen=True)
+class GateDecision:
+    """What to do with a face that matched (or didn't match) a person."""
+
+    person_id: int | None          # final person_id for the faces row (None if pending or unmatched)
+    pending_person_id: int | None  # if set, stage a pending_matches row for this person
+    record_assignment: bool        # whether to durably record face -> person_id (direct auto-attach only)
+
+
+def gate_face_match(
+    matched_person_id: int | None,
+    named_person_ids: set[int],
+    *,
+    pending_for_named: bool,
+    was_rejected: bool = False,
+) -> GateDecision:
+    """The one place that decides pending-review vs. auto-attach for a
+    freshly matched face — used by both the full face scan
+    (`persist_face_scan`, cluster-level match) and immediate per-file ingest
+    (`core.ingest._match_faces_to_existing_persons`, single-face-level
+    match) so there is one implementation of the safety gate, not a fork.
+
+    - No match at all, or a previously-rejected suggestion -> unmatched
+      (person_id stays NULL; a full scan's DBSCAN pass, or nothing further,
+      decides identity from here).
+    - Match to a named person with the gate enabled -> pending review; the
+      face's person_id is NOT set directly (CLAUDE.md "review before commit"
+      — an automatic decision about a named person always needs confirmation).
+    - Match to an unnamed person (or gate disabled) -> auto-attach, matching
+      today's existing behavior for unnamed persons.
+    """
+    if matched_person_id is None or was_rejected:
+        return GateDecision(person_id=None, pending_person_id=None, record_assignment=False)
+    if pending_for_named and matched_person_id in named_person_ids:
+        return GateDecision(person_id=None, pending_person_id=matched_person_id, record_assignment=False)
+    return GateDecision(person_id=matched_person_id, pending_person_id=None, record_assignment=True)
 
 
 # ---------------------------------------------------------------------------
@@ -326,14 +390,10 @@ def persist_face_scan(
     new_file_ids = new_file_ids or set()
     pending_count = 0
 
-    # build named-person set for pending logic
-    named_person_ids: set[int] = set()
-    if pending_for_named:
-        for p in conn.execute(
-            "SELECT id FROM persons WHERE provider_id = ? AND name IS NOT NULL",
-            (provider_id,),
-        ):
-            named_person_ids.add(p["id"])
+    # named-person set for the pending gate below — only needed when the
+    # gate is enabled; reuses the same module-level helper core.ingest's
+    # immediate-match path calls.
+    named_ids = named_person_ids(conn, provider_id) if pending_for_named else set()
 
     flat_face_idx = 0
     for ff in file_faces:
@@ -374,28 +434,24 @@ def persist_face_scan(
             face_db_id = cur.lastrowid
             final_pid = assigned_pid
 
-            # M6 pending logic: new file + assigned to a named person → stage as pending.
-            # Only applies to a *freshly* cluster-matched face — a durably
-            # re-attached face was already confirmed in an earlier session and
-            # must not be re-asked about.
-            was_rejected = (ff.content_hash, cached_face.frame_no, assigned_pid) in rejected_pairs
-            if (
-                prior_pid is None
-                and pending_for_named
-                and assigned_pid in named_person_ids
-                and ff.file_id in new_file_ids
-            ):
-                if was_rejected:
-                    conn.execute(
-                        "UPDATE faces SET person_id = NULL WHERE id = ?",
-                        (face_db_id,),
-                    )
-                    final_pid = None
-                else:
+            # M6 pending logic: new file + assigned to a named person → stage
+            # as pending. Only applies to a *freshly* cluster-matched face —
+            # a durably re-attached face was already confirmed in an earlier
+            # session and must not be re-asked about (prior_pid is not None
+            # bypasses this whole block, same as before this was extracted).
+            # The named-vs-unnamed pending/auto-attach decision itself is the
+            # shared gate (gate_face_match) — see its docstring for why.
+            if prior_pid is None and assigned_pid is not None and ff.file_id in new_file_ids:
+                was_rejected = (ff.content_hash, cached_face.frame_no, assigned_pid) in rejected_pairs
+                decision = gate_face_match(
+                    assigned_pid, named_ids,
+                    pending_for_named=pending_for_named, was_rejected=was_rejected,
+                )
+                if decision.pending_person_id is not None:
                     confidence = float(np.dot(cached_face.embedding, cluster_centroids[label]))
                     conn.execute(
                         "INSERT INTO pending_matches (face_id, person_id, confidence) VALUES (?, ?, ?)",
-                        (face_db_id, assigned_pid, confidence),
+                        (face_db_id, decision.pending_person_id, confidence),
                     )
                     conn.execute(
                         "UPDATE faces SET person_id = NULL WHERE id = ?",
@@ -403,6 +459,14 @@ def persist_face_scan(
                     )
                     pending_count += 1
                     final_pid = None
+                elif decision.person_id is None:
+                    conn.execute(
+                        "UPDATE faces SET person_id = NULL WHERE id = ?",
+                        (face_db_id,),
+                    )
+                    final_pid = None
+                # else: decision.person_id == assigned_pid — already inserted
+                # as-is (auto-attach), nothing further to do.
 
             # Record a durable assignment for any face that lands on a
             # concrete person_id via *this* scan's clustering (not a pending

@@ -19,6 +19,7 @@ dependencies = [
     "scikit-learn>=1.4",
     "send2trash>=1.8",
     "imagehash>=4.3",
+    "watchdog>=4",
 ]
 
 [project.optional-dependencies]

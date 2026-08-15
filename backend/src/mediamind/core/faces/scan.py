@@ -26,6 +26,7 @@ from mediamind.core.faces.engine import (
     extract_file_faces,
 )
 from mediamind.core.hashing import hash_file
+from mediamind.core.ingest import lookup_file_cache, store_file_cache
 from mediamind.core.jobs import JobContext
 from mediamind.core.scanner import KIND_VIDEO, ScannedFile, scan_folder
 from mediamind.config import library_data_dir
@@ -162,26 +163,53 @@ def make_face_scan_runner(
                 find_duplicates() — hash_file releases the GIL during reads,
                 so oversubscribing cores pays off), then upsert the results
                 serially on the single sqlite connection: sqlite3 connections
-                aren't safe for concurrent writes from multiple threads, so
-                the DB write phase stays single-threaded even though the slow
-                part (disk I/O) now runs concurrently. Returns False if
-                cancelled partway through either phase."""
-                base = len(file_ids)
-                results: list[object] = [None] * len(batch)
-                with ThreadPoolExecutor(max_workers=_HASH_WORKERS) as pool:
-                    futures = {pool.submit(_hash_one, scanned): i for i, scanned in enumerate(batch)}
-                    done = 0
-                    for fut in as_completed(futures):
-                        results[futures[fut]] = fut.result()
-                        done += 1
-                        ctx.report_progress(base + done, total, "hashing")
-                        if ctx.cancelled():
-                            for pending in futures:
-                                pending.cancel()
-                            return False
+                aren't safe for concurrent access from multiple threads, so
+                all DB access (both the cache lookup below and the write-back
+                after hashing) stays on this thread even though the slow part
+                (disk I/O) runs concurrently. Returns False if cancelled
+                partway through either phase.
 
-                for scanned, outcome in zip(batch, results):
-                    rel = scanned.path.relative_to(library_root).as_posix()
+                An unchanged file (same size+mtime, already-cached hash) skips
+                hash_file() entirely via core.ingest's persisted files cache —
+                this is what makes rescanning a large library for faces cheap
+                (Performance & Ingest V4 Phase 1); a changed/new file still
+                goes through the stall-timeout-guarded pool exactly as before.
+                """
+                base = len(file_ids)
+                # Cache lookups are DB reads — this thread only, before any
+                # file reaches the pool (see docstring above).
+                cached_by_idx: dict[int, object] = {}
+                to_hash: list[int] = []
+                for i, scanned in enumerate(batch):
+                    cached = lookup_file_cache(conn, library_root, scanned)
+                    if cached is not None:
+                        cached_by_idx[i] = cached
+                    else:
+                        to_hash.append(i)
+
+                hash_results: dict[int, object] = {}
+                if to_hash:
+                    with ThreadPoolExecutor(max_workers=_HASH_WORKERS) as pool:
+                        futures = {pool.submit(_hash_one, batch[i]): i for i in to_hash}
+                        done = 0
+                        for fut in as_completed(futures):
+                            hash_results[futures[fut]] = fut.result()
+                            done += 1
+                            ctx.report_progress(base + len(cached_by_idx) + done, total, "hashing")
+                            if ctx.cancelled():
+                                for pending in futures:
+                                    pending.cancel()
+                                return False
+                elif cached_by_idx:
+                    ctx.report_progress(base + len(cached_by_idx), total, "hashing")
+
+                for i, scanned in enumerate(batch):
+                    if i in cached_by_idx:
+                        cached = cached_by_idx[i]
+                        file_ids.append(cached.file_id)
+                        content_hashes.append(cached.content_hash)
+                        continue
+                    outcome = hash_results.get(i)
                     if outcome is TIMED_OUT:
                         logger.warning(
                             "face scan: skipping %s - timed out after %.0fs reading it "
@@ -198,10 +226,7 @@ def make_face_scan_runner(
                         continue
                     content_hash: str = outcome  # type: ignore[assignment]
                     try:
-                        stat = scanned.path.stat()
-                        fid = upsert_file(conn, rel, scanned.kind,
-                                         stat.st_size, stat.st_mtime, content_hash, None)
-                        conn.commit()
+                        fid = store_file_cache(conn, library_root, scanned, content_hash, None)
                         file_ids.append(fid)
                         content_hashes.append(content_hash)
                     except Exception:
