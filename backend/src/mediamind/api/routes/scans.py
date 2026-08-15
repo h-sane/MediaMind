@@ -100,21 +100,29 @@ def _make_dedupe_runner(library_root: Path, threshold: int):
                 ctx.report_progress(done, total, "hashing")
                 _throttled_log("Dedupe scan: compared %d/%d files…", done, total)
 
-        groups = find_duplicates(
-            files,
-            near_threshold=threshold,
-            progress=progress,
-            should_cancel=ctx.cancelled,
-        )
-
-        # Distinguish "cancelled" from "no duplicates" — find_duplicates returns
-        # [] for both cases, so we must check the cancel flag explicitly here.
-        if ctx.cancelled():
-            return {}
-
+        # Opened before find_duplicates (not after, as before) so the scan
+        # can source per-file hash/phash from the persisted files cache
+        # (core.ingest.lookup_file_cache/store_file_cache) instead of
+        # unconditionally rehashing — the same connection is then reused
+        # below for persist_scan.
         data_dir = library_data_dir(library_root)
         conn = open_db(library_db_path(data_dir))
         try:
+            groups = find_duplicates(
+                files,
+                near_threshold=threshold,
+                progress=progress,
+                should_cancel=ctx.cancelled,
+                conn=conn,
+                library_root=library_root,
+            )
+
+            # Distinguish "cancelled" from "no duplicates" — find_duplicates
+            # returns [] for both cases, so we must check the cancel flag
+            # explicitly here.
+            if ctx.cancelled():
+                return {}
+
             # A group the user already reviewed and confirmed via "Save
             # configuration" must not resurface on a rescan unless its
             # membership actually changed (e.g. a new duplicate file joined).

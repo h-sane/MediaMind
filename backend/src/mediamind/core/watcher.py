@@ -1,44 +1,91 @@
-"""Phase 8 — filesystem watcher / auto-ingest.
+"""Phase 8 (poll) + Phase 2/V4 (real FS events) — filesystem watcher / auto-ingest.
 
 Watches every registered library and, when its set of media files changes
-(new/removed/modified), fires a callback so the app can re-run the existing
-dedupe + face scans on it. Those scans already do the whole ingest pipeline:
-index, duplicate-check, face-cluster, and route new faces of named people into
-pending review (`pending_for_named`) — so "auto-ingest" is just re-triggering
-them when disk changes.
+(new/modified), fires a callback with the *delta* of changed paths so the app
+can incrementally ingest just those files (`core.ingest_worker.IngestWorker`)
+instead of re-running a whole-folder scan.
 
-Detection is by polling: every `interval` seconds each library's media-file
-snapshot ({path: mtime}) is compared to the last one. A change must stay stable
-across one extra poll (debounce) before firing, so a batch paste of many files
-is scanned once after it settles, not mid-copy. The first time a library is
-seen it is only baselined (no fire) — pre-existing files aren't "new".
+Two detection mechanisms, selected per library root:
 
-ponytail: polling walk, not OS events (watchdog/ReadDirectoryChangesW). Zero
-new dependency, cross-platform, and cost is zero while the feature is off (the
-default). Ceiling: on a very large tree the periodic walk costs CPU and change
-latency is up to ~2*interval. Swap in watchdog if that bites. The setting
-defaults off, so this only runs when the user opts in.
+- **Native events** (default): a single shared `watchdog` `Observer` schedules
+  a recursive watch per library root (`ReadDirectoryChangesW` on Windows,
+  `inotify` on Linux, `FSEvents` on macOS). Changes are known the instant the
+  OS reports them — no walking, ~0 CPU while idle.
+- **Poll fallback**: for a root where scheduling the native watch fails (some
+  network drives / virtual filesystems don't support it), this library falls
+  back to the original snapshot-diff poll loop. This is the exact mechanism
+  the watcher used before `watchdog` was added — kept verbatim as the
+  fallback rather than deleted.
+
+Both paths debounce ("settle across one extra tick") before a changed path is
+considered ready to enqueue, since a large file mid-copy fires many
+create/modify events. The first time a library is seen it is only baselined
+(no fire) — pre-existing files aren't "new".
+
+ponytail: the native path only catches a *synchronous* `schedule()` failure
+(bad/unsupported path) and falls back to polling for that root; an observer
+that starts fine but errors later (e.g. a network drive unmounted mid-run)
+keeps its native registration with no further events until process restart.
+Full per-root health-checking is a heavier watchdog integration than this
+pass needs — the periodic manual/full scan remains the backstop either way.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+import time
+from pathlib import Path
 from typing import Callable
 
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
+
+from mediamind.config import LIBRARY_DATA_DIRNAME
 from mediamind.core.libraries import Library, LibraryRegistry
-from mediamind.core.scanner import scan_folder
+from mediamind.core.scanner import MEDIA_KINDS, is_noise_dir, kind_of, scan_folder
 
 logger = logging.getLogger("mediamind.watcher")
 
-DEFAULT_INTERVAL_SECONDS = 8.0
+DEFAULT_INTERVAL_SECONDS = 8.0  # poll-fallback cadence
+_NATIVE_DEBOUNCE_SECONDS = 1.5  # settle window for native FS events
+_NATIVE_FLUSH_TICK_SECONDS = 1.0  # how often the debounce buffer is checked
+
+
+class _WatchdogHandler(FileSystemEventHandler):
+    """Records changed media paths for one library into the watcher's
+    debounce buffer. All filtering (directories, `.mediamind`, non-media)
+    happens here so the buffer only ever holds paths worth ingesting."""
+
+    def __init__(self, watcher: "LibraryWatcher", lib: Library) -> None:
+        self._watcher = watcher
+        self._lib = lib
+
+    def _record(self, raw_path: str, is_directory: bool) -> None:
+        if is_directory or not self._watcher._enabled():
+            return
+        path = Path(raw_path)
+        if LIBRARY_DATA_DIRNAME in path.parts or any(is_noise_dir(part) for part in path.parts):
+            return  # e.g. our own thumbnail-cache writes under .mediamind
+        if kind_of(path) not in MEDIA_KINDS:
+            return
+        self._watcher._mark_dirty(self._lib.id, str(path))
+
+    def on_created(self, event) -> None:
+        self._record(event.src_path, event.is_directory)
+
+    def on_modified(self, event) -> None:
+        self._record(event.src_path, event.is_directory)
+
+    def on_moved(self, event) -> None:
+        self._record(event.dest_path, event.is_directory)
 
 
 class LibraryWatcher:
     def __init__(
         self,
         registry: LibraryRegistry,
-        on_change: Callable[[Library], None],
+        on_change: Callable[[Library, list[str]], None],
         *,
         enabled: Callable[[], bool],
         interval: float = DEFAULT_INTERVAL_SECONDS,
@@ -49,19 +96,93 @@ class LibraryWatcher:
         self._interval = interval
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        # Last confirmed snapshot per library, and the pending (changed but not
-        # yet stable) one used for debounce.
+
+        # Poll-fallback state (unchanged from the original Phase 8 poll loop).
         self._snapshots: dict[str, dict[str, float]] = {}
         self._pending: dict[str, dict[str, float]] = {}
+        self._last_delta: dict[str, list[str]] = {}
+
+        # Native-event state.
+        self._observer: Observer | None = None
+        self._attempted_native: set[str] = set()
+        self._native_roots: set[str] = set()
+        self._native_lock = threading.Lock()
+        self._native_dirty: dict[str, dict[str, float]] = {}  # lib_id -> {path: last_event_time}
 
     def start(self) -> None:
         if self._thread is not None:
             return
+        try:
+            self._observer = Observer()
+            self._observer.start()
+        except Exception:
+            logger.exception("watcher: native observer unavailable — all libraries will use polling")
+            self._observer = None
         self._thread = threading.Thread(target=self._loop, name="library-watcher", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
+        if self._observer is not None:
+            try:
+                self._observer.stop()
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    # Native-event scheduling
+    # ------------------------------------------------------------------
+
+    def _ensure_watches(self) -> None:
+        live_ids = set()
+        for lib in self._registry.list():
+            live_ids.add(lib.id)
+            if lib.id in self._attempted_native:
+                continue
+            self._attempted_native.add(lib.id)
+            self._schedule_native(lib)
+        gone = self._native_roots - live_ids
+        for lib_id in gone:
+            self._native_roots.discard(lib_id)
+            self._attempted_native.discard(lib_id)
+            with self._native_lock:
+                self._native_dirty.pop(lib_id, None)
+
+    def _schedule_native(self, lib: Library) -> None:
+        if self._observer is None:
+            return
+        try:
+            self._observer.schedule(_WatchdogHandler(self, lib), str(lib.root), recursive=True)
+            self._native_roots.add(lib.id)
+        except Exception:
+            logger.warning("watcher: native events unavailable for %s — falling back to polling", lib.path)
+
+    def _mark_dirty(self, library_id: str, path: str) -> None:
+        with self._native_lock:
+            self._native_dirty.setdefault(library_id, {})[path] = time.monotonic()
+
+    def _flush_native(self) -> None:
+        now = time.monotonic()
+        ready: dict[str, list[str]] = {}
+        with self._native_lock:
+            for lib_id, dirty in list(self._native_dirty.items()):
+                settled = [p for p, t in dirty.items() if now - t >= _NATIVE_DEBOUNCE_SECONDS]
+                for p in settled:
+                    dirty.pop(p, None)
+                if not dirty:
+                    self._native_dirty.pop(lib_id, None)
+                if settled:
+                    ready[lib_id] = settled
+        if not ready or not self._enabled():
+            return
+        for lib_id, paths in ready.items():
+            lib = self._registry.get(lib_id)
+            if lib is not None:
+                self._on_change(lib, paths)
+
+    # ------------------------------------------------------------------
+    # Poll fallback (original Phase 8 mechanism)
+    # ------------------------------------------------------------------
 
     def _snapshot(self, lib: Library) -> dict[str, float]:
         snap: dict[str, float] = {}
@@ -71,14 +192,18 @@ class LibraryWatcher:
         return snap
 
     def poll_once(self) -> list[Library]:
-        """One detection pass over all libraries. Returns the libraries whose
-        media set changed and has now settled (debounced) — ready to re-scan.
-        Pure of any side effect beyond its own snapshot bookkeeping, so it can
-        be driven deterministically in tests."""
+        """One detection pass over every library that isn't natively watched
+        (or hasn't attempted native scheduling — e.g. driven directly in
+        tests without `start()`). Returns the libraries whose media set
+        changed and has now settled (debounced) — ready to re-scan. Pure of
+        any side effect beyond its own snapshot bookkeeping, so it can be
+        driven deterministically in tests."""
         fired: list[Library] = []
         live_ids = set()
         for lib in self._registry.list():
             live_ids.add(lib.id)
+            if lib.id in self._native_roots:
+                continue  # natively watched — polling it too would be redundant work
             try:
                 snap = self._snapshot(lib)
             except Exception:
@@ -91,6 +216,8 @@ class LibraryWatcher:
             if snap != prev:
                 if self._pending.get(lib.id) == snap:
                     # Stable across two polls — the change has settled.
+                    changed = [p for p, mtime in snap.items() if prev.get(p) != mtime]
+                    self._last_delta[lib.id] = changed
                     self._snapshots[lib.id] = snap
                     self._pending.pop(lib.id, None)
                     fired.append(lib)
@@ -102,15 +229,27 @@ class LibraryWatcher:
         for gone in [i for i in self._snapshots if i not in live_ids]:
             self._snapshots.pop(gone, None)
             self._pending.pop(gone, None)
+            self._last_delta.pop(gone, None)
         return fired
 
+    # ------------------------------------------------------------------
+    # Main loop
+    # ------------------------------------------------------------------
+
     def _loop(self) -> None:
+        next_poll = 0.0
         while not self._stop.is_set():
             try:
-                if self._enabled():
-                    for lib in self.poll_once():
-                        logger.info("watcher: %s changed — auto-scanning", lib.path)
-                        self._on_change(lib)
+                self._ensure_watches()
+                now = time.monotonic()
+                if now >= next_poll:
+                    next_poll = now + self._interval
+                    if self._enabled():
+                        for lib in self.poll_once():
+                            paths = self._last_delta.get(lib.id, [])
+                            logger.info("watcher: %s changed (%d files) — auto-ingesting", lib.path, len(paths))
+                            self._on_change(lib, paths)
+                self._flush_native()
             except Exception:
-                logger.exception("watcher: poll failed")
-            self._stop.wait(self._interval)
+                logger.exception("watcher: loop failed")
+            self._stop.wait(min(self._interval, _NATIVE_FLUSH_TICK_SECONDS))

@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from typing import Callable
 
 from mediamind.core.concurrency import TIMED_OUT, hash_timeout_for, run_with_timeout
 from mediamind.core.hashing import hash_file
+from mediamind.core.ingest import _hex_to_imagehash, lookup_file_cache, store_file_cache
 from mediamind.core.scanner import KIND_IMAGE, ScannedFile
 
 logger = logging.getLogger("mediamind.dedupe")
@@ -160,12 +162,37 @@ def find_duplicates(
     progress: Callable[[int, int], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
     file_timeout_seconds: float = DEFAULT_FILE_TIMEOUT_SECONDS,
+    conn: sqlite3.Connection | None = None,
+    library_root: Path | None = None,
 ) -> list[DuplicateGroup]:
+    """Detect duplicate groups. `conn`/`library_root` are optional: when
+    given, per-file hash/phash sources the persisted `files` cache
+    (core.ingest.lookup_file_cache/store_file_cache) instead of unconditionally
+    rehashing, so a rescan of an unchanged library reads nothing but the DB —
+    this is what makes rescans of large libraries cheap (Performance & Ingest
+    V4 Phase 1). Omitting them keeps the original always-rehash behavior
+    (every existing caller/test that doesn't pass a library's DB connection
+    is unaffected).
+
+    Caching applies to every image (which already pays the phash decode cost
+    below, so caching the exact hash alongside it is nearly free) but only to
+    non-image media when it's actually needed for exact-duplicate grouping
+    (`size_counts[f.size] > 1`) — a unique-size video, the actually expensive
+    case the original size-skip optimization targeted, is never forced
+    through a full hash read just to prime the cache.
+
+    Threading note: sqlite3 connections cannot be shared across threads, so
+    all DB access here happens on the calling thread only — cache lookups
+    before files are handed to the pool, cache writes after the pool
+    completes. The pool workers themselves only ever do file I/O. Mirrors
+    core.faces.scan's hash_batch, which has the identical constraint.
+    """
     media = [f for f in files if f.is_media]
     entries: list[DuplicateFile] = []
     phashes: list[object | None] = []
 
     total = len(media)
+    caching = conn is not None and library_root is not None
 
     # Two byte-exact duplicates must share the same file size (from stat(),
     # already known from scan_folder — no I/O). A file whose size is unique
@@ -175,21 +202,37 @@ def find_duplicates(
     for f in media:
         size_counts[f.size] = size_counts.get(f.size, 0) + 1
 
-    def _process(f: ScannedFile, needs_hash: bool) -> tuple:
+    # Cache lookups are DB reads and must happen on this thread only (see
+    # threading note above) — resolved before any file reaches the pool.
+    cache_by_index: list[object | None] = [None] * total
+    if caching:
+        for i, f in enumerate(media):
+            cache_by_index[i] = lookup_file_cache(conn, library_root, f)  # type: ignore[arg-type]
+
+    def _process(f: ScannedFile, needs_hash: bool, cached) -> tuple:
+        if cached is not None:
+            width, height = _image_dimensions(f.path) if f.kind == KIND_IMAGE else (0, 0)
+            phash = _hex_to_imagehash(cached.phash) if cached.phash else None
+            return cached.content_hash, width, height, phash, None
         content_hash = hash_file(f.path) if needs_hash else None
         width, height = _image_dimensions(f.path) if f.kind == KIND_IMAGE else (0, 0)
         phash = _perceptual_hash(f.path) if f.kind == KIND_IMAGE else None
-        return content_hash, width, height, phash
+        to_store = None
+        if caching and content_hash is not None:
+            to_store = (content_hash, str(phash) if phash is not None else None)
+        return content_hash, width, height, phash, to_store
 
     limiter = threading.Semaphore(MAX_LEAKED_STALL_THREADS)
 
-    def _task(f: ScannedFile) -> tuple | None:
+    def _task(f: ScannedFile, cached) -> tuple | None:
         # Still wrapped in run_with_timeout so a genuinely stalled read costs
         # a leaked daemon thread, not a pool worker — the pool keeps its full
-        # concurrency for the rest of the scan.
+        # concurrency for the rest of the scan. A cache hit does no I/O at
+        # all, but stays wrapped for a uniform return shape.
+        needs_hash = size_counts[f.size] > 1 or (caching and f.kind == KIND_IMAGE)
         try:
             outcome = run_with_timeout(
-                lambda: _process(f, size_counts[f.size] > 1),
+                lambda: _process(f, needs_hash, cached),
                 hash_timeout_for(f.size, floor=file_timeout_seconds),
                 limiter,
             )
@@ -213,7 +256,7 @@ def find_duplicates(
     # index-aligned. None marks a skipped file (timeout or vanished).
     results: list[tuple | None] = [None] * total
     with ThreadPoolExecutor(max_workers=_HASH_WORKERS) as pool:
-        futures = {pool.submit(_task, f): i for i, f in enumerate(media)}
+        futures = {pool.submit(_task, f, cache_by_index[i]): i for i, f in enumerate(media)}
         done = 0
         for fut in as_completed(futures):
             results[futures[fut]] = fut.result()
@@ -232,7 +275,11 @@ def find_duplicates(
         outcome = results[i - 1]
         if outcome is None:
             continue
-        content_hash, width, height, phash = outcome
+        content_hash, width, height, phash, to_store = outcome
+        if caching and to_store is not None:
+            # DB write — back on this thread, same constraint as the lookups
+            # above (see threading note on find_duplicates' docstring).
+            store_file_cache(conn, library_root, f, to_store[0], to_store[1])  # type: ignore[arg-type]
         if content_hash is None:
             # Per-file sentinel (not a shared ""): guarantees it can never
             # collide with another unhashed file in by_hash below, and always

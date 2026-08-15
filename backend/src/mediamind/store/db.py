@@ -8,10 +8,32 @@ deleting the index only means the next scan starts cold.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Callable
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
+
+# Two connections racing to create/migrate the SAME brand-new database file
+# (e.g. the always-on ingest worker and an HTTP request, opening within
+# milliseconds of a library's first registration) can hit "database is
+# locked" on the first-ever WAL transition even with busy_timeout set —
+# SQLite's busy handler doesn't reliably cover that specific transition.
+# A per-process lock keyed by path serializes just the create/migrate step
+# (not queries afterward) — cheap, and sufficient since this app only ever
+# runs as one process.
+_creation_locks: dict[str, threading.Lock] = {}
+_creation_locks_guard = threading.Lock()
+
+
+def _creation_lock(db_path: Path) -> threading.Lock:
+    key = str(db_path)
+    with _creation_locks_guard:
+        lock = _creation_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _creation_locks[key] = lock
+        return lock
 
 _V1_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -298,6 +320,35 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_dismissed_merge_suggestions_pair
     conn.commit()
 
 
+def _v10_migration(conn: sqlite3.Connection) -> None:
+    """Schema v10: incremental ingest pipeline (Performance & Ingest V4
+    Phase 1/3). `files.phash` caches each image's perceptual hash so a
+    rescan/incremental ingest can skip recomputing it for an unchanged file
+    (mirrors content_hash's existing role). `duplicate_flags` records the
+    advisory "this newly-ingested file matches an existing one" notices the
+    always-on ingest worker raises without running the full Dedupe tool scan
+    — resolution still goes through that tool's existing manifest-audited
+    execute path; a flag never triggers deletion on its own."""
+    try:
+        conn.execute("ALTER TABLE files ADD COLUMN phash TEXT")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
+    conn.executescript("""
+CREATE TABLE IF NOT EXISTS duplicate_flags (
+    id INTEGER PRIMARY KEY,
+    path TEXT NOT NULL,              -- the newly-ingested file (rel to root)
+    match_path TEXT NOT NULL,        -- existing file it duplicates ("show matching location")
+    match_type TEXT NOT NULL,        -- 'exact' | 'near'
+    content_hash TEXT,
+    flagged_at REAL NOT NULL,
+    dismissed INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dup_flags_path ON duplicate_flags(path, match_path);
+""")
+    conn.commit()
+
+
 # v2 is a string; v3+ are callables (ALTER TABLE requires special handling).
 _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (2, _V2_ADDITIONS),
@@ -308,6 +359,7 @@ _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (7, _v7_migration),
     (8, _v8_migration),
     (9, _v9_migration),
+    (10, _v10_migration),
 ]
 
 
@@ -337,14 +389,17 @@ def open_db(db_path: Path) -> sqlite3.Connection:
     # coexist; the generous busy timeout makes a second writer wait for the
     # other's transaction instead of failing with "database is locked".
     conn.execute("PRAGMA busy_timeout = 30000")
-    conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.executescript(_V1_SCHEMA)
-    conn.execute(
-        "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')",
-    )
-    conn.commit()
-    _apply_migrations(conn)
+    # Serialize first-time WAL transition + schema/migration against any other
+    # connection racing to create the same brand-new file (see _creation_lock).
+    with _creation_lock(db_path):
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.executescript(_V1_SCHEMA)
+        conn.execute(
+            "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')",
+        )
+        conn.commit()
+        _apply_migrations(conn)
     return conn
 
 

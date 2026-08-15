@@ -1,6 +1,18 @@
 # Performance & Ingest V4 — Shared Per-File Pipeline, Real FS Events, Incremental Dedupe/Faces, Windowed Gallery
 
-Status: **◻ PLANNED (not started).** Blueprint only. Supersedes the two deferred ceilings at the bottom of `docs/ORGANIZE_BY_PERSON_V3_PLAN.md` Phase 8 ("OS-event watching" and "Incremental per-file ingest") and the never-virtualized grouped-grid trade-off documented in `explorer/content/GalleryView.tsx` / `content/grouping.ts`.
+Status: **✅ Phases 1-5 shipped (session 46, 2026-08-15).** Shared ingest
+pipeline, incremental dedupe flagging, immediate on-ingest face matching
+(review gate preserved), watchdog-based FS events + always-on worker, and
+Gallery view virtualization are all implemented, tested (478/478 backend,
+typecheck/build clean), and verified live (see
+`.claude/handoffs/2026-08-15_session_46.md`). Supersedes the two deferred
+ceilings at the bottom of `docs/ORGANIZE_BY_PERSON_V3_PLAN.md` Phase 8
+("OS-event watching" and "Incremental per-file ingest") and the
+never-virtualized grouped-grid trade-off documented in
+`explorer/content/GalleryView.tsx` / `content/grouping.ts`. Remaining:
+the duplicate-flag toast/badge UI and `IconGridView`'s grouped-branch
+virtualization are deliberate fast-follows, not gaps — see the handoff's
+"Pending / next steps."
 
 ## Context — one root cause behind three asks
 
