@@ -19,6 +19,7 @@ from mediamind.store.persons import (
     person_media,
     persist_face_scan,
     rename_person,
+    set_primary_folder,
     upsert_file,
 )
 
@@ -438,3 +439,36 @@ def test_person_media_never_collapses_unhashed_files(conn):
     pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
     media = person_media(conn, pid)
     assert len(media) == 2, "unhashed files must stay distinct tiles"
+
+
+# ---------------------------------------------------------------------------
+# set_primary_folder
+# ---------------------------------------------------------------------------
+
+def test_set_primary_folder_stores_path(conn):
+    fid = upsert_file(conn, "a.jpg", "photo", 100, 0.0, "hash_a", True)
+    conn.execute("INSERT INTO persons (auto_label, name, provider_id) VALUES ('Person_001', 'Alice', ?)", (PROVIDER,))
+    conn.commit()
+    pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
+
+    assert set_primary_folder(conn, pid, "Family/Alice") is True
+    row = conn.execute("SELECT primary_folder_path FROM persons WHERE id = ?", (pid,)).fetchone()
+    assert row["primary_folder_path"] == "Family/Alice"
+
+    summaries = list_person_summaries(conn, PROVIDER)
+    assert summaries[0].primary_folder_path == "Family/Alice"
+
+
+def test_set_primary_folder_clear_to_none(conn):
+    conn.execute("INSERT INTO persons (auto_label, name, provider_id) VALUES ('Person_001', 'Bob', ?)", (PROVIDER,))
+    conn.commit()
+    pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
+
+    set_primary_folder(conn, pid, "Family/Bob")
+    assert set_primary_folder(conn, pid, None) is True
+    row = conn.execute("SELECT primary_folder_path FROM persons WHERE id = ?", (pid,)).fetchone()
+    assert row["primary_folder_path"] is None
+
+
+def test_set_primary_folder_unknown_person_returns_false(conn):
+    assert set_primary_folder(conn, 999, "Family/Nobody") is False

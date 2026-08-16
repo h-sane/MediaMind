@@ -78,6 +78,23 @@ def _require_provider_id(conn, library_root: Path) -> str:
     return params.get("provider_id", "")
 
 
+def _resolve_target_override(conn, person_id: int | None) -> str | None:
+    """Server-side lookup of a scoped person's primary folder — the client
+    never gets to supply an arbitrary `target_override` itself (safety:
+    server-validated destination only). Returns None when `person_id` is
+    unset; raises 404/422 otherwise."""
+    if person_id is None:
+        return None
+    row = conn.execute(
+        "SELECT primary_folder_path FROM persons WHERE id = ?", (person_id,)
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Unknown person")
+    if not row["primary_folder_path"]:
+        raise HTTPException(status_code=422, detail="Set a primary folder for this person first.")
+    return row["primary_folder_path"]
+
+
 def _snapshot(job) -> JobSnapshot:
     return JobSnapshot(
         id=job.id,
@@ -95,20 +112,27 @@ def _snapshot(job) -> JobSnapshot:
 
 
 @router.post("/libraries/{library_id}/organize/preview", response_model=OrganizePreviewOut)
-def organize_preview(library_id: str, request: Request, group_scope: str = "prominent"):
+def organize_preview(
+    library_id: str, request: Request, group_scope: str = "prominent", person_id: int | None = None
+):
     """Return the organize plan without touching anything on disk.
 
     `group_scope` (query param) controls group-photo routing so the preview
     reflects the export fan-out: "prominent" routes a group photo to its
     dominant person only; "all" plans a copy into every named person's folder.
+
+    `person_id` (query param), when set, scopes the plan to that person's
+    matched files and routes them into their primary folder — the server
+    reads `persons.primary_folder_path` itself (422 if unset).
     """
     group_scope = "all" if group_scope == "all" else "prominent"
     library_root = _get_library_root(request, library_id)
     conn = _open_db(library_root)
     try:
         provider_id = _require_provider_id(conn, library_root)
+        target_override = _resolve_target_override(conn, person_id)
         moves, stayed_unrecognized = build_organize_plan_with_stats(
-            conn, provider_id, group_scope=group_scope
+            conn, provider_id, group_scope=group_scope, person_id=person_id, target_override=target_override
         )
     finally:
         conn.close()
@@ -166,6 +190,8 @@ def _make_organize_execute_runner(
     excluded_sources: list[str] | None = None,
     mode: str = "move",
     group_scope: str = "prominent",
+    person_id: int | None = None,
+    target_override: str | None = None,
 ) -> Callable[[JobContext], dict]:
     """Real (non-dry-run) organize/export execution as a JobManager runner —
     shared by the synchronous `/execute` route (via `run_sync`) and the async
@@ -173,7 +199,11 @@ def _make_organize_execute_runner(
 
     `mode="copy"` is the opt-in **export** path: files are copied (originals
     left in place, so no files.path update), and with `group_scope="all"` a
-    group photo is copied into every named person's folder."""
+    group photo is copied into every named person's folder.
+
+    `person_id`/`target_override`: scope to one person's primary folder. The
+    caller resolves `target_override` server-side (see `_resolve_target_override`)
+    before constructing this runner — never from client input directly."""
     is_export = mode == "copy"
     verb = "copying" if is_export else "moving"
 
@@ -181,7 +211,10 @@ def _make_organize_execute_runner(
         conn = _open_db(library_root)
         try:
             provider_id = _require_provider_id(conn, library_root)
-            moves = build_organize_plan(conn, provider_id, group_scope=group_scope)
+            moves = build_organize_plan(
+                conn, provider_id, group_scope=group_scope,
+                person_id=person_id, target_override=target_override,
+            )
         finally:
             conn.close()
 
@@ -302,7 +335,11 @@ def organize_execute(library_id: str, body: OrganizeExecuteIn, request: Request)
         conn = _open_db(library_root)
         try:
             provider_id = _require_provider_id(conn, library_root)
-            moves = build_organize_plan(conn, provider_id, group_scope=body.group_scope)
+            target_override = _resolve_target_override(conn, body.person_id)
+            moves = build_organize_plan(
+                conn, provider_id, group_scope=body.group_scope,
+                person_id=body.person_id, target_override=target_override,
+            )
         finally:
             conn.close()
         if not moves:
@@ -356,9 +393,15 @@ def organize_execute(library_id: str, body: OrganizeExecuteIn, request: Request)
         )
 
     library_root = _get_library_root(request, library_id)
+    conn = _open_db(library_root)
+    try:
+        target_override = _resolve_target_override(conn, body.person_id)
+    finally:
+        conn.close()
     runner = _make_organize_execute_runner(
         library_root, body.expected_planned, body.expected_plan_hash, body.excluded_sources,
-        mode=body.mode, group_scope=body.group_scope
+        mode=body.mode, group_scope=body.group_scope,
+        person_id=body.person_id, target_override=target_override,
     )
     job = jm.run_sync(library_id, "organize-execute", runner)
     if job.state == "failed":
@@ -381,9 +424,15 @@ def organize_execute_job(library_id: str, body: OrganizeExecuteIn, request: Requ
         )
 
     library_root = _get_library_root(request, library_id)
+    conn = _open_db(library_root)
+    try:
+        target_override = _resolve_target_override(conn, body.person_id)
+    finally:
+        conn.close()
     runner = _make_organize_execute_runner(
         library_root, body.expected_planned, body.expected_plan_hash, body.excluded_sources,
-        mode=body.mode, group_scope=body.group_scope
+        mode=body.mode, group_scope=body.group_scope,
+        person_id=body.person_id, target_override=target_override,
     )
     job = jm.start(library_id, "organize-execute", runner)
     return _snapshot(job)

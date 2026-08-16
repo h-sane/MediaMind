@@ -1,10 +1,148 @@
-import { CopyCheck, Sparkles } from 'lucide-react'
-import { useDuplicates } from '../../../api/hooks'
-import { useExplorerStore } from '../../../stores/explorer'
+import { Copy, CopyCheck, Sparkles, UserCheck, X } from 'lucide-react'
+import {
+  useDecidePending,
+  useDismissDuplicateFlag,
+  useDuplicateFlags,
+  useDuplicates,
+  useLibraries,
+  usePendingMatches
+} from '../../../api/hooks'
+import { useExplorerStore, parentPath } from '../../../stores/explorer'
+import { FaceThumbnail } from '../../../components/FaceThumbnail'
+import type { DuplicateFlag, PendingMatch } from '../../../api/client'
 
 interface Props {
   libraryId: string
   folderPath: string
+}
+
+/** Library-relative path -> absolute, joined with this project's Windows-first
+ * separator convention (matches `useFileOps.ts`'s `joinPath`). */
+function toAbsolute(libraryRoot: string, relPath: string): string {
+  const trimmed = libraryRoot.replace(/[\\/]+$/, '')
+  return `${trimmed}\\${relPath.replace(/\//g, '\\')}`
+}
+
+// ---------------------------------------------------------------------------
+// Duplicate flags section — incremental, advisory notices raised as files are
+// ingested (Performance & Ingest V4 Phase 3), independent of the manual
+// dedupe scan below. Nothing is trashed from here; "Show match" just jumps
+// to the matched file's folder for the user to look and decide.
+// ---------------------------------------------------------------------------
+
+function DuplicateFlagsSection({ libraryId }: { libraryId: string }): React.JSX.Element | null {
+  const { data: libraries } = useLibraries()
+  const { data: flags, isLoading } = useDuplicateFlags(libraryId)
+  const dismiss = useDismissDuplicateFlag(libraryId)
+  const navigate = useExplorerStore((s) => s.navigate)
+  const libraryRoot = libraries?.find((l) => l.id === libraryId)?.path
+
+  if (isLoading || !flags || flags.length === 0) return null
+
+  const showMatch = (flag: DuplicateFlag) => {
+    if (!libraryRoot) return
+    navigate(parentPath(toAbsolute(libraryRoot, flag.match_path)))
+  }
+
+  return (
+    <section>
+      <div className="mb-3 flex items-center gap-2">
+        <Copy className="h-4 w-4 text-zinc-400" />
+        <h3 className="text-sm font-semibold text-zinc-800">Possible duplicates</h3>
+      </div>
+      <div className="space-y-2">
+        {flags.map((flag) => (
+          <div
+            key={flag.id}
+            className="flex items-center justify-between gap-3 rounded-2xl border border-zinc-200 bg-white p-4"
+          >
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-zinc-800">{flag.path.split(/[\\/]/).pop()}</p>
+              <p className="mt-0.5 truncate text-xs text-zinc-500">
+                {flag.match_type === 'exact' ? 'Exact match' : 'Near match'} of{' '}
+                {flag.match_path.split(/[\\/]/).pop()}
+              </p>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <button
+                onClick={() => showMatch(flag)}
+                disabled={!libraryRoot}
+                className="rounded-lg border border-zinc-200 px-3 py-1.5 text-sm text-zinc-600 transition hover:bg-zinc-50 disabled:opacity-50"
+              >
+                Show match
+              </button>
+              <button
+                onClick={() => dismiss.mutate(flag.id)}
+                disabled={dismiss.isPending}
+                className="rounded-lg border border-zinc-200 px-2.5 py-1.5 text-zinc-500 transition hover:bg-zinc-50 disabled:opacity-50"
+                title="Dismiss"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Pending face matches section — same underlying queue as the Facial
+// Recognition tab's `PendingReviewPanel`; both read/write `usePendingMatches`
+// / `useDecidePending` so confirming here keeps that panel in sync too.
+// ---------------------------------------------------------------------------
+
+function PendingMatchesSection({ libraryId }: { libraryId: string }): React.JSX.Element | null {
+  const { data: matches, isLoading } = usePendingMatches(libraryId)
+  const decide = useDecidePending(libraryId)
+
+  if (isLoading || !matches || matches.length === 0) return null
+
+  const onDecide = (match: PendingMatch, decision: 'confirmed' | 'rejected') => {
+    decide.mutate([{ pending_id: match.id, decision }])
+  }
+
+  return (
+    <section>
+      <div className="mb-3 flex items-center gap-2">
+        <UserCheck className="h-4 w-4 text-zinc-400" />
+        <h3 className="text-sm font-semibold text-zinc-800">New photos to confirm</h3>
+      </div>
+      <div className="space-y-2">
+        {matches.map((match) => (
+          <div
+            key={match.id}
+            className="flex items-center gap-4 rounded-2xl border border-zinc-200 bg-white p-4"
+          >
+            <FaceThumbnail libraryId={libraryId} faceId={match.face_id} size={48} />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-zinc-800">
+                Assign to <span className="text-zinc-900">{match.person_name}</span>?
+              </p>
+              <p className="mt-0.5 text-xs text-zinc-400">{Math.round(match.confidence * 100)}% confidence</p>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <button
+                onClick={() => onDecide(match, 'rejected')}
+                disabled={decide.isPending}
+                className="rounded-lg border border-zinc-200 px-3 py-1.5 text-sm text-zinc-600 transition hover:bg-zinc-50 disabled:opacity-50"
+              >
+                Reject
+              </button>
+              <button
+                onClick={() => onDecide(match, 'confirmed')}
+                disabled={decide.isPending}
+                className="rounded-lg bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:opacity-50"
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -83,13 +221,21 @@ function formatBytes(bytes: number): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Duplicates surface — shell-level, scoped to the currently open folder like
- * the dedupe/faces tools. Folder-organization suggestions (person/group
- * folder matches) moved to the Facial Recognition tab, where they now
- * surface directly as tiles on the person they match instead of a separate
- * accept/dismiss queue here.
+ * Suggestions surface — shell-level, scoped to the currently open folder like
+ * the dedupe/faces tools. Covers duplicates (both incrementally-flagged and
+ * the old manual-scan groups) and pending face-match confirmations. Folder-
+ * organization suggestions (person/group folder matches) moved to the Facial
+ * Recognition tab, where they now surface directly as tiles on the person
+ * they match instead of a separate accept/dismiss queue here.
  */
 export function SuggestionsToolPanel({ libraryId, folderPath: _folderPath }: Props): React.JSX.Element {
+  const { data: flags } = useDuplicateFlags(libraryId)
+  const { data: pending } = usePendingMatches(libraryId)
+  const { data: duplicates } = useDuplicates(libraryId)
+
+  const nothingToShow =
+    (flags?.length ?? 0) === 0 && (pending?.length ?? 0) === 0 && (duplicates?.summary.groups ?? 0) === 0
+
   return (
     <div className="h-full overflow-y-auto p-6 pb-24">
       <div className="mb-6">
@@ -97,10 +243,20 @@ export function SuggestionsToolPanel({ libraryId, folderPath: _folderPath }: Pro
           <Sparkles className="h-5 w-5 text-zinc-400" />
           Suggestions
         </h2>
-        <p className="mt-1 text-sm text-zinc-500">Duplicates MediaMind noticed in this folder.</p>
+        <p className="mt-1 text-sm text-zinc-500">
+          Duplicates and pending face-match confirmations MediaMind noticed in this folder.
+        </p>
       </div>
 
+      {nothingToShow && (
+        <div className="rounded-2xl border border-dashed border-zinc-300 py-16 text-center">
+          <p className="text-sm text-zinc-500">No suggestions right now.</p>
+        </div>
+      )}
+
       <div className="space-y-8">
+        <DuplicateFlagsSection libraryId={libraryId} />
+        <PendingMatchesSection libraryId={libraryId} />
         <DuplicatesSection libraryId={libraryId} />
       </div>
     </div>

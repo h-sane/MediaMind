@@ -398,3 +398,196 @@ def test_persons_endpoint_includes_pending_count(client, tmp_path):
     res = client.get(f"/v1/libraries/{lib_id}/persons")
     assert res.status_code == 200
     assert res.json()["pending_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Person primary folder (per-person "primary folder" feature)
+# ---------------------------------------------------------------------------
+
+def test_set_primary_folder_roundtrip(client, tmp_path):
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    _make_library(lib_dir)
+    _seed_persons_db(lib_dir, name_alice=True)
+    lib_id = _add_library(client, lib_dir)
+
+    data_dir = library_data_dir(lib_dir)
+    conn = open_db(library_db_path(data_dir))
+    pid = conn.execute(
+        "SELECT id FROM persons WHERE provider_id = ? AND name = 'Alice'", (PROVIDER,)
+    ).fetchone()["id"]
+    conn.close()
+
+    res = client.put(
+        f"/v1/libraries/{lib_id}/persons/{pid}/primary-folder", json={"path": "Family/Alice"}
+    )
+    assert res.status_code == 200
+    assert res.json() == {"ok": True, "primary_folder_path": "Family/Alice"}
+
+    persons_res = client.get(f"/v1/libraries/{lib_id}/persons")
+    alice = next(p for p in persons_res.json()["persons"] if p["id"] == pid)
+    assert alice["primary_folder_path"] == "Family/Alice"
+
+    # Clear it
+    res2 = client.put(f"/v1/libraries/{lib_id}/persons/{pid}/primary-folder", json={"path": None})
+    assert res2.status_code == 200
+    assert res2.json()["primary_folder_path"] is None
+
+
+def test_set_primary_folder_unknown_person_404(client, tmp_path):
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    lib_id = _add_library(client, lib_dir)
+
+    res = client.put(f"/v1/libraries/{lib_id}/persons/999/primary-folder", json={"path": "Family/X"})
+    assert res.status_code == 404
+
+
+@pytest.mark.parametrize("bad_path", ["/etc/passwd", "../escape", "Family/../../escape", r"C:\Windows"])
+def test_set_primary_folder_rejects_unsafe_paths(client, tmp_path, bad_path):
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    _make_library(lib_dir)
+    _seed_persons_db(lib_dir, name_alice=True)
+    lib_id = _add_library(client, lib_dir)
+
+    data_dir = library_data_dir(lib_dir)
+    conn = open_db(library_db_path(data_dir))
+    pid = conn.execute(
+        "SELECT id FROM persons WHERE provider_id = ? AND name = 'Alice'", (PROVIDER,)
+    ).fetchone()["id"]
+    conn.close()
+
+    res = client.put(f"/v1/libraries/{lib_id}/persons/{pid}/primary-folder", json={"path": bad_path})
+    assert res.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Person-scoped organize preview/execute
+# ---------------------------------------------------------------------------
+
+def test_organize_preview_person_scoped_without_primary_folder_422(client, tmp_path):
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    _make_library(lib_dir)
+    _seed_persons_db(lib_dir, name_alice=True)
+    lib_id = _add_library(client, lib_dir)
+
+    data_dir = library_data_dir(lib_dir)
+    conn = open_db(library_db_path(data_dir))
+    pid = conn.execute(
+        "SELECT id FROM persons WHERE provider_id = ? AND name = 'Alice'", (PROVIDER,)
+    ).fetchone()["id"]
+    conn.close()
+
+    res = client.post(f"/v1/libraries/{lib_id}/organize/preview?person_id={pid}")
+    assert res.status_code == 422
+
+
+def test_organize_execute_person_scoped_without_primary_folder_422(client, tmp_path):
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    _make_library(lib_dir)
+    _seed_persons_db(lib_dir, name_alice=True)
+    lib_id = _add_library(client, lib_dir)
+
+    data_dir = library_data_dir(lib_dir)
+    conn = open_db(library_db_path(data_dir))
+    pid = conn.execute(
+        "SELECT id FROM persons WHERE provider_id = ? AND name = 'Alice'", (PROVIDER,)
+    ).fetchone()["id"]
+    conn.close()
+
+    res = client.post(
+        f"/v1/libraries/{lib_id}/organize/execute", json={"dry_run": False, "person_id": pid}
+    )
+    assert res.status_code == 422
+    assert "primary folder" in res.json()["detail"].lower()
+
+
+def test_organize_execute_person_scoped_routes_to_server_resolved_folder(client, tmp_path):
+    """Destination is derived from the server-side DB value regardless of
+    anything the client sends -- there is no client-suppliable target field
+    at all, by design (safety: server-validated destination only)."""
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    _make_library(lib_dir)
+    _seed_persons_db(lib_dir, name_alice=True)
+    lib_id = _add_library(client, lib_dir)
+
+    data_dir = library_data_dir(lib_dir)
+    conn = open_db(library_db_path(data_dir))
+    pid = conn.execute(
+        "SELECT id FROM persons WHERE provider_id = ? AND name = 'Alice'", (PROVIDER,)
+    ).fetchone()["id"]
+    conn.close()
+
+    set_res = client.put(
+        f"/v1/libraries/{lib_id}/persons/{pid}/primary-folder", json={"path": "Family/Alice"}
+    )
+    assert set_res.status_code == 200
+
+    preview = client.post(f"/v1/libraries/{lib_id}/organize/preview?person_id={pid}")
+    assert preview.status_code == 200
+    pbody = preview.json()
+    assert pbody["planned"] == 1
+    assert pbody["moves"][0]["dest_folder_rel"] == "Family/Alice"
+
+    res = client.post(
+        f"/v1/libraries/{lib_id}/organize/execute",
+        json={
+            "dry_run": False,
+            "person_id": pid,
+            "expected_planned": pbody["planned"],
+            "expected_plan_hash": pbody["plan_hash"],
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert body["handled"] == 1
+
+    assert not (lib_dir / "red.jpg").exists()
+    assert (lib_dir / "Family" / "Alice" / "red.jpg").exists()
+
+    # A manifest row was recorded and handled == planned.
+    audit = client.get(f"/v1/libraries/{lib_id}/organize/audit")
+    kinds = {a["kind"]: a for a in audit.json()}
+    assert "organize-by-person" in kinds
+    assert kinds["organize-by-person"]["handled"] == kinds["organize-by-person"]["planned"]
+
+
+def test_organize_execute_person_scoped_plan_hash_drift_still_guarded(client, tmp_path):
+    """If the primary folder changes between preview and execute, the
+    destination changes too -> the plan-hash guard must still fire (409),
+    same as any other plan-content drift."""
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    _make_library(lib_dir)
+    _seed_persons_db(lib_dir, name_alice=True)
+    lib_id = _add_library(client, lib_dir)
+
+    data_dir = library_data_dir(lib_dir)
+    conn = open_db(library_db_path(data_dir))
+    pid = conn.execute(
+        "SELECT id FROM persons WHERE provider_id = ? AND name = 'Alice'", (PROVIDER,)
+    ).fetchone()["id"]
+    conn.close()
+
+    client.put(f"/v1/libraries/{lib_id}/persons/{pid}/primary-folder", json={"path": "Family/Alice"})
+    preview = client.post(f"/v1/libraries/{lib_id}/organize/preview?person_id={pid}")
+    pbody = preview.json()
+
+    # Primary folder changes after the user confirmed the preview.
+    client.put(f"/v1/libraries/{lib_id}/persons/{pid}/primary-folder", json={"path": "Family/Alice2"})
+
+    res = client.post(
+        f"/v1/libraries/{lib_id}/organize/execute",
+        json={
+            "dry_run": False,
+            "person_id": pid,
+            "expected_planned": pbody["planned"],
+            "expected_plan_hash": pbody["plan_hash"],
+        },
+    )
+    assert res.status_code == 409

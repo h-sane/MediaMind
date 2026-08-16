@@ -12,7 +12,7 @@ import threading
 from pathlib import Path
 from typing import Callable
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # Two connections racing to create/migrate the SAME brand-new database file
 # (e.g. the always-on ingest worker and an HTTP request, opening within
@@ -349,6 +349,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_dup_flags_path ON duplicate_flags(path, ma
     conn.commit()
 
 
+def _v11_migration(conn: sqlite3.Connection) -> None:
+    """Schema v11: per-person "primary folder" — a user-designated destination
+    a person's matched files can be routed into directly (organize_plan.py's
+    `target_override`), independent of the default People/<name> convention
+    and of any folder binding. NULL means unset (no override yet)."""
+    try:
+        conn.execute("ALTER TABLE persons ADD COLUMN primary_folder_path TEXT")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+    conn.commit()
+
+
 # v2 is a string; v3+ are callables (ALTER TABLE requires special handling).
 _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (2, _V2_ADDITIONS),
@@ -360,6 +372,7 @@ _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (8, _v8_migration),
     (9, _v9_migration),
     (10, _v10_migration),
+    (11, _v11_migration),
 ]
 
 

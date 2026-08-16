@@ -131,6 +131,20 @@ export interface ExecutionReport {
   entries: ManifestEntry[]
 }
 
+// ---------------------------------------------------------------------------
+// Duplicate flag types (Performance & Ingest V4 Phase 3 — incremental,
+// advisory notices raised during ingest; independent of the manual dedupe
+// scan's `DuplicatesOut` above)
+// ---------------------------------------------------------------------------
+
+export interface DuplicateFlag {
+  id: number
+  path: string
+  match_path: string
+  match_type: 'exact' | 'near'
+  flagged_at: number
+}
+
 export interface DuplicateLocation {
   path: string
   kind: string
@@ -310,6 +324,7 @@ export interface Person {
   face_count: number
   media_count: number
   sample_face_ids: number[]
+  primary_folder_path: string | null
 }
 
 export interface PersonsOut {
@@ -728,10 +743,15 @@ export const api = {
     // (leaves originals). groupScope 'all' copies a group photo into every
     // named person's folder (export fan-out); 'prominent' routes to the
     // dominant person only.
-    preview: (libraryId: string, groupScope: 'prominent' | 'all' = 'prominent') =>
+    preview: (
+      libraryId: string,
+      groupScope: 'prominent' | 'all' = 'prominent',
+      personId?: number | null
+    ) =>
       request<OrganizePreview>(
         'POST',
-        `/v1/libraries/${libraryId}/organize/preview?group_scope=${groupScope}`
+        `/v1/libraries/${libraryId}/organize/preview?group_scope=${groupScope}` +
+          (personId != null ? `&person_id=${personId}` : '')
       ),
     execute: (
       libraryId: string,
@@ -740,7 +760,8 @@ export const api = {
       expectedPlanHash?: string,
       excludedSources?: string[],
       mode: 'move' | 'copy' = 'move',
-      groupScope: 'prominent' | 'all' = 'prominent'
+      groupScope: 'prominent' | 'all' = 'prominent',
+      personId?: number | null
     ) =>
       request<ExecutionReport>('POST', `/v1/libraries/${libraryId}/organize/execute`, {
         dry_run: dryRun,
@@ -748,7 +769,8 @@ export const api = {
         expected_plan_hash: expectedPlanHash ?? null,
         excluded_sources: excludedSources ?? [],
         mode,
-        group_scope: groupScope
+        group_scope: groupScope,
+        person_id: personId ?? null
       }),
     // Real execution as a background job — the confirm dialog fires this and
     // closes immediately; the JobProgressBubble tracks it to completion
@@ -759,7 +781,8 @@ export const api = {
       expectedPlanHash?: string,
       excludedSources?: string[],
       mode: 'move' | 'copy' = 'move',
-      groupScope: 'prominent' | 'all' = 'prominent'
+      groupScope: 'prominent' | 'all' = 'prominent',
+      personId?: number | null
     ) =>
       request<JobSnapshot>('POST', `/v1/libraries/${libraryId}/organize/execute-job`, {
         dry_run: false,
@@ -767,7 +790,8 @@ export const api = {
         expected_plan_hash: expectedPlanHash ?? null,
         excluded_sources: excludedSources ?? [],
         mode,
-        group_scope: groupScope
+        group_scope: groupScope,
+        person_id: personId ?? null
       }),
     undo: (libraryId: string) =>
       request<{ ok: boolean; handled: number; planned: number; errors: number; kind: string }>(
@@ -861,6 +885,24 @@ export const api = {
         'POST',
         `/v1/libraries/${libraryId}/persons/${personId}/materialize`,
         body
+      ),
+
+    setPrimaryFolder: (libraryId: string, personId: number, path: string | null) =>
+      request<{ ok: boolean; primary_folder_path: string | null }>(
+        'PUT',
+        `/v1/libraries/${libraryId}/persons/${personId}/primary-folder`,
+        { path }
+      )
+  },
+
+  duplicateFlags: {
+    list: (libraryId: string) =>
+      request<DuplicateFlag[]>('GET', `/v1/libraries/${libraryId}/duplicate-flags`),
+
+    dismiss: (libraryId: string, flagId: number) =>
+      request<{ status: string }>(
+        'POST',
+        `/v1/libraries/${libraryId}/duplicate-flags/${flagId}/dismiss`
       )
   },
 

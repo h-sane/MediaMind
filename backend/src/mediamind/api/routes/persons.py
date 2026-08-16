@@ -16,12 +16,14 @@ from mediamind.api.models import (
     PersonMediaItemOut,
     PersonMergeIn,
     PersonOut,
+    PersonPrimaryFolderIn,
     PersonRenameIn,
     PersonsOut,
 )
 from mediamind.config import library_data_dir
 from mediamind.core.faces.engine import load_frame
 from mediamind.core.libraries import LibraryRegistry
+from mediamind.core.organize_plan import safe_dest_folder_rel
 from mediamind.store.db import library_db_path, open_db
 from mediamind.store.persons import (
     dismiss_merge_suggestion,
@@ -31,6 +33,7 @@ from mediamind.store.persons import (
     merge_suggestions,
     person_media,
     rename_person,
+    set_primary_folder,
     latest_faces_scan,
 )
 from mediamind.store.rejected_faces import reject_face
@@ -79,6 +82,7 @@ def list_persons(library_id: str, request: Request):
                 face_count=s.face_count,
                 media_count=s.media_count,
                 sample_face_ids=s.sample_face_ids,
+                primary_folder_path=s.primary_folder_path,
             )
             for s in summaries
         ]
@@ -133,6 +137,33 @@ def rename_person_endpoint(
     if not ok:
         raise HTTPException(status_code=404, detail="Unknown person")
     return {"ok": True}
+
+
+@router.put("/libraries/{library_id}/persons/{person_id}/primary-folder")
+def set_person_primary_folder_endpoint(
+    library_id: str, person_id: int, body: PersonPrimaryFolderIn, request: Request
+):
+    """Set (or clear, with path=null) a person's primary folder — a
+    library-relative destination organize/export can route this person's
+    matched files into directly (see organize.py's `person_id` scoping).
+    Validated server-side via `safe_dest_folder_rel` (rejects absolute paths,
+    `..`, and library-root escapes) so a client can never smuggle in a path
+    outside the library."""
+    _, library_root = _get_library_and_root(request, library_id)
+    path = body.path
+    if path is not None:
+        try:
+            path = safe_dest_folder_rel(path, library_root)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    conn = _open_library_db(library_root)
+    try:
+        ok = set_primary_folder(conn, person_id, path)
+    finally:
+        conn.close()
+    if not ok:
+        raise HTTPException(status_code=404, detail="Unknown person")
+    return {"ok": True, "primary_folder_path": path}
 
 
 @router.post("/libraries/{library_id}/persons/merge")

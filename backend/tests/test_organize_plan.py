@@ -547,3 +547,125 @@ def test_plan_rejection_survives_rescan(conn):
 
     moves = build_organize_plan(conn, PROVIDER)
     assert moves == []
+
+
+# ---------------------------------------------------------------------------
+# Person-scoped plan (person_id / target_override — primary folder feature)
+# ---------------------------------------------------------------------------
+
+def test_plan_person_scoped_includes_only_target_persons_files(conn):
+    fid_a = upsert_file(conn, "one.jpg", "photo", 100, 0.0, "h1", True)
+    fid_b = upsert_file(conn, "two.jpg", "photo", 100, 0.0, "h2", True)
+    conn.commit()
+    ff = [
+        FileFaces(file_id=fid_a, content_hash="h1", decoded_ok=True, faces=[_face(1, 0, 0)]),
+        FileFaces(file_id=fid_b, content_hash="h2", decoded_ok=True, faces=[_face(0, 0, 1)]),
+    ]
+    _do_scan(conn, ff, [0, 1])
+    persons = conn.execute("SELECT id FROM persons WHERE provider_id = ? ORDER BY id", (PROVIDER,)).fetchall()
+    pid_a, pid_b = persons[0]["id"], persons[1]["id"]
+    conn.execute("UPDATE persons SET name = 'Alice' WHERE id = ?", (pid_a,))
+    conn.execute("UPDATE persons SET name = 'Bob' WHERE id = ?", (pid_b,))
+    conn.commit()
+
+    moves = build_organize_plan(conn, PROVIDER, person_id=pid_a, target_override="Primary/Alice")
+    assert len(moves) == 1
+    assert moves[0].source_rel == "one.jpg"
+    assert moves[0].dest_folder_rel == "Primary/Alice"
+    assert moves[0].person_id == pid_a
+
+
+def test_plan_person_scoped_group_photo_dominant_included(conn):
+    """Group photo where the scoped person has the most faces -> included,
+    routed to target_override."""
+    fid = upsert_file(conn, "both.jpg", "photo", 100, 0.0, "h_b", True)
+    conn.commit()
+    ff = [FileFaces(
+        file_id=fid, content_hash="h_b", decoded_ok=True,
+        faces=[_face(1, 0, 0), _face(1, 0, 0.1), _face(0, 0, 1)],
+    )]
+    _do_scan(conn, ff, [0, 0, 1])
+    persons = conn.execute("SELECT id FROM persons WHERE provider_id = ? ORDER BY id", (PROVIDER,)).fetchall()
+    pid_dominant, pid_other = persons[0]["id"], persons[1]["id"]
+    conn.execute("UPDATE persons SET name = 'Dominant' WHERE id = ?", (pid_dominant,))
+    conn.execute("UPDATE persons SET name = 'Other' WHERE id = ?", (pid_other,))
+    conn.commit()
+
+    moves = build_organize_plan(conn, PROVIDER, person_id=pid_dominant, target_override="Primary/Dominant")
+    assert len(moves) == 1
+    assert moves[0].dest_folder_rel == "Primary/Dominant"
+
+
+def test_plan_person_scoped_group_photo_non_dominant_excluded(conn):
+    """Same group photo, scoped to the non-dominant person -> excluded."""
+    fid = upsert_file(conn, "both.jpg", "photo", 100, 0.0, "h_b", True)
+    conn.commit()
+    ff = [FileFaces(
+        file_id=fid, content_hash="h_b", decoded_ok=True,
+        faces=[_face(1, 0, 0), _face(1, 0, 0.1), _face(0, 0, 1)],
+    )]
+    _do_scan(conn, ff, [0, 0, 1])
+    persons = conn.execute("SELECT id FROM persons WHERE provider_id = ? ORDER BY id", (PROVIDER,)).fetchall()
+    pid_dominant, pid_other = persons[0]["id"], persons[1]["id"]
+    conn.execute("UPDATE persons SET name = 'Dominant' WHERE id = ?", (pid_dominant,))
+    conn.execute("UPDATE persons SET name = 'Other' WHERE id = ?", (pid_other,))
+    conn.commit()
+
+    moves = build_organize_plan(conn, PROVIDER, person_id=pid_other, target_override="Primary/Other")
+    assert moves == []
+
+
+def test_plan_person_scoped_count_check_matches_inputs(conn):
+    """Count check: every input file matching the target person shows up
+    exactly once in the scoped plan (no drops, no duplication)."""
+    fids = []
+    for i in range(3):
+        fid = upsert_file(conn, f"p{i}.jpg", "photo", 100, 0.0, f"h{i}", True)
+        fids.append(fid)
+    conn.commit()
+    ff = [FileFaces(file_id=fid, content_hash=f"h{i}", decoded_ok=True, faces=[_face(1, 0, 0)])
+          for i, fid in enumerate(fids)]
+    _do_scan(conn, ff, [0, 0, 0])
+    pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
+    conn.execute("UPDATE persons SET name = 'Alice' WHERE id = ?", (pid,))
+    conn.commit()
+
+    moves = build_organize_plan(conn, PROVIDER, person_id=pid, target_override="Primary/Alice")
+    assert len(moves) == 3
+    assert {m.source_rel for m in moves} == {"p0.jpg", "p1.jpg", "p2.jpg"}
+    assert all(m.dest_folder_rel == "Primary/Alice" for m in moves)
+
+
+def test_plan_person_scoped_ignores_bound_folder_override(conn):
+    """target_override wins over a folder binding for the scoped person."""
+    fid = upsert_file(conn, "Random/new.jpg", "photo", 100, 0.0, "h_new", True)
+    conn.commit()
+    ff = [FileFaces(file_id=fid, content_hash="h_new", decoded_ok=True, faces=[_face(1, 0, 0)])]
+    _do_scan(conn, ff, [0])
+    pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
+    conn.execute("UPDATE persons SET name = 'Alice' WHERE id = ?", (pid,))
+    conn.commit()
+    _bind(conn, "Family/Alice", pid)
+
+    moves = build_organize_plan(conn, PROVIDER, person_id=pid, target_override="Primary/Alice")
+    assert len(moves) == 1
+    assert moves[0].dest_folder_rel == "Primary/Alice"
+
+
+def test_plan_person_scoped_override_reaches_files_inside_own_bound_folder(conn):
+    """A primary folder must still pull out files that already live inside
+    this same person's own bound/respected folder — the common real case
+    (a "Lock this folder" person whose photos are all inside that folder
+    already). The frozen-folder gate must not shadow target_override."""
+    fid = upsert_file(conn, "Family/Alice/photo.jpg", "photo", 100, 0.0, "h_inside", True)
+    conn.commit()
+    ff = [FileFaces(file_id=fid, content_hash="h_inside", decoded_ok=True, faces=[_face(1, 0, 0)])]
+    _do_scan(conn, ff, [0])
+    pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
+    conn.execute("UPDATE persons SET name = 'Alice' WHERE id = ?", (pid,))
+    conn.commit()
+    _bind(conn, "Family/Alice", pid)
+
+    moves = build_organize_plan(conn, PROVIDER, person_id=pid, target_override="Primary/Alice")
+    assert len(moves) == 1
+    assert moves[0].dest_folder_rel == "Primary/Alice"
