@@ -23,6 +23,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
+from pydantic import BaseModel
 
 from mediamind.api.models import (
     BrowseDirOut,
@@ -44,7 +45,9 @@ from mediamind.api.models import (
 )
 from mediamind.api.models_gallery import GalleryItemOut, GalleryResponseOut
 from mediamind.api.models_search import SearchResponseOut, SearchResultOut
-from mediamind.config import LIBRARY_DATA_DIRNAME
+from mediamind.api.routes.libraries import LibraryOut
+from mediamind.config import LIBRARY_DATA_DIRNAME, discovery_db_path
+from mediamind.core import discovery
 from mediamind.core.explorer_media import EXPLORER_KINDS, explorer_kind_of
 from mediamind.core.file_facts import file_facts, stat_facts
 from mediamind.core.folder_stats import FolderStatsIndex
@@ -518,6 +521,7 @@ def get_settings(request: Request) -> SettingsOut:
     settings: SettingsStore = request.app.state.settings
     return SettingsOut(
         recent_files_enabled=settings.recent_files_enabled,
+        auto_scan_mode=settings.auto_scan_mode,
         auto_scan_enabled=settings.auto_scan_enabled,
     )
 
@@ -533,9 +537,64 @@ def update_settings(body: SettingsUpdateIn, request: Request) -> SettingsOut:
             # could resurface if the setting is switched back on later.
             recent_store: RecentFilesStore = request.app.state.recent_files
             recent_store.clear()
-    if body.auto_scan_enabled is not None:
+    if body.auto_scan_mode is not None:
+        settings.set_auto_scan_mode(body.auto_scan_mode)
+    elif body.auto_scan_enabled is not None:
+        # Back-compat: a caller still on the pre-V3 boolean field.
         settings.set_auto_scan_enabled(body.auto_scan_enabled)
     return SettingsOut(
         recent_files_enabled=settings.recent_files_enabled,
+        auto_scan_mode=settings.auto_scan_mode,
         auto_scan_enabled=settings.auto_scan_enabled,
     )
+
+
+# ---------------------------------------------------------------------------
+# Discovery — Tier-3 "system" auto-scan suggestions (unregistered folders
+# with new media, found by watching whole fixed drives). App-wide, not
+# per-library, so these open the discovery DB directly rather than going
+# through a per-library connection helper.
+# ---------------------------------------------------------------------------
+
+class DiscoverySuggestionOut(BaseModel):
+    folder: str
+    media_count: int
+    first_seen: float
+    last_seen: float
+
+
+class DiscoveryFolderIn(BaseModel):
+    folder: str
+
+
+@router.get("/discovery/suggestions", response_model=list[DiscoverySuggestionOut])
+def discovery_suggestions(request: Request) -> list[DiscoverySuggestionOut]:
+    conn = discovery.connect(discovery_db_path())
+    try:
+        return [DiscoverySuggestionOut(**row) for row in discovery.list_suggestions(conn)]
+    finally:
+        conn.close()
+
+
+@router.post("/discovery/register", response_model=LibraryOut, status_code=201)
+def discovery_register(body: DiscoveryFolderIn, request: Request) -> LibraryOut:
+    try:
+        lib = request.app.state.registry.add(Path(body.folder))
+    except NotADirectoryError as e:
+        raise HTTPException(status_code=400, detail=f"Not a folder: {e}")
+    conn = discovery.connect(discovery_db_path())
+    try:
+        discovery.mark_registered(conn, body.folder)
+    finally:
+        conn.close()
+    return LibraryOut(**lib.__dict__)
+
+
+@router.post("/discovery/dismiss")
+def discovery_dismiss(body: DiscoveryFolderIn, request: Request) -> dict:
+    conn = discovery.connect(discovery_db_path())
+    try:
+        discovery.mark_dismissed(conn, body.folder)
+    finally:
+        conn.close()
+    return {"ok": True}

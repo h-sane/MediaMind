@@ -816,7 +816,11 @@ def test_fs_recent_hides_deleted_file(client: TestClient, tmp_path: Path):
 def test_fs_settings_recent_files_enabled_by_default(client: TestClient):
     res = client.get("/v1/fs/settings")
     assert res.status_code == 200
-    assert res.json() == {"recent_files_enabled": True, "auto_scan_enabled": False}
+    assert res.json() == {
+        "recent_files_enabled": True,
+        "auto_scan_mode": "off",
+        "auto_scan_enabled": False,
+    }
 
 
 def test_fs_settings_disable_recent_files_hides_and_stops_tracking(client: TestClient, tmp_path: Path):
@@ -828,7 +832,11 @@ def test_fs_settings_disable_recent_files_hides_and_stops_tracking(client: TestC
 
     res = client.patch("/v1/fs/settings", json={"recent_files_enabled": False})
     assert res.status_code == 200
-    assert res.json() == {"recent_files_enabled": False, "auto_scan_enabled": False}
+    assert res.json() == {
+        "recent_files_enabled": False,
+        "auto_scan_mode": "off",
+        "auto_scan_enabled": False,
+    }
 
     # Existing history is cleared, not just hidden.
     res = client.get("/v1/fs/recent")
@@ -837,7 +845,11 @@ def test_fs_settings_disable_recent_files_hides_and_stops_tracking(client: TestC
     # New opens aren't tracked while disabled either.
     client.post("/v1/fs/recent", json={"path": str(photo)})
     res = client.patch("/v1/fs/settings", json={"recent_files_enabled": True})
-    assert res.json() == {"recent_files_enabled": True, "auto_scan_enabled": False}
+    assert res.json() == {
+        "recent_files_enabled": True,
+        "auto_scan_mode": "off",
+        "auto_scan_enabled": False,
+    }
     res = client.get("/v1/fs/recent")
     assert res.json()["files"] == []
 
@@ -1072,3 +1084,87 @@ def test_fs_quick_access_hides_stale_pin(client: TestClient, tmp_path: Path):
     res = client.get("/v1/fs/quick-access")
     assert res.status_code == 200
     assert res.json()["pins"] == []
+
+
+# ---------------------------------------------------------------------------
+# /v1/fs/settings — auto_scan_mode
+# ---------------------------------------------------------------------------
+
+def test_fs_settings_auto_scan_mode_round_trips(client: TestClient):
+    res = client.patch("/v1/fs/settings", json={"auto_scan_mode": "system"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["auto_scan_mode"] == "system"
+    assert body["auto_scan_enabled"] is True  # computed back-compat field
+
+    res = client.get("/v1/fs/settings")
+    assert res.json()["auto_scan_mode"] == "system"
+
+
+def test_fs_settings_auto_scan_mode_rejects_invalid_value(client: TestClient):
+    res = client.patch("/v1/fs/settings", json={"auto_scan_mode": "bogus"})
+    assert res.status_code == 422  # pydantic Literal validation, same as any other bad enum body
+
+
+# ---------------------------------------------------------------------------
+# /v1/fs/discovery — Tier-3 "system" auto-scan suggestions
+# ---------------------------------------------------------------------------
+
+def test_fs_discovery_suggestions_lists_seeded_rows(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from mediamind.config import discovery_db_path
+    from mediamind.core import discovery
+
+    folder = tmp_path / "discovered_folder"
+    folder.mkdir()
+    conn = discovery.connect(discovery_db_path())
+    for _ in range(10):
+        discovery.record(conn, str(folder))
+    conn.close()
+
+    res = client.get("/v1/fs/discovery/suggestions")
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body) == 1
+    assert body[0]["folder"] == str(folder)
+    assert body[0]["media_count"] == 10
+
+
+def test_fs_discovery_register_adds_library_and_drops_suggestion(client: TestClient, tmp_path: Path):
+    from mediamind.config import discovery_db_path
+    from mediamind.core import discovery
+
+    folder = tmp_path / "discovered_to_register"
+    folder.mkdir()
+    conn = discovery.connect(discovery_db_path())
+    for _ in range(10):
+        discovery.record(conn, str(folder))
+    conn.close()
+
+    res = client.post("/v1/fs/discovery/register", json={"folder": str(folder)})
+    assert res.status_code == 201
+    assert res.json()["path"] == str(folder.resolve())
+
+    libs = client.get("/v1/libraries").json()
+    assert any(Path(lib["path"]) == folder.resolve() for lib in libs)
+
+    suggestions = client.get("/v1/fs/discovery/suggestions").json()
+    assert suggestions == []
+
+
+def test_fs_discovery_dismiss_drops_suggestion(client: TestClient, tmp_path: Path):
+    from mediamind.config import discovery_db_path
+    from mediamind.core import discovery
+
+    folder = tmp_path / "discovered_to_dismiss"
+    folder.mkdir()
+    conn = discovery.connect(discovery_db_path())
+    for _ in range(10):
+        discovery.record(conn, str(folder))
+    conn.close()
+
+    res = client.post("/v1/fs/discovery/dismiss", json={"folder": str(folder)})
+    assert res.status_code == 200
+    assert res.json() == {"ok": True}
+
+    suggestions = client.get("/v1/fs/discovery/suggestions").json()
+    assert suggestions == []

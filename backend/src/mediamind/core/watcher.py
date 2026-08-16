@@ -42,6 +42,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from mediamind.config import LIBRARY_DATA_DIRNAME
+from mediamind.core.discovery import fixed_drive_roots
 from mediamind.core.libraries import Library, LibraryRegistry
 from mediamind.core.scanner import MEDIA_KINDS, is_noise_dir, kind_of, scan_folder
 
@@ -81,6 +82,58 @@ class _WatchdogHandler(FileSystemEventHandler):
         self._record(event.dest_path, event.is_directory)
 
 
+# Tier-3 ("system" mode) path-part exclusions, on top of the library handler's
+# existing name-based filter — cache/temp folders churn constantly and are
+# never user media, and this fires on every raw OS event across whole drives
+# so it must stay a cheap set-membership check.
+_DISCOVERY_EXTRA_EXCLUDE = {
+    "appdata",
+    "temp",
+    "cache",
+    "caches",
+    "cache_data",
+    "gpucache",
+    "code cache",
+    "$winreagent",
+    "recovery",
+}
+
+
+class _DiscoveryHandler(FileSystemEventHandler):
+    """Tier-3 ("system" mode) handler for whole-drive watches: tallies which
+    *unregistered* folders have new media, nothing more. Kept separate from
+    `_WatchdogHandler` rather than extended from it — it has a different job
+    (a cheap per-folder count vs. per-library dirty-path tracking for a real
+    ingest run) and keeping the hot per-event path small and separate is
+    easier to reason about than branching one handler two ways."""
+
+    def __init__(self, watcher: "LibraryWatcher") -> None:
+        self._watcher = watcher
+
+    def _record(self, raw_path: str, is_directory: bool) -> None:
+        if is_directory or not self._watcher._mode() == "system":
+            return
+        path = Path(raw_path)
+        if LIBRARY_DATA_DIRNAME in path.parts or any(is_noise_dir(part) for part in path.parts):
+            return
+        if any(part.lower() in _DISCOVERY_EXTRA_EXCLUDE for part in path.parts):
+            return
+        if kind_of(path) not in MEDIA_KINDS:
+            return
+        if self._watcher._under_registered_root(path):
+            return  # that library's own _WatchdogHandler already handles it
+        self._watcher._mark_discovery_dirty(str(path.parent))
+
+    def on_created(self, event) -> None:
+        self._record(event.src_path, event.is_directory)
+
+    def on_modified(self, event) -> None:
+        self._record(event.src_path, event.is_directory)
+
+    def on_moved(self, event) -> None:
+        self._record(event.dest_path, event.is_directory)
+
+
 class LibraryWatcher:
     def __init__(
         self,
@@ -88,11 +141,15 @@ class LibraryWatcher:
         on_change: Callable[[Library, list[str]], None],
         *,
         enabled: Callable[[], bool],
+        mode: Callable[[], str] = lambda: "libraries",
+        on_discovery: Callable[[str], None] = lambda folder: None,
         interval: float = DEFAULT_INTERVAL_SECONDS,
     ) -> None:
         self._registry = registry
         self._on_change = on_change
         self._enabled = enabled
+        self._mode = mode
+        self._on_discovery = on_discovery
         self._interval = interval
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -108,6 +165,11 @@ class LibraryWatcher:
         self._native_roots: set[str] = set()
         self._native_lock = threading.Lock()
         self._native_dirty: dict[str, dict[str, float]] = {}  # lib_id -> {path: last_event_time}
+
+        # Tier-3 ("system" mode) discovery state.
+        self._drive_watches: dict[str, object] = {}  # drive root -> ObservedWatch, for unscheduling
+        self._discovery_dirty: dict[str, float] = {}  # folder -> last_event_time
+        self._discovery_lock = threading.Lock()
 
     def start(self) -> None:
         if self._thread is not None:
@@ -134,6 +196,11 @@ class LibraryWatcher:
     # ------------------------------------------------------------------
 
     def _ensure_watches(self) -> None:
+        # Registered-library watches are scheduled unconditionally (parity
+        # with pre-V3 behavior: `_ensure_watches` never gated scheduling on
+        # the enabled flag — only event *delivery* in `_record`/`poll_once`/
+        # `_flush_native` is gated). Tier-3 drive watches are the new,
+        # mode-gated behavior.
         live_ids = set()
         for lib in self._registry.list():
             live_ids.add(lib.id)
@@ -147,6 +214,46 @@ class LibraryWatcher:
             self._attempted_native.discard(lib_id)
             with self._native_lock:
                 self._native_dirty.pop(lib_id, None)
+
+        self._ensure_drive_watches()
+
+    def _ensure_drive_watches(self) -> None:
+        if self._observer is None:
+            return
+        if self._mode() != "system":
+            if self._drive_watches:
+                for watch in self._drive_watches.values():
+                    try:
+                        self._observer.unschedule(watch)
+                    except Exception:
+                        pass
+                self._drive_watches.clear()
+            return
+        wanted = set(fixed_drive_roots())
+        for root in wanted - self._drive_watches.keys():
+            try:
+                watch = self._observer.schedule(_DiscoveryHandler(self), root, recursive=True)
+                self._drive_watches[root] = watch
+            except Exception:
+                logger.warning("watcher: native events unavailable for drive %s", root)
+        for root in self._drive_watches.keys() - wanted:
+            try:
+                self._observer.unschedule(self._drive_watches.pop(root))
+            except Exception:
+                self._drive_watches.pop(root, None)
+
+    def _under_registered_root(self, path: Path) -> bool:
+        for lib in self._registry.list():
+            try:
+                path.relative_to(lib.root)
+                return True
+            except ValueError:
+                continue
+        return False
+
+    def _mark_discovery_dirty(self, folder: str) -> None:
+        with self._discovery_lock:
+            self._discovery_dirty[folder] = time.monotonic()
 
     def _schedule_native(self, lib: Library) -> None:
         if self._observer is None:
@@ -173,12 +280,24 @@ class LibraryWatcher:
                     self._native_dirty.pop(lib_id, None)
                 if settled:
                     ready[lib_id] = settled
-        if not ready or not self._enabled():
-            return
-        for lib_id, paths in ready.items():
-            lib = self._registry.get(lib_id)
-            if lib is not None:
-                self._on_change(lib, paths)
+        if ready and self._enabled():
+            for lib_id, paths in ready.items():
+                lib = self._registry.get(lib_id)
+                if lib is not None:
+                    self._on_change(lib, paths)
+
+        self._flush_discovery()
+
+    def _flush_discovery(self) -> None:
+        now = time.monotonic()
+        settled: list[str] = []
+        with self._discovery_lock:
+            for folder, t in list(self._discovery_dirty.items()):
+                if now - t >= _NATIVE_DEBOUNCE_SECONDS:
+                    settled.append(folder)
+                    self._discovery_dirty.pop(folder, None)
+        for folder in settled:
+            self._on_discovery(folder)
 
     # ------------------------------------------------------------------
     # Poll fallback (original Phase 8 mechanism)

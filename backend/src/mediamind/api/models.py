@@ -6,7 +6,7 @@ between backend and the TypeScript client.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -168,13 +168,15 @@ class RecentFileRecordIn(BaseModel):
 
 class SettingsOut(BaseModel):
     recent_files_enabled: bool
-    auto_scan_enabled: bool
+    auto_scan_mode: Literal["off", "libraries", "system"]
+    auto_scan_enabled: bool  # computed: True iff auto_scan_mode != "off" — kept for back-compat
 
 
 class SettingsUpdateIn(BaseModel):
-    # Both optional so each toggle can be PATCHed independently — only the
+    # All optional so each toggle can be PATCHed independently — only the
     # fields present in the body are applied.
     recent_files_enabled: bool | None = None
+    auto_scan_mode: Literal["off", "libraries", "system"] | None = None
     auto_scan_enabled: bool | None = None
 
 

@@ -1,15 +1,18 @@
-import { Copy, CopyCheck, Sparkles, UserCheck, X } from 'lucide-react'
+import { Copy, CopyCheck, FolderPlus, Sparkles, UserCheck, X } from 'lucide-react'
 import {
   useDecidePending,
+  useDismissDiscoveredFolder,
   useDismissDuplicateFlag,
+  useDiscoverySuggestions,
   useDuplicateFlags,
   useDuplicates,
   useLibraries,
-  usePendingMatches
+  usePendingMatches,
+  useRegisterDiscoveredFolder
 } from '../../../api/hooks'
 import { useExplorerStore, parentPath } from '../../../stores/explorer'
 import { FaceThumbnail } from '../../../components/FaceThumbnail'
-import type { DuplicateFlag, PendingMatch } from '../../../api/client'
+import type { DiscoverySuggestion, DuplicateFlag, PendingMatch } from '../../../api/client'
 
 interface Props {
   libraryId: string
@@ -78,6 +81,63 @@ function DuplicateFlagsSection({ libraryId }: { libraryId: string }): React.JSX.
                 title="Dismiss"
               >
                 <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Discovery suggestions section — folders with lots of new media found
+// outside any registered library (only populated when auto_scan_mode is
+// 'system'). Registering turns the folder into a real library; dismissing
+// just drops it from the list.
+// ---------------------------------------------------------------------------
+
+function DiscoverySuggestionsSection(): React.JSX.Element | null {
+  const { data: suggestions, isLoading } = useDiscoverySuggestions()
+  const register = useRegisterDiscoveredFolder()
+  const dismiss = useDismissDiscoveredFolder()
+
+  if (isLoading || !suggestions || suggestions.length === 0) return null
+
+  const label = (s: DiscoverySuggestion) =>
+    `${s.media_count} new ${s.media_count === 1 ? 'photo/video' : 'photos/videos'}`
+
+  return (
+    <section>
+      <div className="mb-3 flex items-center gap-2">
+        <FolderPlus className="h-4 w-4 text-zinc-400" />
+        <h3 className="text-sm font-semibold text-zinc-800">Folders to add</h3>
+      </div>
+      <div className="space-y-2">
+        {suggestions.map((s) => (
+          <div
+            key={s.folder}
+            className="flex items-center justify-between gap-3 rounded-2xl border border-zinc-200 bg-white p-4"
+          >
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-zinc-800">{s.folder}</p>
+              <p className="mt-0.5 truncate text-xs text-zinc-500">{label(s)}</p>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <button
+                onClick={() => dismiss.mutate(s.folder)}
+                disabled={dismiss.isPending}
+                className="rounded-lg border border-zinc-200 px-2.5 py-1.5 text-zinc-500 transition hover:bg-zinc-50 disabled:opacity-50"
+                title="Dismiss"
+              >
+                <X className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => register.mutate(s.folder)}
+                disabled={register.isPending}
+                className="rounded-lg bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:opacity-50"
+              >
+                Add as library
               </button>
             </div>
           </div>
@@ -232,9 +292,13 @@ export function SuggestionsToolPanel({ libraryId, folderPath: _folderPath }: Pro
   const { data: flags } = useDuplicateFlags(libraryId)
   const { data: pending } = usePendingMatches(libraryId)
   const { data: duplicates } = useDuplicates(libraryId)
+  const { data: discovery } = useDiscoverySuggestions()
 
   const nothingToShow =
-    (flags?.length ?? 0) === 0 && (pending?.length ?? 0) === 0 && (duplicates?.summary.groups ?? 0) === 0
+    (flags?.length ?? 0) === 0 &&
+    (pending?.length ?? 0) === 0 &&
+    (duplicates?.summary.groups ?? 0) === 0 &&
+    (discovery?.length ?? 0) === 0
 
   return (
     <div className="h-full overflow-y-auto p-6 pb-24">
@@ -255,6 +319,7 @@ export function SuggestionsToolPanel({ libraryId, folderPath: _folderPath }: Pro
       )}
 
       <div className="space-y-8">
+        <DiscoverySuggestionsSection />
         <DuplicateFlagsSection libraryId={libraryId} />
         <PendingMatchesSection libraryId={libraryId} />
         <DuplicatesSection libraryId={libraryId} />

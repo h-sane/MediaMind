@@ -97,6 +97,13 @@ def settings_path() -> Path:
     return app_data_dir() / "settings.json"
 
 
+def discovery_db_path() -> Path:
+    """SQLite tally of unregistered folders with new media, for the Tier-3
+    "system" auto-scan mode. Lives in the app data dir, same reasoning as
+    `browse_index_db_path` — never written into the folders it watches."""
+    return app_data_dir() / "discovery.sqlite3"
+
+
 def fs_ops_dir() -> Path:
     """Manifests + op-log for the Explorer shell's file operations (rename/
     move/copy/delete/new-folder). Library-free browsing has no `.mediamind`
