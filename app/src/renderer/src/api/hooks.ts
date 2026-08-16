@@ -584,6 +584,38 @@ export function useUpdateSettings() {
 }
 
 // ---------------------------------------------------------------------------
+// Discovery suggestions (auto_scan_mode: 'system') — folders with new media
+// found outside any registered library, surfaced in the Suggestions panel.
+// ---------------------------------------------------------------------------
+
+export function useDiscoverySuggestions() {
+  return useQuery({
+    queryKey: ['discovery-suggestions'],
+    queryFn: api.fs.discovery.suggestions,
+    retry: false
+  })
+}
+
+export function useRegisterDiscoveredFolder() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (folder: string) => api.fs.discovery.register(folder),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['discovery-suggestions'] })
+      qc.invalidateQueries({ queryKey: ['libraries'] })
+    }
+  })
+}
+
+export function useDismissDiscoveredFolder() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (folder: string) => api.fs.discovery.dismiss(folder),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['discovery-suggestions'] })
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Scans
 // ---------------------------------------------------------------------------
 

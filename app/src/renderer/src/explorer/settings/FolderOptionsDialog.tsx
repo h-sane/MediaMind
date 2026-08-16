@@ -1,10 +1,30 @@
 import { X } from 'lucide-react'
 import { useSettings, useUpdateSettings } from '../../api/hooks'
+import type { Settings } from '../../api/client'
 
 interface Props {
   open: boolean
   onClose: () => void
 }
+
+const AUTO_SCAN_OPTIONS: { value: Settings['auto_scan_mode']; label: string; helper: string }[] = [
+  {
+    value: 'off',
+    label: 'Off',
+    helper: "New media in your folders won't be scanned automatically."
+  },
+  {
+    value: 'libraries',
+    label: 'All my libraries',
+    helper: "Automatically scan every folder you've added to MediaMind for new photos and videos."
+  },
+  {
+    value: 'system',
+    label: 'All fixed drives',
+    helper:
+      "Also watch your whole computer for new media in folders you haven't added yet, and suggest adding them. Lightweight — it only counts files, it doesn't scan or analyze anything until you choose to add a folder. Network drives, removable drives, and system folders are never included."
+  }
+]
 
 /**
  * "Folder Options" — the Explorer shell's own settings surface, reached from
@@ -24,7 +44,7 @@ export function FolderOptionsDialog({ open, onClose }: Props): React.JSX.Element
   if (!open) return null
 
   const recentFilesEnabled = settings?.recent_files_enabled ?? true
-  const autoScanEnabled = settings?.auto_scan_enabled ?? false
+  const autoScanMode = settings?.auto_scan_mode ?? 'off'
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onClose}>
@@ -62,22 +82,22 @@ export function FolderOptionsDialog({ open, onClose }: Props): React.JSX.Element
           <h3 className="mb-2 mt-4 text-xs font-medium uppercase tracking-wide text-zinc-400">
             Auto-scan
           </h3>
-          <label className="flex cursor-pointer items-start gap-2.5 py-1.5">
-            <input
-              type="checkbox"
-              checked={autoScanEnabled}
-              onChange={(e) => updateSettings.mutate({ auto_scan_enabled: e.target.checked })}
-              disabled={updateSettings.isPending}
-              className="mt-0.5 h-4 w-4 rounded border-zinc-300"
-            />
-            <span className="text-sm text-zinc-700">
-              Watch folders for new media
-              <span className="mt-0.5 block text-xs text-zinc-400">
-                When on, MediaMind re-runs duplicate and face detection automatically after new
-                photos or videos land in a folder you've opened. Off by default.
+          {AUTO_SCAN_OPTIONS.map((opt) => (
+            <label key={opt.value} className="flex cursor-pointer items-start gap-2.5 py-1.5">
+              <input
+                type="radio"
+                name="auto_scan_mode"
+                checked={autoScanMode === opt.value}
+                onChange={() => updateSettings.mutate({ auto_scan_mode: opt.value })}
+                disabled={updateSettings.isPending}
+                className="mt-0.5 h-4 w-4 border-zinc-300"
+              />
+              <span className="text-sm text-zinc-700">
+                {opt.label}
+                <span className="mt-0.5 block text-xs text-zinc-400">{opt.helper}</span>
               </span>
-            </span>
-          </label>
+            </label>
+          ))}
         </div>
 
         <div className="flex justify-end border-t border-zinc-200 px-4 py-2.5">

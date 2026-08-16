@@ -289,6 +289,19 @@ export interface RecentFilesList {
 export interface Settings {
   recent_files_enabled: boolean
   auto_scan_enabled: boolean
+  auto_scan_mode: 'off' | 'libraries' | 'system'
+}
+
+// ---------------------------------------------------------------------------
+// Discovery suggestions (auto_scan_mode: 'system' — folders with new media
+// found outside any registered library)
+// ---------------------------------------------------------------------------
+
+export interface DiscoverySuggestion {
+  folder: string
+  media_count: number
+  first_seen: number
+  last_seen: number
 }
 
 // ---------------------------------------------------------------------------
@@ -626,6 +639,15 @@ export const api = {
       get: () => request<Settings>('GET', '/v1/fs/settings'),
       update: (patch: Partial<Settings>) =>
         request<Settings>('PATCH', '/v1/fs/settings', patch)
+    },
+
+    discovery: {
+      suggestions: () =>
+        request<DiscoverySuggestion[]>('GET', '/v1/fs/discovery/suggestions'),
+      register: (folder: string) =>
+        request<Library>('POST', '/v1/fs/discovery/register', { folder }),
+      dismiss: (folder: string) =>
+        request<{ ok: boolean }>('POST', '/v1/fs/discovery/dismiss', { folder })
     }
   },
 

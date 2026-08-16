@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from mediamind import __version__
 from mediamind.api.security import TokenAuthMiddleware
 from mediamind.api.ws import ConnectionManager
-from mediamind.config import browse_index_db_path, folder_stats_db_path, models_dir
+from mediamind.config import browse_index_db_path, discovery_db_path, folder_stats_db_path, models_dir
 from mediamind.logging_setup import attach_websocket_handler, detach_websocket_handler
 from mediamind.core.folder_stats import FolderStatsIndex
 from mediamind.core.jobs import JobManager
@@ -76,10 +76,26 @@ async def _lifespan(app: FastAPI):
     def _on_watcher_change(lib, changed_paths: list[str]) -> None:
         app.state.ingest_worker.enqueue(lib.id, changed_paths)
 
+    def _on_discovery(folder: str) -> None:
+        # Tier-3 "system" mode only: a folder outside any registered library
+        # got new media. Cheap — one small connection open/write/close on the
+        # already-debounced flush, no hashing or model work. Opened per-call
+        # (not held on app.state) since this fires from the watcher's own
+        # background thread and sqlite3 connections aren't cross-thread safe.
+        from mediamind.core import discovery
+
+        conn = discovery.connect(discovery_db_path())
+        try:
+            discovery.record(conn, folder)
+        finally:
+            conn.close()
+
     app.state.watcher = LibraryWatcher(
         app.state.registry,
         _on_watcher_change,
         enabled=lambda: app.state.settings.auto_scan_enabled,
+        mode=lambda: app.state.settings.auto_scan_mode,
+        on_discovery=_on_discovery,
     )
     app.state.watcher.start()
 
