@@ -622,6 +622,27 @@ export function useDuplicates(libraryId: string) {
   })
 }
 
+// ---------------------------------------------------------------------------
+// Duplicate flags (Performance & Ingest V4 Phase 3 — incremental, advisory;
+// independent of the manual dedupe scan above)
+// ---------------------------------------------------------------------------
+
+export function useDuplicateFlags(libraryId: string) {
+  return useQuery({
+    queryKey: ['duplicate-flags', libraryId],
+    queryFn: () => api.duplicateFlags.list(libraryId),
+    retry: false
+  })
+}
+
+export function useDismissDuplicateFlag(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (flagId: number) => api.duplicateFlags.dismiss(libraryId, flagId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['duplicate-flags', libraryId] })
+  })
+}
+
 export function useRecycleBinCheck(libraryId: string) {
   return useQuery({
     queryKey: ['recycle-bin-check', libraryId],
@@ -834,6 +855,20 @@ export function useMaterializePreview(libraryId: string, personId: number | null
   })
 }
 
+/** Sets (or clears, with `path: null`) a person's primary folder — required
+ * before a person-scoped organize execute will run (see `useOrganizeExecuteJob`). */
+export function useSetPrimaryFolder(libraryId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ personId, path }: { personId: number; path: string | null }) =>
+      api.persons.setPrimaryFolder(libraryId, personId, path),
+    onSuccess: (_data, { personId }) => {
+      qc.invalidateQueries({ queryKey: ['persons', libraryId] })
+      qc.invalidateQueries({ queryKey: ['person-media', libraryId, personId] })
+    }
+  })
+}
+
 export function useMaterializePerson(libraryId: string) {
   const qc = useQueryClient()
   return useMutation({
@@ -897,11 +932,12 @@ export function useThumbnailUrl(
 
 export function useOrganizePreview(
   libraryId: string,
-  groupScope: 'prominent' | 'all' = 'prominent'
+  groupScope: 'prominent' | 'all' = 'prominent',
+  personId?: number | null
 ) {
   return useQuery({
-    queryKey: ['organize-preview', libraryId, groupScope],
-    queryFn: () => api.organize.preview(libraryId, groupScope),
+    queryKey: ['organize-preview', libraryId, groupScope, personId ?? null],
+    queryFn: () => api.organize.preview(libraryId, groupScope, personId),
     retry: false
   })
 }
@@ -915,7 +951,8 @@ export function useOrganizeExecute(libraryId: string) {
       expectedPlanHash,
       excludedSources,
       mode,
-      groupScope
+      groupScope,
+      personId
     }: {
       dryRun: boolean
       expectedPlanned?: number
@@ -923,9 +960,10 @@ export function useOrganizeExecute(libraryId: string) {
       excludedSources?: string[]
       mode?: 'move' | 'copy'
       groupScope?: 'prominent' | 'all'
+      personId?: number | null
     }) =>
       api.organize.execute(
-        libraryId, dryRun, expectedPlanned, expectedPlanHash, excludedSources, mode, groupScope
+        libraryId, dryRun, expectedPlanned, expectedPlanHash, excludedSources, mode, groupScope, personId
       ),
     onSuccess: (_data, vars) => {
       if (!vars.dryRun) {
@@ -948,16 +986,18 @@ export function useOrganizeExecuteJob(libraryId: string) {
       expectedPlanHash,
       excludedSources,
       mode,
-      groupScope
+      groupScope,
+      personId
     }: {
       expectedPlanned?: number
       expectedPlanHash?: string
       excludedSources?: string[]
       mode?: 'move' | 'copy'
       groupScope?: 'prominent' | 'all'
+      personId?: number | null
     }) =>
       api.organize.executeJob(
-        libraryId, expectedPlanned, expectedPlanHash, excludedSources, mode, groupScope
+        libraryId, expectedPlanned, expectedPlanHash, excludedSources, mode, groupScope, personId
       ),
     onSuccess: (snap) => useJobsStore.getState().upsert(snap)
   })

@@ -123,7 +123,7 @@ Helpers `_find_existing_match` and `_match_faces_to_existing_persons` are detail
 
 ---
 
-## Phase 2 — Real FS events + always-on incremental worker — ◻ PLANNED (depends on Phase 1)
+## Phase 2 — Real FS events + always-on incremental worker — ✅ DONE (shipped, wired in `api/app.py`: `IngestWorker` + `LibraryWatcher` constructed in `_lifespan`, gated by `settings.auto_scan_enabled`)
 
 ### FS-event mechanism: add `watchdog`
 

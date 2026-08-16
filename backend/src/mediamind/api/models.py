@@ -300,6 +300,7 @@ class PersonOut(BaseModel):
     face_count: int
     media_count: int
     sample_face_ids: list[int]
+    primary_folder_path: str | None = None
 
 
 class PersonsOut(BaseModel):
@@ -321,6 +322,10 @@ class PersonRenameIn(BaseModel):
 class PersonMergeIn(BaseModel):
     source_id: int
     target_id: int
+
+
+class PersonPrimaryFolderIn(BaseModel):
+    path: str | None
 
 
 class MergeSuggestionOut(BaseModel):
@@ -370,6 +375,7 @@ class OrganizeExecuteIn(BaseModel):
     excluded_sources: list[str] = []  # source_rel values the user unchecked in the review UI
     mode: str = "move"  # "move" (organize, changes originals) | "copy" (export, leaves originals)
     group_scope: str = "prominent"  # "prominent" (dominant person) | "all" (copy into every person's folder)
+    person_id: int | None = None  # scope to one person's primary folder; server resolves the destination
 
 
 class OrganizeActionOut(BaseModel):

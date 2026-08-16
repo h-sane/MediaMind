@@ -117,6 +117,8 @@ def build_organize_plan(
     provider_id: str,
     target_rel: str = "People",
     group_scope: str = "prominent",
+    person_id: int | None = None,
+    target_override: str | None = None,
 ) -> list[PlannedMove]:
     """Return one PlannedMove per file that has at least one face for this provider.
 
@@ -128,9 +130,12 @@ def build_organize_plan(
     "prominent" sends it to the dominant person only (the move/organize
     default); "all" emits one PlannedMove per named person — the export
     fan-out, where the same source is *copied* into every person's folder.
+
+    `person_id`/`target_override`: scope the plan to a single person's
+    matched files (see `build_organize_plan_with_stats`).
     """
     moves, _stayed_unrecognized = build_organize_plan_with_stats(
-        conn, provider_id, target_rel, group_scope
+        conn, provider_id, target_rel, group_scope, person_id, target_override
     )
     return moves
 
@@ -140,6 +145,8 @@ def build_organize_plan_with_stats(
     provider_id: str,
     target_rel: str = "People",
     group_scope: str = "prominent",
+    person_id: int | None = None,
+    target_override: str | None = None,
 ) -> tuple[list[PlannedMove], int]:
     """Same as `build_organize_plan`, plus a count of files that have face
     detections but stay in place because nobody in them is named yet (or the
@@ -149,6 +156,18 @@ def build_organize_plan_with_stats(
     review, already at their destination) since those already have their own
     explicit UI surfacing elsewhere (Respected folders, the pending-review
     panel) — double-counting them here would confuse more than it clarifies.
+
+    `person_id` (a per-person "primary folder" feature): when set, the plan is
+    scoped to just that person's matched files — a file is included only if
+    `person_id` is its sole matched person or the dominant one in a group
+    photo (same dominance rule as the default "prominent" routing, see
+    `_dominant_by_face_count`). All the usual exclusions still apply first
+    (frozen folders, pending-match review, person rejections). Undecoded
+    files are never included — there is no person to scope them to.
+    `target_override`, when set, replaces the normal
+    `<target_rel>/<person name>` destination for this scoped person (and
+    skips the bound-folder-by-person override too — an explicit primary
+    folder always wins). Both are ignored unless `person_id` is set.
     """
     # Person display names: id -> name. Unnamed (auto_label-only) persons are
     # deliberately excluded — organize only ever moves files for people the
@@ -160,6 +179,19 @@ def build_organize_plan_with_stats(
         (provider_id,),
     ):
         person_display[int(p["id"])] = p["name"]
+
+    # For a person-scoped plan, the target person doesn't need to be named —
+    # an explicit primary folder is itself the user's identification of who
+    # this is — so its display name (for PlannedMove.person_name/reason) is
+    # looked up separately, falling back to the auto_label.
+    target_display_name: str | None = None
+    if person_id is not None:
+        row = conn.execute(
+            "SELECT name, auto_label FROM persons WHERE id = ? AND provider_id = ?",
+            (person_id, provider_id),
+        ).fetchone()
+        if row is not None:
+            target_display_name = row["name"] or row["auto_label"]
 
     # Files with an undecided pending-match review (a new photo matched to a
     # named person, awaiting the user's confirm/reject) must never be routed
@@ -251,11 +283,34 @@ def build_organize_plan_with_stats(
     plans: list[PlannedMove] = []
     stayed_unrecognized = 0
 
+    def _dominant_by_face_count(fid: int, candidate_pids: list[int]) -> int:
+        """Whoever has the most face rows in this file among candidate_pids —
+        the tie-break for a group photo with no route_choices override.
+        Shared by the default "prominent" routing and the person-scoped plan
+        so there is one dominance rule, not two."""
+        placeholders = ",".join("?" * len(candidate_pids))
+        row = conn.execute(
+            f"""
+            SELECT person_id, COUNT(*) AS n
+            FROM faces
+            WHERE file_id = ? AND provider_id = ? AND person_id IN ({placeholders})
+            GROUP BY person_id ORDER BY n DESC LIMIT 1
+            """,
+            (fid, provider_id, *candidate_pids),
+        ).fetchone()
+        return int(row["person_id"]) if row else candidate_pids[0]
+
     def _emit(source_rel: str, dest_pid: int, dest_name: str, reason: str) -> None:
         """Route one (file, named person) pair to a folder and append a move,
         applying the bound-folder override and the already-at-destination
-        skip. Shared by the single-person, prominent, and fan-out paths."""
-        if dest_pid in bound_folder_by_person:
+        skip. Shared by the single-person, prominent, and fan-out paths.
+
+        A person-scoped `target_override` wins over everything else (bound
+        folder included) for that scoped person — an explicit primary
+        folder is a stronger signal than a respected pre-existing folder."""
+        if target_override is not None and dest_pid == person_id:
+            dest_folder_rel = target_override
+        elif dest_pid in bound_folder_by_person:
             dest_folder_rel = bound_folder_by_person[dest_pid]
             reason = f"{dest_name}'s folder is respected here"
         else:
@@ -278,9 +333,16 @@ def build_organize_plan_with_stats(
         person_ids: set[int] = fd["person_ids"]
         decoded_ok: bool = fd["decoded_ok"]
 
-        accepted_outliers = _frozen_accepted_outliers(source_rel)
-        if accepted_outliers is not None and fid not in accepted_outliers:
-            continue  # folder (or one of its subfolders) is a respected pre-existing binding
+        # An explicit primary folder (target_override) outranks a respected/
+        # bound folder for the scoped person — see _emit's identical rule.
+        # Skipping the frozen-folder gate here (not just in _emit) matters
+        # because a person's existing photos routinely already live inside
+        # their own bound folder (the common "Lock this folder" case), so
+        # gating here would make target_override never actually reach them.
+        if not (person_id is not None and target_override is not None):
+            accepted_outliers = _frozen_accepted_outliers(source_rel)
+            if accepted_outliers is not None and fid not in accepted_outliers:
+                continue  # folder (or one of its subfolders) is a respected pre-existing binding
 
         if fid in pending_file_ids:
             continue  # awaiting the user's confirm/reject in the pending-match review
@@ -291,6 +353,26 @@ def build_organize_plan_with_stats(
         # "not this person".
         rejected_pids = rejected_by_hash.get(fd["content_hash"] or "", set())
         effective_person_ids = person_ids - rejected_pids
+
+        if person_id is not None:
+            # Person-scoped plan: only this person's files, and only when
+            # they're the sole match or the dominant one in a group photo.
+            # Undecoded files never reach here (no faces row at all), and
+            # the decode-failure sweep below is skipped entirely in scoped
+            # mode — there is no person to scope an unreadable file to.
+            if person_id not in effective_person_ids or not decoded_ok:
+                continue
+            dom_pid = (
+                person_id
+                if len(effective_person_ids) == 1
+                else _dominant_by_face_count(fid, list(effective_person_ids))
+            )
+            if dom_pid != person_id:
+                continue
+            name = target_display_name or "this person"
+            _emit(source_rel, person_id, target_display_name, f"Matched to {name}")
+            continue
+
         if person_ids and not effective_person_ids:
             stayed_unrecognized += 1
             continue
@@ -329,17 +411,7 @@ def build_organize_plan_with_stats(
                 pid = route_choices[fid]
                 reason = f"You assigned this photo to {person_display[pid]}"
             else:
-                placeholders = ",".join("?" * len(named_pids))
-                row = conn.execute(
-                    f"""
-                    SELECT person_id, COUNT(*) AS n
-                    FROM faces
-                    WHERE file_id = ? AND provider_id = ? AND person_id IN ({placeholders})
-                    GROUP BY person_id ORDER BY n DESC LIMIT 1
-                    """,
-                    (fid, provider_id, *named_pids),
-                ).fetchone()
-                pid = int(row["person_id"]) if row else named_pids[0]
+                pid = _dominant_by_face_count(fid, named_pids)
                 reason = f"Most faces in this photo belong to {person_display[pid]}"
             _emit(source_rel, pid, person_display[pid], reason)
 
@@ -349,7 +421,11 @@ def build_organize_plan_with_stats(
     # `files JOIN faces` query above can never see them; without this,
     # undecodable files would silently stay in place forever instead of
     # routing to the visible _unsorted holding area (safety invariant:
-    # "everything routes somewhere").
+    # "everything routes somewhere"). Skipped entirely for a person-scoped
+    # plan — an undecoded file has no person to scope it to.
+    if person_id is not None:
+        return sorted(plans, key=lambda m: (m.dest_folder_rel, m.source_rel)), stayed_unrecognized
+
     unsorted_dest = f"{target_rel}/_Needs Review"
     for row in conn.execute("SELECT id, path FROM files WHERE decoded_ok = 0"):
         fid = int(row["id"])

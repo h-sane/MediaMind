@@ -33,6 +33,7 @@ class PersonSummary:
     face_count: int
     media_count: int
     sample_face_ids: list[int]  # up to 4, largest-bbox-area first
+    primary_folder_path: str | None = None
 
 
 # Pairs of distinct persons whose centroids are at least this cosine-similar
@@ -518,7 +519,7 @@ def latest_faces_scan(conn: sqlite3.Connection) -> sqlite3.Row | None:
 
 def list_person_summaries(conn: sqlite3.Connection, provider_id: str) -> list[PersonSummary]:
     persons = conn.execute(
-        "SELECT id, auto_label, name FROM persons WHERE provider_id = ?",
+        "SELECT id, auto_label, name, primary_folder_path FROM persons WHERE provider_id = ?",
         (provider_id,),
     ).fetchall()
 
@@ -551,6 +552,7 @@ def list_person_summaries(conn: sqlite3.Connection, provider_id: str) -> list[Pe
                 face_count=face_count,
                 media_count=media_count,
                 sample_face_ids=sample_face_ids,
+                primary_folder_path=p["primary_folder_path"],
             )
         )
     return result
@@ -560,6 +562,22 @@ def rename_person(conn: sqlite3.Connection, person_id: int, name: str | None) ->
     cur = conn.execute(
         "UPDATE persons SET name = ? WHERE id = ?",
         (name if name and name.strip() else None, person_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def set_primary_folder(conn: sqlite3.Connection, person_id: int, path: str | None) -> bool:
+    """Set (or clear, with path=None) a person's primary folder — the
+    library-relative destination `organize_plan.build_organize_plan_with_stats`
+    routes their matched files into directly when scoped to this person
+    (`target_override`), bypassing the default People/<name> convention.
+    Path validation (`safe_dest_folder_rel`) happens in the API route, not
+    here, matching how other routes already validate before calling the
+    store."""
+    cur = conn.execute(
+        "UPDATE persons SET primary_folder_path = ? WHERE id = ?",
+        (path, person_id),
     )
     conn.commit()
     return cur.rowcount > 0

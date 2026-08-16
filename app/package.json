@@ -1,6 +1,6 @@
 {
   "name": "mediamind-app",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "MediaMind desktop app — filesystem-first AI media manager",
   "main": "./out/main/index.js",
   "author": "MediaMind contributors",
