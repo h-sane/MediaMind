@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, dialog, clipboard, screen } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, clipboard, screen, session } from 'electron'
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
@@ -317,6 +317,19 @@ app.whenReady().then(async () => {
   console.log(`[main] log file: ${logPath()}`)
   logLine('main', 'app ready')
   registerIpc()
+
+  // Plain <img>/<video>/<audio> tags can't set request headers, so the
+  // renderer streams media straight from the backend with no auth header
+  // attached. Inject it here at the session layer for every request to the
+  // backend's origin instead.
+  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    const token = getBackendInfo()?.token
+    if (token && new URL(details.url).hostname === '127.0.0.1') {
+      details.requestHeaders['X-MediaMind-Token'] = token
+    }
+    callback({ requestHeaders: details.requestHeaders })
+  })
+
   const win = createWindow()
 
   win.webContents.on('render-process-gone', (_event, details) => {

@@ -555,24 +555,16 @@ export const api = {
       return URL.createObjectURL(await res.blob())
     },
 
+    // Direct backend URL — no fetch, no blob. Range-seekable by the browser
+    // itself; the main process injects the auth token header on this origin.
     previewUrl: async (libraryId: string, path: string, size = 2560): Promise<string> => {
-      const { port, token } = await connectBackend()
-      const res = await fetch(
-        `http://127.0.0.1:${port}/v1/libraries/${libraryId}/files/preview?path=${encodeURIComponent(path)}&size=${size}`,
-        { headers: { 'X-MediaMind-Token': token } }
-      )
-      if (!res.ok) throw new Error('Preview unavailable')
-      return URL.createObjectURL(await res.blob())
+      const { port } = await connectBackend()
+      return `http://127.0.0.1:${port}/v1/libraries/${libraryId}/files/preview?path=${encodeURIComponent(path)}&size=${size}`
     },
 
     rawUrl: async (libraryId: string, path: string): Promise<string> => {
-      const { port, token } = await connectBackend()
-      const res = await fetch(
-        `http://127.0.0.1:${port}/v1/libraries/${libraryId}/files/raw?path=${encodeURIComponent(path)}`,
-        { headers: { 'X-MediaMind-Token': token } }
-      )
-      if (!res.ok) throw new Error('File unavailable')
-      return URL.createObjectURL(await res.blob())
+      const { port } = await connectBackend()
+      return `http://127.0.0.1:${port}/v1/libraries/${libraryId}/files/raw?path=${encodeURIComponent(path)}`
     }
   },
 
@@ -592,24 +584,16 @@ export const api = {
       return URL.createObjectURL(await res.blob())
     },
 
+    // Direct backend URL — no fetch, no blob. Range-seekable by the browser
+    // itself; the main process injects the auth token header on this origin.
     previewUrl: async (path: string, size = 2560): Promise<string> => {
-      const { port, token } = await connectBackend()
-      const res = await fetch(
-        `http://127.0.0.1:${port}/v1/fs/preview?path=${encodeURIComponent(path)}&size=${size}`,
-        { headers: { 'X-MediaMind-Token': token } }
-      )
-      if (!res.ok) throw new Error('Preview unavailable')
-      return URL.createObjectURL(await res.blob())
+      const { port } = await connectBackend()
+      return `http://127.0.0.1:${port}/v1/fs/preview?path=${encodeURIComponent(path)}&size=${size}`
     },
 
     rawUrl: async (path: string): Promise<string> => {
-      const { port, token } = await connectBackend()
-      const res = await fetch(
-        `http://127.0.0.1:${port}/v1/fs/raw?path=${encodeURIComponent(path)}`,
-        { headers: { 'X-MediaMind-Token': token } }
-      )
-      if (!res.ok) throw new Error('File unavailable')
-      return URL.createObjectURL(await res.blob())
+      const { port } = await connectBackend()
+      return `http://127.0.0.1:${port}/v1/fs/raw?path=${encodeURIComponent(path)}`
     },
 
     metadata: (path: string) =>

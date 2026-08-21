@@ -107,7 +107,6 @@ export function useFileRawUrl(
 ): { url: string | null; failed: boolean } {
   const [url, setUrl] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
-  const urlRef = useRef<string | null>(null)
 
   useEffect(() => {
     setUrl(null)
@@ -116,13 +115,8 @@ export function useFileRawUrl(
     let cancelled = false
     api.files
       .rawUrl(libraryId, path)
-      .then((objectUrl) => {
-        if (!cancelled) {
-          urlRef.current = objectUrl
-          setUrl(objectUrl)
-        } else {
-          URL.revokeObjectURL(objectUrl)
-        }
+      .then((directUrl) => {
+        if (!cancelled) setUrl(directUrl)
       })
       .catch(() => {
         if (!cancelled) setFailed(true)
@@ -130,10 +124,6 @@ export function useFileRawUrl(
 
     return () => {
       cancelled = true
-      if (urlRef.current) {
-        URL.revokeObjectURL(urlRef.current)
-        urlRef.current = null
-      }
     }
   }, [libraryId, path, enabled])
 
@@ -154,7 +144,6 @@ export function useFilePreviewUrl(
 ): { url: string | null; failed: boolean } {
   const [url, setUrl] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
-  const urlRef = useRef<string | null>(null)
 
   useEffect(() => {
     setUrl(null)
@@ -163,13 +152,8 @@ export function useFilePreviewUrl(
     let cancelled = false
     api.files
       .previewUrl(libraryId, path, size)
-      .then((objectUrl) => {
-        if (!cancelled) {
-          urlRef.current = objectUrl
-          setUrl(objectUrl)
-        } else {
-          URL.revokeObjectURL(objectUrl)
-        }
+      .then((directUrl) => {
+        if (!cancelled) setUrl(directUrl)
       })
       .catch(() => {
         if (!cancelled) setFailed(true)
@@ -177,10 +161,6 @@ export function useFilePreviewUrl(
 
     return () => {
       cancelled = true
-      if (urlRef.current) {
-        URL.revokeObjectURL(urlRef.current)
-        urlRef.current = null
-      }
     }
   }, [libraryId, path, size, enabled])
 
@@ -286,7 +266,6 @@ export function useBrowseRawUrl(
 ): { url: string | null; failed: boolean } {
   const [url, setUrl] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
-  const urlRef = useRef<string | null>(null)
 
   useEffect(() => {
     setUrl(null)
@@ -295,13 +274,8 @@ export function useBrowseRawUrl(
     let cancelled = false
     api.fs
       .rawUrl(path)
-      .then((objectUrl) => {
-        if (!cancelled) {
-          urlRef.current = objectUrl
-          setUrl(objectUrl)
-        } else {
-          URL.revokeObjectURL(objectUrl)
-        }
+      .then((directUrl) => {
+        if (!cancelled) setUrl(directUrl)
       })
       .catch(() => {
         if (!cancelled) setFailed(true)
@@ -309,10 +283,6 @@ export function useBrowseRawUrl(
 
     return () => {
       cancelled = true
-      if (urlRef.current) {
-        URL.revokeObjectURL(urlRef.current)
-        urlRef.current = null
-      }
     }
   }, [path, enabled])
 
@@ -328,7 +298,6 @@ export function useBrowsePreviewUrl(
 ): { url: string | null; failed: boolean } {
   const [url, setUrl] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
-  const urlRef = useRef<string | null>(null)
 
   useEffect(() => {
     setUrl(null)
@@ -337,13 +306,8 @@ export function useBrowsePreviewUrl(
     let cancelled = false
     api.fs
       .previewUrl(path, size)
-      .then((objectUrl) => {
-        if (!cancelled) {
-          urlRef.current = objectUrl
-          setUrl(objectUrl)
-        } else {
-          URL.revokeObjectURL(objectUrl)
-        }
+      .then((directUrl) => {
+        if (!cancelled) setUrl(directUrl)
       })
       .catch(() => {
         if (!cancelled) setFailed(true)
@@ -351,10 +315,6 @@ export function useBrowsePreviewUrl(
 
     return () => {
       cancelled = true
-      if (urlRef.current) {
-        URL.revokeObjectURL(urlRef.current)
-        urlRef.current = null
-      }
     }
   }, [path, size, enabled])
 
