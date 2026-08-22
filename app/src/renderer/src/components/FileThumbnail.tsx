@@ -1,6 +1,7 @@
+import { useEffect, useState } from 'react'
 import { Music } from 'lucide-react'
-import { useBrowseThumbnailUrl, useFileThumbnailUrl } from '../api/hooks'
-import { useNearViewport } from '../hooks/useNearViewport'
+import { fsThumbUrl, libFileThumbUrl } from '../api/client'
+import { useBackendOrigin } from '../api/hooks'
 
 const MEDIA_KINDS = new Set(['image', 'gif', 'video'])
 
@@ -54,30 +55,41 @@ export function FileThumbnail({
   size = 256,
   fit = 'cover'
 }: Props): React.JSX.Element {
-  const [ref, visible] = useNearViewport<HTMLDivElement>()
+  const origin = useBackendOrigin()
   const isMedia = MEDIA_KINDS.has(kind)
-  const wantFetch = visible && isMedia
-  const libraryResult = useFileThumbnailUrl(libraryId ?? '', path, size, !!libraryId && wantFetch)
-  const browseResult = useBrowseThumbnailUrl(path, size, !libraryId && wantFetch)
-  const { url, failed } = libraryId ? libraryResult : browseResult
+  const [failed, setFailed] = useState(false)
+
+  const src =
+    origin && isMedia
+      ? libraryId
+        ? libFileThumbUrl(origin, libraryId, path, size)
+        : fsThumbUrl(origin, path, size)
+      : null
+
+  // Tiles are recycled by the virtualizer — reset the error flag when the
+  // target file changes so a new file isn't shown as "unreadable".
+  useEffect(() => setFailed(false), [src])
 
   const ext = path.includes('.') ? path.slice(path.lastIndexOf('.') + 1) : 'file'
 
   return (
-    <div ref={ref} className={`relative overflow-hidden rounded-lg bg-zinc-100 ${className}`}>
-      {url ? (
-        <img
-          src={url}
-          alt=""
-          draggable={false}
-          className={`h-full w-full ${fit === 'cover' ? 'object-cover' : 'object-contain'}`}
-        />
-      ) : kind === 'audio' ? (
+    <div className={`relative overflow-hidden rounded-lg bg-zinc-100 ${className}`}>
+      {kind === 'audio' ? (
         <AudioIcon label={ext} />
       ) : !isMedia ? (
         <FileIcon label={ext} />
       ) : failed ? (
         <FileIcon label="unreadable" />
+      ) : src ? (
+        <img
+          src={src}
+          alt=""
+          draggable={false}
+          loading="lazy"
+          decoding="async"
+          onError={() => setFailed(true)}
+          className={`h-full w-full bg-zinc-100 ${fit === 'cover' ? 'object-cover' : 'object-contain'}`}
+        />
       ) : (
         <div className="h-full w-full animate-pulse bg-zinc-100" aria-label="Loading thumbnail" />
       )}

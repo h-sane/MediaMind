@@ -64,7 +64,7 @@ function Row({
         title={entry.name}
       >
         {entry.type === 'file' ? (
-          <FileThumbnail path={entry.path} kind={entry.kind ?? 'other'} className="h-5 w-5 shrink-0" />
+          <FileThumbnail path={entry.path} kind={entry.kind ?? 'other'} size={96} className="h-5 w-5 shrink-0" />
         ) : entry.type === 'drive' ? (
           <HardDrive className="h-4 w-4 shrink-0 text-zinc-400" />
         ) : (

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api } from './client'
+import { api, backendOrigin, connectBackend } from './client'
 import { isRealFolder } from '../stores/explorer'
 import { useJobsStore } from '../stores/jobs'
 import type { DuplicateFile, MaterializeBody, Person, Settings, SuggestionMergeBody } from './client'
@@ -51,48 +51,25 @@ export function useLibraryFiles(libraryId: string) {
 }
 
 /**
- * Thumbnail for a file by its library-relative path. Fetch is deferred until
- * `enabled` is true (the grid enables tiles as they approach the viewport so
- * a large folder doesn't fire thousands of requests at once). `failed` lets
- * the tile show a static placeholder for undecodable files.
+ * Backend origin once connected, else null. Lets `FileThumbnail` build a
+ * plain `<img src>` (browser does viewport-fetch + URL cache natively) instead
+ * of a blob fetch. Cheap: resolves synchronously after the first connect.
  */
-export function useFileThumbnailUrl(
-  libraryId: string,
-  path: string,
-  size = 256,
-  enabled = true
-): { url: string | null; failed: boolean } {
-  const [url, setUrl] = useState<string | null>(null)
-  const [failed, setFailed] = useState(false)
-  const urlRef = useRef<string | null>(null)
+export function useBackendOrigin(): string | null {
+  const [origin, setOrigin] = useState<string | null>(backendOrigin())
 
   useEffect(() => {
-    if (!enabled) return
+    if (origin) return
     let cancelled = false
-    api.files
-      .thumbnailUrl(libraryId, path, size)
-      .then((objectUrl) => {
-        if (!cancelled) {
-          urlRef.current = objectUrl
-          setUrl(objectUrl)
-        } else {
-          URL.revokeObjectURL(objectUrl)
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true)
-      })
-
+    void connectBackend().then((info) => {
+      if (!cancelled) setOrigin(`http://127.0.0.1:${info.port}`)
+    })
     return () => {
       cancelled = true
-      if (urlRef.current) {
-        URL.revokeObjectURL(urlRef.current)
-        urlRef.current = null
-      }
     }
-  }, [libraryId, path, size, enabled])
+  }, [origin])
 
-  return { url, failed }
+  return origin
 }
 
 /**
@@ -107,7 +84,6 @@ export function useFileRawUrl(
 ): { url: string | null; failed: boolean } {
   const [url, setUrl] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
-  const urlRef = useRef<string | null>(null)
 
   useEffect(() => {
     setUrl(null)
@@ -116,13 +92,8 @@ export function useFileRawUrl(
     let cancelled = false
     api.files
       .rawUrl(libraryId, path)
-      .then((objectUrl) => {
-        if (!cancelled) {
-          urlRef.current = objectUrl
-          setUrl(objectUrl)
-        } else {
-          URL.revokeObjectURL(objectUrl)
-        }
+      .then((directUrl) => {
+        if (!cancelled) setUrl(directUrl)
       })
       .catch(() => {
         if (!cancelled) setFailed(true)
@@ -130,10 +101,6 @@ export function useFileRawUrl(
 
     return () => {
       cancelled = true
-      if (urlRef.current) {
-        URL.revokeObjectURL(urlRef.current)
-        urlRef.current = null
-      }
     }
   }, [libraryId, path, enabled])
 
@@ -154,7 +121,6 @@ export function useFilePreviewUrl(
 ): { url: string | null; failed: boolean } {
   const [url, setUrl] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
-  const urlRef = useRef<string | null>(null)
 
   useEffect(() => {
     setUrl(null)
@@ -163,13 +129,8 @@ export function useFilePreviewUrl(
     let cancelled = false
     api.files
       .previewUrl(libraryId, path, size)
-      .then((objectUrl) => {
-        if (!cancelled) {
-          urlRef.current = objectUrl
-          setUrl(objectUrl)
-        } else {
-          URL.revokeObjectURL(objectUrl)
-        }
+      .then((directUrl) => {
+        if (!cancelled) setUrl(directUrl)
       })
       .catch(() => {
         if (!cancelled) setFailed(true)
@@ -177,10 +138,6 @@ export function useFilePreviewUrl(
 
     return () => {
       cancelled = true
-      if (urlRef.current) {
-        URL.revokeObjectURL(urlRef.current)
-        urlRef.current = null
-      }
     }
   }, [libraryId, path, size, enabled])
 
@@ -240,45 +197,6 @@ export function useBrowseDir(path: string | null) {
   })
 }
 
-/** Thumbnail for a file by absolute filesystem path (no library needed). */
-export function useBrowseThumbnailUrl(
-  path: string,
-  size = 256,
-  enabled = true
-): { url: string | null; failed: boolean } {
-  const [url, setUrl] = useState<string | null>(null)
-  const [failed, setFailed] = useState(false)
-  const urlRef = useRef<string | null>(null)
-
-  useEffect(() => {
-    if (!enabled) return
-    let cancelled = false
-    api.fs
-      .thumbnailUrl(path, size)
-      .then((objectUrl) => {
-        if (!cancelled) {
-          urlRef.current = objectUrl
-          setUrl(objectUrl)
-        } else {
-          URL.revokeObjectURL(objectUrl)
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true)
-      })
-
-    return () => {
-      cancelled = true
-      if (urlRef.current) {
-        URL.revokeObjectURL(urlRef.current)
-        urlRef.current = null
-      }
-    }
-  }, [path, size, enabled])
-
-  return { url, failed }
-}
-
 /** Full-resolution file content by absolute path, for the in-app viewer. */
 export function useBrowseRawUrl(
   path: string,
@@ -286,7 +204,6 @@ export function useBrowseRawUrl(
 ): { url: string | null; failed: boolean } {
   const [url, setUrl] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
-  const urlRef = useRef<string | null>(null)
 
   useEffect(() => {
     setUrl(null)
@@ -295,13 +212,8 @@ export function useBrowseRawUrl(
     let cancelled = false
     api.fs
       .rawUrl(path)
-      .then((objectUrl) => {
-        if (!cancelled) {
-          urlRef.current = objectUrl
-          setUrl(objectUrl)
-        } else {
-          URL.revokeObjectURL(objectUrl)
-        }
+      .then((directUrl) => {
+        if (!cancelled) setUrl(directUrl)
       })
       .catch(() => {
         if (!cancelled) setFailed(true)
@@ -309,10 +221,6 @@ export function useBrowseRawUrl(
 
     return () => {
       cancelled = true
-      if (urlRef.current) {
-        URL.revokeObjectURL(urlRef.current)
-        urlRef.current = null
-      }
     }
   }, [path, enabled])
 
@@ -328,7 +236,6 @@ export function useBrowsePreviewUrl(
 ): { url: string | null; failed: boolean } {
   const [url, setUrl] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
-  const urlRef = useRef<string | null>(null)
 
   useEffect(() => {
     setUrl(null)
@@ -337,13 +244,8 @@ export function useBrowsePreviewUrl(
     let cancelled = false
     api.fs
       .previewUrl(path, size)
-      .then((objectUrl) => {
-        if (!cancelled) {
-          urlRef.current = objectUrl
-          setUrl(objectUrl)
-        } else {
-          URL.revokeObjectURL(objectUrl)
-        }
+      .then((directUrl) => {
+        if (!cancelled) setUrl(directUrl)
       })
       .catch(() => {
         if (!cancelled) setFailed(true)
@@ -351,10 +253,6 @@ export function useBrowsePreviewUrl(
 
     return () => {
       cancelled = true
-      if (urlRef.current) {
-        URL.revokeObjectURL(urlRef.current)
-        urlRef.current = null
-      }
     }
   }, [path, size, enabled])
 
