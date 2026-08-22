@@ -332,6 +332,18 @@ def thumbnail(
     return Response(content=data, media_type="image/jpeg", headers=_THUMB_CACHE_HEADERS)
 
 
+@router.get("/prewarm")
+def prewarm(request: Request, path: str = Query(...), size: int = Query(default=256, ge=64, le=1024)):
+    """Fire-and-forget: enqueue a background decode of this folder's thumbnails
+    at `size`, so tiles below the fold are cache hits by the time they scroll
+    into view (Phase 5, E1). Returns immediately; a newer call supersedes."""
+    resolved = resolve_os_path(path)
+    if resolved is None or not resolved.is_dir():
+        raise HTTPException(status_code=404, detail="Folder not found")
+    request.app.state.thumb_prewarmer.warm(resolved, size)
+    return {"ok": True}
+
+
 @router.get("/preview")
 def preview(
     path: str = Query(...),

@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { MediaViewer } from '../../components/MediaViewer'
+import { api } from '../../api/client'
 import { useEnsureLibrary, useRecordRecentFile } from '../../api/hooks'
 import { HOME_PATH, isRealFolder, parsePersonView, useExplorerStore } from '../../stores/explorer'
 import { useFolderDropTarget } from '../dnd/useFolderDropTarget'
@@ -15,6 +16,7 @@ import { useDirectoryListing } from './useDirectoryListing'
 
 export function ContentPane(): React.JSX.Element {
   const viewMode = useExplorerStore((s) => s.viewMode)
+  const iconSize = useExplorerStore((s) => s.iconSize)
   const currentPath = useExplorerStore((s) => s.currentPath)
   const searchQuery = useExplorerStore((s) => s.searchQuery)
   const filterType = useExplorerStore((s) => s.filterType)
@@ -40,6 +42,22 @@ export function ContentPane(): React.JSX.Element {
         .map((e) => ({ path: e.path, kind: e.kind ?? 'other' })),
     [entries]
   )
+
+  // Pre-warm this folder's thumbnails at the tile size the active view renders
+  // (icons/gallery scale with the size setting; every other view draws at 96).
+  // Backend caches are keyed by exact size, so warming any other size is waste.
+  const warmSize =
+    viewMode === 'icons' || viewMode === 'gallery'
+      ? iconSize === 'small'
+        ? 96
+        : iconSize === 'medium'
+          ? 128
+          : 256
+      : 96
+  useEffect(() => {
+    if (!isRealFolder(currentPath)) return
+    api.fs.prewarm(currentPath, warmSize).catch(() => {})
+  }, [currentPath, warmSize])
 
   function openFile(path: string): void {
     const idx = mediaFiles.findIndex((f) => f.path === path)
