@@ -27,6 +27,7 @@ models/downloads/
 
 # Personal test media (real photos/videos used for manual E2E testing — never commit)
 /test/
+.claude/
 
 # Raw gathered datasets (read-only source material — never commit, never edit
 # directly; curated fixtures get copied from here into /test/<feature>/
