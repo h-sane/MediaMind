@@ -117,31 +117,17 @@ def list_dir(request: Request, path: str = Query(...)):
 
     folders: list[BrowseFolderOut] = []
     files: list[BrowseFileOut] = []
+    # Collect subfolders first so their has-media state can be looked up in one
+    # batched query over a single DB connection, rather than one connect/close
+    # cycle per subfolder (C1). `entry.stat()` is free here — scandir already
+    # cached it during enumeration.
+    subdirs: list[tuple[os.DirEntry, Path, os.stat_result]] = []
     for entry in entries:
         try:
             if entry.is_dir(follow_symlinks=False):
                 if entry.name == LIBRARY_DATA_DIRNAME or is_noise_dir(entry.name):
                     continue
-                entry_path = Path(entry.path)
-                status = media_index.check_full(entry_path)
-                if status is not None and status.has_media is False and status.has_any_file:
-                    continue  # confirmed junk: has files, but none of them media
-                has_media = None if status is None else status.has_media
-                dir_stat = entry.stat()
-                facts = stat_facts(entry_path, dir_stat)
-                folders.append(
-                    BrowseFolderOut(
-                        name=entry.name,
-                        path=str(entry_path),
-                        has_media=has_media,
-                        mtime=dir_stat.st_mtime,
-                        created=facts.created,
-                        accessed=facts.accessed,
-                        read_only=facts.read_only,
-                        hidden=facts.hidden,
-                        system=facts.system,
-                    )
-                )
+                subdirs.append((entry, Path(entry.path), entry.stat()))
             elif entry.is_file(follow_symlinks=False):
                 entry_path = Path(entry.path)
                 kind = explorer_kind_of(entry_path)
@@ -166,9 +152,71 @@ def list_dir(request: Request, path: str = Query(...)):
         except OSError:
             continue
 
+    statuses = media_index.check_full_many(
+        [(p, dir_stat.st_mtime_ns) for _, p, dir_stat in subdirs]
+    )
+    for entry, entry_path, dir_stat in subdirs:
+        status = statuses.get(str(entry_path))
+        if status is not None and status.has_media is False and status.has_any_file:
+            continue  # confirmed junk: has files, but none of them media
+        try:
+            facts = stat_facts(entry_path, dir_stat)
+        except OSError:
+            continue
+        folders.append(
+            BrowseFolderOut(
+                name=entry.name,
+                path=str(entry_path),
+                has_media=None if status is None else status.has_media,
+                mtime=dir_stat.st_mtime,
+                created=facts.created,
+                accessed=facts.accessed,
+                read_only=facts.read_only,
+                hidden=facts.hidden,
+                system=facts.system,
+            )
+        )
+
     folders.sort(key=lambda f: f.name.lower())
     files.sort(key=lambda f: f.name.lower())
     return BrowseDirOut(path=str(resolved), folders=folders, files=files)
+
+
+class HasMediaOut(BaseModel):
+    # Keyed by the *input* path string so the client gets back exactly the keys
+    # it asked about. null = still walking in the background.
+    statuses: dict[str, bool | None]
+    # Confirmed junk (files present, none of them media) — the client hides
+    # these, matching `list_dir`'s server-side filter so a folder that resolves
+    # to junk vanishes exactly as a full `/fs/list` refetch would have.
+    junk: list[str]
+
+
+@router.get("/has-media", response_model=HasMediaOut)
+def has_media(request: Request, paths: list[str] = Query(default=[])) -> HasMediaOut:
+    """Poll-only endpoint: resolve just the subfolders still marked unknown,
+    instead of re-fetching the whole `/fs/list` every 1.5 s (C3)."""
+    media_index: MediaIndex = request.app.state.media_index
+    valid: list[tuple[str, Path, int]] = []
+    for raw in paths:
+        resolved = resolve_os_path(raw)
+        if resolved is None or not resolved.is_dir():
+            continue
+        try:
+            mtime_ns = resolved.stat().st_mtime_ns
+        except OSError:
+            continue
+        valid.append((raw, resolved, mtime_ns))
+
+    results = media_index.check_full_many([(r, m) for _, r, m in valid])
+    statuses: dict[str, bool | None] = {}
+    junk: list[str] = []
+    for raw, resolved, _ in valid:
+        status = results.get(str(resolved))
+        if status is not None and status.has_media is False and status.has_any_file:
+            junk.append(raw)
+        statuses[raw] = None if status is None else status.has_media
+    return HasMediaOut(statuses=statuses, junk=junk)
 
 
 # ---------------------------------------------------------------------------
