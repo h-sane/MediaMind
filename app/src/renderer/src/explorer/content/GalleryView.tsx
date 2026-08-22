@@ -20,11 +20,14 @@ import type { DirEntry } from './useDirectoryListing'
  * mirrors `IconGridView.tsx`'s `ICON_SIZE_CONFIG` (same tile markup, so the
  * same measured row heights apply) — used by `GroupedVirtualGrid` to
  * estimate virtualized row size. */
-const ICON_SIZE_CONFIG: Record<IconSize, { thumbClass: string; iconClass: string; cellHeight: number }> = {
-  'extra-large': { thumbClass: 'h-32 w-32', iconClass: 'h-14 w-14', cellHeight: 188 },
-  large: { thumbClass: 'h-24 w-24', iconClass: 'h-10 w-10', cellHeight: 150 },
-  medium: { thumbClass: 'h-16 w-16', iconClass: 'h-7 w-7', cellHeight: 116 },
-  small: { thumbClass: 'h-9 w-9', iconClass: 'h-5 w-5', cellHeight: 80 }
+const ICON_SIZE_CONFIG: Record<
+  IconSize,
+  { thumbClass: string; iconClass: string; cellHeight: number; thumbPx: number }
+> = {
+  'extra-large': { thumbClass: 'h-32 w-32', iconClass: 'h-14 w-14', cellHeight: 188, thumbPx: 256 },
+  large: { thumbClass: 'h-24 w-24', iconClass: 'h-10 w-10', cellHeight: 150, thumbPx: 256 },
+  medium: { thumbClass: 'h-16 w-16', iconClass: 'h-7 w-7', cellHeight: 116, thumbPx: 128 },
+  small: { thumbClass: 'h-9 w-9', iconClass: 'h-5 w-5', cellHeight: 80, thumbPx: 96 }
 }
 
 interface Props {
@@ -44,6 +47,7 @@ interface TileProps {
   onItemClick: (e: React.MouseEvent, path: string) => void
   thumbClass: string
   iconClass: string
+  thumbPx: number
 }
 
 function Tile({
@@ -57,7 +61,8 @@ function Tile({
   currentPath,
   onItemClick,
   thumbClass,
-  iconClass
+  iconClass,
+  thumbPx
 }: TileProps): React.JSX.Element {
   const { ref, isDragging, isOver } = useEntryDnd(entry, orderedPaths)
 
@@ -77,7 +82,7 @@ function Tile({
         title={entry.name}
       >
         {entry.type === 'file' ? (
-          <FileThumbnail path={entry.path} kind={entry.kind ?? 'other'} className={thumbClass} />
+          <FileThumbnail path={entry.path} kind={entry.kind ?? 'other'} className={thumbClass} size={thumbPx} />
         ) : (
           <div className={`flex items-center justify-center rounded-lg bg-zinc-50 ${thumbClass}`}>
             {entry.type === 'drive' ? (
@@ -173,6 +178,7 @@ export function GalleryView({ entries, onOpenFile }: Props): React.JSX.Element {
               onItemClick={onItemClick}
               thumbClass={sizeConfig.thumbClass}
               iconClass={sizeConfig.iconClass}
+              thumbPx={sizeConfig.thumbPx}
             />
           )}
         />

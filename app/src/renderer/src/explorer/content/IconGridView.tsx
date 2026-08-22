@@ -19,11 +19,14 @@ import type { DirEntry } from './useDirectoryListing'
 /** The four Explorer icon-size tiers (`Ctrl+Shift+1-4`). `large` matches
  * this view's original single fixed size exactly, so the default stays
  * pixel-identical for anyone who never touches icon size. */
-const ICON_SIZE_CONFIG: Record<IconSize, { cellWidth: number; cellHeight: number; thumbClass: string; iconClass: string }> = {
-  'extra-large': { cellWidth: 176, cellHeight: 188, thumbClass: 'h-32 w-32', iconClass: 'h-14 w-14' },
-  large: { cellWidth: 140, cellHeight: 150, thumbClass: 'h-24 w-24', iconClass: 'h-10 w-10' },
-  medium: { cellWidth: 104, cellHeight: 116, thumbClass: 'h-16 w-16', iconClass: 'h-7 w-7' },
-  small: { cellWidth: 72, cellHeight: 80, thumbClass: 'h-9 w-9', iconClass: 'h-5 w-5' }
+const ICON_SIZE_CONFIG: Record<
+  IconSize,
+  { cellWidth: number; cellHeight: number; thumbClass: string; iconClass: string; thumbPx: number }
+> = {
+  'extra-large': { cellWidth: 176, cellHeight: 188, thumbClass: 'h-32 w-32', iconClass: 'h-14 w-14', thumbPx: 256 },
+  large: { cellWidth: 140, cellHeight: 150, thumbClass: 'h-24 w-24', iconClass: 'h-10 w-10', thumbPx: 256 },
+  medium: { cellWidth: 104, cellHeight: 116, thumbClass: 'h-16 w-16', iconClass: 'h-7 w-7', thumbPx: 128 },
+  small: { cellWidth: 72, cellHeight: 80, thumbClass: 'h-9 w-9', iconClass: 'h-5 w-5', thumbPx: 96 }
 }
 
 interface Props {
@@ -44,6 +47,7 @@ interface TileProps {
   navigate: (path: string) => void
   thumbClass: string
   iconClass: string
+  thumbPx: number
 }
 
 function Tile({
@@ -58,7 +62,8 @@ function Tile({
   onItemClick,
   navigate,
   thumbClass,
-  iconClass
+  iconClass,
+  thumbPx
 }: TileProps): React.JSX.Element {
   const { ref, isDragging, isOver } = useEntryDnd(entry, orderedPaths)
 
@@ -78,7 +83,7 @@ function Tile({
         title={entry.name}
       >
         {entry.type === 'file' ? (
-          <FileThumbnail path={entry.path} kind={entry.kind ?? 'other'} className={thumbClass} />
+          <FileThumbnail path={entry.path} kind={entry.kind ?? 'other'} className={thumbClass} size={thumbPx} />
         ) : (
           <div className={`flex items-center justify-center rounded-lg bg-zinc-50 ${thumbClass}`}>
             {entry.type === 'drive' ? (
@@ -217,6 +222,7 @@ export function IconGridView({ entries, onOpenFile }: Props): React.JSX.Element 
                         navigate={navigate}
                         thumbClass={sizeConfig.thumbClass}
                         iconClass={sizeConfig.iconClass}
+                        thumbPx={sizeConfig.thumbPx}
                       />
                     ))}
                   </div>
@@ -254,6 +260,7 @@ export function IconGridView({ entries, onOpenFile }: Props): React.JSX.Element 
                         navigate={navigate}
                         thumbClass={sizeConfig.thumbClass}
                         iconClass={sizeConfig.iconClass}
+                        thumbPx={sizeConfig.thumbPx}
                       />
                     ))}
                   </div>

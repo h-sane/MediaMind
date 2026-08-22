@@ -74,7 +74,7 @@ function Row({
         } ${isDragging ? 'opacity-40' : ''} ${isOver ? 'ring-2 ring-inset ring-blue-400 bg-blue-50' : ''}`}
       >
         {entry.type === 'file' ? (
-          <FileThumbnail path={entry.path} kind={entry.kind ?? 'other'} className="h-9 w-9 shrink-0" />
+          <FileThumbnail path={entry.path} kind={entry.kind ?? 'other'} size={96} className="h-9 w-9 shrink-0" />
         ) : (
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-zinc-50">
             {entry.type === 'drive' ? (

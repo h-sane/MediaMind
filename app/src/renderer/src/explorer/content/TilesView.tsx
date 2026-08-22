@@ -72,7 +72,7 @@ function Tile({
         title={entry.name}
       >
         {entry.type === 'file' ? (
-          <FileThumbnail path={entry.path} kind={entry.kind ?? 'other'} className="h-11 w-11 shrink-0" />
+          <FileThumbnail path={entry.path} kind={entry.kind ?? 'other'} size={96} className="h-11 w-11 shrink-0" />
         ) : (
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-zinc-50">
             {entry.type === 'drive' ? (
