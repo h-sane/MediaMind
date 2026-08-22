@@ -10,9 +10,20 @@ short denylist (MediaMind's own app data, or any `.mediamind` folder).
 
 from __future__ import annotations
 
+import os
+from functools import lru_cache
 from pathlib import Path
 
 from mediamind.config import LIBRARY_DATA_DIRNAME, app_data_dir
+
+
+@lru_cache(maxsize=8)
+def _resolved_app_data(_override: str | None) -> Path:
+    """`app_data_dir().resolve()` is a mkdir + a canonicalizing open every call;
+    the result is constant for the process, so cache it. Keyed on the
+    MEDIAMIND_DATA_DIR override so tests (which vary it per-test) and the
+    isolated-app-data workflow still see the right directory."""
+    return app_data_dir().resolve()
 
 
 def resolve_os_path(raw: str) -> Path | None:
@@ -33,7 +44,7 @@ def resolve_os_path(raw: str) -> Path | None:
         resolved = candidate.resolve()
         if not resolved.exists():
             return None
-        app_data = app_data_dir().resolve()
+        app_data = _resolved_app_data(os.environ.get("MEDIAMIND_DATA_DIR"))
         if resolved == app_data or app_data in resolved.parents:
             return None
         if LIBRARY_DATA_DIRNAME in resolved.parts:

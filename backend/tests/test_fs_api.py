@@ -225,6 +225,53 @@ def test_media_index_migrates_pre_has_any_file_schema(tmp_path):
     assert status.has_media is True
 
 
+def test_media_index_check_full_many_batches(tmp_path):
+    """Batched lookup schedules walks for unknowns, then returns cached
+    statuses matching per-folder check_full — over a single connection."""
+    with_media = tmp_path / "has"
+    with_media.mkdir()
+    Image.new("RGB", (8, 8), (255, 0, 0)).save(with_media / "photo.jpg")
+    junk = tmp_path / "junk"
+    junk.mkdir()
+    (junk / "notes.txt").write_text("not media")
+
+    index = MediaIndex(tmp_path / "index.sqlite3")
+    items = [(p, p.stat().st_mtime_ns) for p in (with_media, junk)]
+
+    first = index.check_full_many(items)
+    assert first[str(with_media)] is None and first[str(junk)] is None  # unknown, walks scheduled
+
+    deadline = time.time() + 2.0
+    result = index.check_full_many(items)
+    while any(v is None for v in result.values()) and time.time() < deadline:
+        time.sleep(0.02)
+        result = index.check_full_many(items)
+
+    assert result[str(with_media)].has_media is True
+    assert result[str(junk)].has_media is False and result[str(junk)].has_any_file is True
+    assert index.check_full_many([]) == {}  # empty is a no-op
+
+
+def test_has_media_endpoint_polls_only_given_paths(client, tmp_path):
+    root = tmp_path / "root"
+    (root / "album").mkdir(parents=True)
+    Image.new("RGB", (8, 8), (255, 0, 0)).save(root / "album" / "photo.jpg")
+    (root / "junk").mkdir()
+    (root / "junk" / "notes.txt").write_text("not media")
+    album, junk = str(root / "album"), str(root / "junk")
+
+    deadline = time.time() + 2.0
+    resp = client.get("/v1/fs/has-media", params={"paths": [album, junk]})
+    assert resp.status_code == 200
+    while resp.json()["statuses"][album] is None and time.time() < deadline:
+        time.sleep(0.02)
+        resp = client.get("/v1/fs/has-media", params={"paths": [album, junk]})
+    body = resp.json()
+    assert body["statuses"][album] is True
+    assert body["statuses"][junk] is False
+    assert junk in body["junk"]  # confirmed junk flagged for hiding
+
+
 # ---------------------------------------------------------------------------
 # FolderStatsIndex — lazy recursive count/size cache (M12 Phase E)
 # ---------------------------------------------------------------------------

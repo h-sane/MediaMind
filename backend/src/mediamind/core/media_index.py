@@ -144,6 +144,59 @@ class MediaIndex:
                 self._executor.submit(self._walk_and_store, path)
         return None
 
+    def check_full_many(self, items: list[tuple[Path, int]]) -> dict[str, MediaStatus | None]:
+        """Batched `check_full` for many folders over a single connection.
+
+        `items` is (path, current_mtime_ns) pairs — the caller passes the mtime
+        because it already has it from its own `scandir` (free on Windows), so
+        this avoids one `stat()` per folder on top of avoiding one connect/close
+        cycle per folder. Returns {str(path): status-or-None}; schedules
+        background walks for the unknown/stale ones, deduped like `check_full`.
+        """
+        if not items:
+            return {}
+        keys = [str(p) for p, _ in items]
+        rows: dict[str, sqlite3.Row] = {}
+        conn = self._connect()
+        try:
+            # Chunk under SQLite's default 999-variable limit.
+            for i in range(0, len(keys), 900):
+                chunk = keys[i : i + 900]
+                placeholders = ",".join("?" * len(chunk))
+                for row in conn.execute(
+                    f"SELECT path, has_media, has_any_file, dir_mtime_ns, checked_at "
+                    f"FROM dir_media WHERE path IN ({placeholders})",
+                    chunk,
+                ):
+                    rows[row["path"]] = row
+        finally:
+            conn.close()
+
+        now = time.time()
+        result: dict[str, MediaStatus | None] = {}
+        to_schedule: list[Path] = []
+        for path, mtime_ns in items:
+            key = str(path)
+            row = rows.get(key)
+            if (
+                row is not None
+                and row["dir_mtime_ns"] == mtime_ns
+                and now - row["checked_at"] <= CACHE_TTL_SECONDS
+            ):
+                result[key] = MediaStatus(bool(row["has_media"]), bool(row["has_any_file"]))
+            else:
+                result[key] = None
+                to_schedule.append(path)
+
+        if to_schedule:
+            with self._lock:
+                for path in to_schedule:
+                    key = str(path)
+                    if key not in self._inflight:
+                        self._inflight.add(key)
+                        self._executor.submit(self._walk_and_store, path)
+        return result
+
     def _lookup(self, path: Path) -> MediaStatus | None:
         try:
             current_mtime_ns = path.stat().st_mtime_ns

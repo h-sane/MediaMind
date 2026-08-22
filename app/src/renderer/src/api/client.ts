@@ -587,6 +587,14 @@ export const api = {
     list: (path: string) =>
       request<BrowseDir>('GET', `/v1/fs/list?path=${encodeURIComponent(path)}`),
 
+    // Poll has-media for just the still-unknown subfolders, instead of
+    // re-fetching the whole listing. Returns { statuses: { path: bool|null } }.
+    hasMedia: (paths: string[]) =>
+      request<{ statuses: Record<string, boolean | null>; junk: string[] }>(
+        'GET',
+        `/v1/fs/has-media?${paths.map((p) => `paths=${encodeURIComponent(p)}`).join('&')}`
+      ),
+
     // Thumbnails are plain `<img src>` now — see `fsThumbUrl`.
     // Direct backend URL — no fetch, no blob. Range-seekable by the browser
     // itself; the main process injects the auth token header on this origin.

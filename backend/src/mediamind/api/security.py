@@ -12,21 +12,36 @@ from __future__ import annotations
 
 import hmac
 
-from fastapi import Request
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 
 TOKEN_HEADER = "X-MediaMind-Token"
+_TOKEN_HEADER_BYTES = TOKEN_HEADER.lower().encode("latin-1")
 
 
-class TokenAuthMiddleware(BaseHTTPMiddleware):
+class TokenAuthMiddleware:
+    """Pure-ASGI token gate.
+
+    Deliberately not a `BaseHTTPMiddleware`: that wraps every request in its own
+    anyio sub-task over memory streams, which is per-request overhead that
+    compounds at the hundreds of thumbnail requests a single folder can fire.
+    Only HTTP scopes are gated — WebSocket auth is validated inline in the
+    /v1/progress endpoint.
+    """
+
     def __init__(self, app, token: str | None):
-        super().__init__(app)
+        self.app = app
         self._token = token or None
 
-    async def dispatch(self, request: Request, call_next):
-        if self._token is not None:
-            sent = request.headers.get(TOKEN_HEADER, "")
+    async def __call__(self, scope, receive, send):
+        if self._token is not None and scope["type"] == "http":
+            sent = ""
+            for name, value in scope["headers"]:
+                if name == _TOKEN_HEADER_BYTES:
+                    sent = value.decode("latin-1")
+                    break
             if not hmac.compare_digest(sent, self._token):
-                return JSONResponse(status_code=401, content={"detail": "invalid token"})
-        return await call_next(request)
+                await JSONResponse(status_code=401, content={"detail": "invalid token"})(
+                    scope, receive, send
+                )
+                return
+        await self.app(scope, receive, send)

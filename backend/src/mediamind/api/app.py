@@ -128,19 +128,23 @@ def create_app(
     )
     app.add_middleware(TokenAuthMiddleware, token=_token)
 
-    @app.middleware("http")
-    async def log_requests(request: Request, call_next):
-        start = time.perf_counter()
-        response = await call_next(request)
-        duration_ms = (time.perf_counter() - start) * 1000
-        logger.info(
-            "%s %s -> %d (%.1fms)",
-            request.method,
-            request.url.path,
-            response.status_code,
-            duration_ms,
-        )
-        return response
+    # Per-request logging is a BaseHTTPMiddleware sub-task on every request and
+    # spams one line per thumbnail tile; opt in with MEDIAMIND_LOG_REQUESTS when
+    # debugging the API, off by default so browsing stays cheap.
+    if os.environ.get("MEDIAMIND_LOG_REQUESTS"):
+        @app.middleware("http")
+        async def log_requests(request: Request, call_next):
+            start = time.perf_counter()
+            response = await call_next(request)
+            duration_ms = (time.perf_counter() - start) * 1000
+            logger.info(
+                "%s %s -> %d (%.1fms)",
+                request.method,
+                request.url.path,
+                response.status_code,
+                duration_ms,
+            )
+            return response
 
     # CORS: the Electron renderer calls this API from a different origin than
     # the engine (a different localhost port in dev, a `file://` origin once
