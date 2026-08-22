@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Folder, HardDrive } from 'lucide-react'
 import { FileThumbnail } from '../../components/FileThumbnail'
 import { useExplorerStore } from '../../stores/explorer'
@@ -7,8 +7,8 @@ import { useSelectionStore } from '../../stores/selection'
 import { ExplorerContextMenu } from '../context/ContextMenu'
 import { useEntryDnd } from '../dnd/useEntryDnd'
 import { RenameInput } from '../interactions/RenameInput'
-import { useFileOps } from '../useFileOps'
 import { useSelectionModel } from '../selection/useSelectionModel'
+import { useTileFlags } from '../selection/useTileFlags'
 import { groupEntries } from './grouping'
 import { GroupedVirtualGrid } from './GroupedVirtualGrid'
 import { useIconSizeZoom } from './useIconSizeZoom'
@@ -39,10 +39,6 @@ interface TileProps {
   entry: DirEntry
   orderedPaths: string[]
   onOpenFile: (path: string) => void
-  isSelected: boolean
-  isCut: boolean
-  isRenaming: boolean
-  isFocused: boolean
   currentPath: string | null
   onItemClick: (e: React.MouseEvent, path: string) => void
   thumbClass: string
@@ -50,14 +46,10 @@ interface TileProps {
   thumbPx: number
 }
 
-function Tile({
+const Tile = memo(function Tile({
   entry,
   orderedPaths,
   onOpenFile,
-  isSelected,
-  isCut,
-  isRenaming,
-  isFocused,
   currentPath,
   onItemClick,
   thumbClass,
@@ -65,48 +57,47 @@ function Tile({
   thumbPx
 }: TileProps): React.JSX.Element {
   const { ref, isDragging, isOver } = useEntryDnd(entry, orderedPaths)
+  const { isSelected, isCut, isRenaming, isFocused } = useTileFlags(entry.path)
 
   return (
-    <ExplorerContextMenu entry={entry} orderedPaths={orderedPaths} onOpenFile={onOpenFile}>
-      <button
-        type="button"
-        ref={ref}
-        data-entry-path={entry.path}
-        onClick={(e) => onItemClick(e, entry.path)}
-        onDoubleClick={() => onOpenFile(entry.path)}
-        className={`flex flex-col items-center gap-1 rounded-lg p-2 text-center hover:bg-zinc-100 ${
-          isSelected ? 'bg-blue-100 hover:bg-blue-100' : ''
-        } ${isFocused ? 'outline outline-1 outline-offset-[-2px] outline-zinc-500' : ''} ${
-          isCut ? 'opacity-40' : ''
-        } ${isDragging ? 'opacity-40' : ''} ${isOver ? 'ring-2 ring-inset ring-blue-400 bg-blue-50' : ''}`}
-        title={entry.name}
-      >
-        {entry.type === 'file' ? (
-          <FileThumbnail path={entry.path} kind={entry.kind ?? 'other'} className={thumbClass} size={thumbPx} />
-        ) : (
-          <div className={`flex items-center justify-center rounded-lg bg-zinc-50 ${thumbClass}`}>
-            {entry.type === 'drive' ? (
-              <HardDrive className={`${iconClass} text-zinc-300`} />
-            ) : (
-              <Folder className={`${iconClass} text-amber-300`} />
-            )}
-          </div>
-        )}
-        {isRenaming ? (
-          <RenameInput
-            path={entry.path}
-            name={entry.name}
-            isFile
-            folder={currentPath ?? ''}
-            className="w-full rounded border border-blue-500 px-1 py-0 text-center text-xs outline-none"
-          />
-        ) : (
-          <span className="w-full truncate text-xs text-zinc-600">{entry.name}</span>
-        )}
-      </button>
-    </ExplorerContextMenu>
+    <button
+      type="button"
+      ref={ref}
+      data-entry-path={entry.path}
+      onClick={(e) => onItemClick(e, entry.path)}
+      onDoubleClick={() => onOpenFile(entry.path)}
+      className={`flex flex-col items-center gap-1 rounded-lg p-2 text-center hover:bg-zinc-100 ${
+        isSelected ? 'bg-blue-100 hover:bg-blue-100' : ''
+      } ${isFocused ? 'outline outline-1 outline-offset-[-2px] outline-zinc-500' : ''} ${
+        isCut ? 'opacity-40' : ''
+      } ${isDragging ? 'opacity-40' : ''} ${isOver ? 'ring-2 ring-inset ring-blue-400 bg-blue-50' : ''}`}
+      title={entry.name}
+    >
+      {entry.type === 'file' ? (
+        <FileThumbnail path={entry.path} kind={entry.kind ?? 'other'} className={thumbClass} size={thumbPx} />
+      ) : (
+        <div className={`flex items-center justify-center rounded-lg bg-zinc-50 ${thumbClass}`}>
+          {entry.type === 'drive' ? (
+            <HardDrive className={`${iconClass} text-zinc-300`} />
+          ) : (
+            <Folder className={`${iconClass} text-amber-300`} />
+          )}
+        </div>
+      )}
+      {isRenaming ? (
+        <RenameInput
+          path={entry.path}
+          name={entry.name}
+          isFile
+          folder={currentPath ?? ''}
+          className="w-full rounded border border-blue-500 px-1 py-0 text-center text-xs outline-none"
+        />
+      ) : (
+        <span className="w-full truncate text-xs text-zinc-600">{entry.name}</span>
+      )}
+    </button>
   )
-}
+})
 
 /**
  * Explorer's "Gallery" view (Phase O) — a recursive, always date-grouped
@@ -124,7 +115,6 @@ function Tile({
  */
 export function GalleryView({ entries, onOpenFile }: Props): React.JSX.Element {
   const currentPath = useExplorerStore((s) => s.currentPath)
-  const renamingPath = useSelectionStore((s) => s.renamingPath)
   const focusedPath = useSelectionStore((s) => s.focusedPath)
   const iconSize = useExplorerStore((s) => s.iconSize)
   const setContentColumns = useExplorerStore((s) => s.setContentColumns)
@@ -134,9 +124,8 @@ export function GalleryView({ entries, onOpenFile }: Props): React.JSX.Element {
   const [columns, setColumns] = useState(6)
   useIconSizeZoom(scrollRef)
 
-  const orderedPaths = entries.map((e) => e.path)
-  const { onItemClick, isSelected } = useSelectionModel(orderedPaths)
-  const fileOps = useFileOps()
+  const orderedPaths = useMemo(() => entries.map((e) => e.path), [entries])
+  const { onItemClick } = useSelectionModel(orderedPaths)
   const groups = useMemo(() => groupEntries(entries, 'date'), [entries])
 
   useEffect(() => {
@@ -155,7 +144,7 @@ export function GalleryView({ entries, onOpenFile }: Props): React.JSX.Element {
   }, [columns, setContentColumns])
 
   return (
-    <ExplorerContextMenu entry={null} orderedPaths={orderedPaths} onOpenFile={onOpenFile}>
+    <ExplorerContextMenu entries={entries} orderedPaths={orderedPaths} onOpenFile={onOpenFile}>
       <div ref={scrollRef} className="h-full overflow-y-auto p-3">
         <GroupedVirtualGrid
           groups={groups}
@@ -170,10 +159,6 @@ export function GalleryView({ entries, onOpenFile }: Props): React.JSX.Element {
               entry={entry}
               orderedPaths={orderedPaths}
               onOpenFile={onOpenFile}
-              isSelected={isSelected(entry.path)}
-              isCut={fileOps.isCut(entry.path)}
-              isRenaming={renamingPath === entry.path}
-              isFocused={focusedPath === entry.path}
               currentPath={currentPath}
               onItemClick={onItemClick}
               thumbClass={sizeConfig.thumbClass}

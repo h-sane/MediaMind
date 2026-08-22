@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Folder, HardDrive } from 'lucide-react'
 import { FileThumbnail } from '../../components/FileThumbnail'
@@ -10,9 +10,10 @@ import { useEntryDnd } from '../dnd/useEntryDnd'
 import { RenameInput } from '../interactions/RenameInput'
 import { MarqueeLayer } from '../selection/MarqueeLayer'
 import { useMarqueeSelect } from '../selection/useMarqueeSelect'
-import { useFileOps } from '../useFileOps'
 import { useSelectionModel } from '../selection/useSelectionModel'
+import { useTileFlags } from '../selection/useTileFlags'
 import { groupEntries } from './grouping'
+import { GroupedVirtualGrid } from './GroupedVirtualGrid'
 import { useIconSizeZoom } from './useIconSizeZoom'
 import type { DirEntry } from './useDirectoryListing'
 
@@ -38,10 +39,6 @@ interface TileProps {
   entry: DirEntry
   orderedPaths: string[]
   onOpenFile: (path: string) => void
-  isSelected: boolean
-  isCut: boolean
-  isRenaming: boolean
-  isFocused: boolean
   currentPath: string | null
   onItemClick: (e: React.MouseEvent, path: string) => void
   navigate: (path: string) => void
@@ -50,14 +47,10 @@ interface TileProps {
   thumbPx: number
 }
 
-function Tile({
+const Tile = memo(function Tile({
   entry,
   orderedPaths,
   onOpenFile,
-  isSelected,
-  isCut,
-  isRenaming,
-  isFocused,
   currentPath,
   onItemClick,
   navigate,
@@ -66,56 +59,54 @@ function Tile({
   thumbPx
 }: TileProps): React.JSX.Element {
   const { ref, isDragging, isOver } = useEntryDnd(entry, orderedPaths)
+  const { isSelected, isCut, isRenaming, isFocused } = useTileFlags(entry.path)
 
   return (
-    <ExplorerContextMenu entry={entry} orderedPaths={orderedPaths} onOpenFile={onOpenFile}>
-      <button
-        type="button"
-        ref={ref}
-        data-entry-path={entry.path}
-        onClick={(e) => onItemClick(e, entry.path)}
-        onDoubleClick={() => (entry.type === 'file' ? onOpenFile(entry.path) : navigate(entry.path))}
-        className={`flex flex-col items-center gap-1 rounded-lg p-2 text-center hover:bg-zinc-100 ${
-          isSelected ? 'bg-blue-100 hover:bg-blue-100' : ''
-        } ${isFocused ? 'outline outline-1 outline-offset-[-2px] outline-zinc-500' : ''} ${
-          isCut ? 'opacity-40' : ''
-        } ${isDragging ? 'opacity-40' : ''} ${isOver ? 'ring-2 ring-inset ring-blue-400 bg-blue-50' : ''}`}
-        title={entry.name}
-      >
-        {entry.type === 'file' ? (
-          <FileThumbnail path={entry.path} kind={entry.kind ?? 'other'} className={thumbClass} size={thumbPx} />
-        ) : (
-          <div className={`flex items-center justify-center rounded-lg bg-zinc-50 ${thumbClass}`}>
-            {entry.type === 'drive' ? (
-              <HardDrive className={`${iconClass} text-zinc-300`} />
-            ) : (
-              <Folder className={`${iconClass} text-amber-300`} />
-            )}
-          </div>
-        )}
-        {isRenaming ? (
-          <RenameInput
-            path={entry.path}
-            name={entry.name}
-            isFile={entry.type === 'file'}
-            folder={currentPath ?? ''}
-            className="w-full rounded border border-blue-500 px-1 py-0 text-center text-xs outline-none"
-          />
-        ) : (
-          <span className="w-full truncate text-xs text-zinc-600">{entry.name}</span>
-        )}
-      </button>
-    </ExplorerContextMenu>
+    <button
+      type="button"
+      ref={ref}
+      data-entry-path={entry.path}
+      onClick={(e) => onItemClick(e, entry.path)}
+      onDoubleClick={() => (entry.type === 'file' ? onOpenFile(entry.path) : navigate(entry.path))}
+      className={`flex flex-col items-center gap-1 rounded-lg p-2 text-center hover:bg-zinc-100 ${
+        isSelected ? 'bg-blue-100 hover:bg-blue-100' : ''
+      } ${isFocused ? 'outline outline-1 outline-offset-[-2px] outline-zinc-500' : ''} ${
+        isCut ? 'opacity-40' : ''
+      } ${isDragging ? 'opacity-40' : ''} ${isOver ? 'ring-2 ring-inset ring-blue-400 bg-blue-50' : ''}`}
+      title={entry.name}
+    >
+      {entry.type === 'file' ? (
+        <FileThumbnail path={entry.path} kind={entry.kind ?? 'other'} className={thumbClass} size={thumbPx} />
+      ) : (
+        <div className={`flex items-center justify-center rounded-lg bg-zinc-50 ${thumbClass}`}>
+          {entry.type === 'drive' ? (
+            <HardDrive className={`${iconClass} text-zinc-300`} />
+          ) : (
+            <Folder className={`${iconClass} text-amber-300`} />
+          )}
+        </div>
+      )}
+      {isRenaming ? (
+        <RenameInput
+          path={entry.path}
+          name={entry.name}
+          isFile={entry.type === 'file'}
+          folder={currentPath ?? ''}
+          className="w-full rounded border border-blue-500 px-1 py-0 text-center text-xs outline-none"
+        />
+      ) : (
+        <span className="w-full truncate text-xs text-zinc-600">{entry.name}</span>
+      )}
+    </button>
   )
-}
+})
 
 /** Explorer's "Large icons" view — a virtualized, responsive grid of tiles.
- * When Group-by is active, section headers replace virtualization (see
- * `content/grouping.ts` — module-level doc explains the trade-off). */
+ * Both the ungrouped and Group-by branches are windowed (the grouped branch
+ * via the shared `GroupedVirtualGrid`, Phase 6 / F5). */
 export function IconGridView({ entries, onOpenFile }: Props): React.JSX.Element {
   const navigate = useExplorerStore((s) => s.navigate)
   const currentPath = useExplorerStore((s) => s.currentPath)
-  const renamingPath = useSelectionStore((s) => s.renamingPath)
   const focusedPath = useSelectionStore((s) => s.focusedPath)
   const groupBy = useExplorerStore((s) => s.groupBy)
   const iconSize = useExplorerStore((s) => s.iconSize)
@@ -126,9 +117,8 @@ export function IconGridView({ entries, onOpenFile }: Props): React.JSX.Element 
   const [columns, setColumns] = useState(6)
   useIconSizeZoom(scrollRef)
 
-  const orderedPaths = entries.map((e) => e.path)
-  const { onItemClick, isSelected, setSelected, clear } = useSelectionModel(orderedPaths)
-  const fileOps = useFileOps()
+  const orderedPaths = useMemo(() => entries.map((e) => e.path), [entries])
+  const { onItemClick, setSelected, clear } = useSelectionModel(orderedPaths)
   const groups = useMemo(() => groupEntries(entries, groupBy), [entries, groupBy])
 
   useEffect(() => {
@@ -158,7 +148,8 @@ export function IconGridView({ entries, onOpenFile }: Props): React.JSX.Element 
 
   // Keep the focused row scrolled into view as arrow-key navigation moves
   // focus past what's currently rendered — without this, focus could land
-  // on a row the virtualizer hasn't mounted yet.
+  // on a row the virtualizer hasn't mounted yet. (The grouped branch's own
+  // scroll-into-view is handled inside GroupedVirtualGrid.)
   useEffect(() => {
     if (groupBy !== 'none' || !focusedPath) return
     const idx = orderedPaths.indexOf(focusedPath)
@@ -167,13 +158,25 @@ export function IconGridView({ entries, onOpenFile }: Props): React.JSX.Element 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusedPath, groupBy, columns])
 
-  useEffect(() => {
-    if (groupBy === 'none' || !focusedPath) return
-    contentRef.current?.querySelector(`[data-entry-path="${CSS.escape(focusedPath)}"]`)?.scrollIntoView({ block: 'nearest' })
-  }, [focusedPath, groupBy])
+  function renderTile(entry: DirEntry): React.JSX.Element {
+    return (
+      <Tile
+        key={entry.path}
+        entry={entry}
+        orderedPaths={orderedPaths}
+        onOpenFile={onOpenFile}
+        currentPath={currentPath}
+        onItemClick={onItemClick}
+        navigate={navigate}
+        thumbClass={sizeConfig.thumbClass}
+        iconClass={sizeConfig.iconClass}
+        thumbPx={sizeConfig.thumbPx}
+      />
+    )
+  }
 
   return (
-    <ExplorerContextMenu entry={null} orderedPaths={orderedPaths} onOpenFile={onOpenFile}>
+    <ExplorerContextMenu entries={entries} orderedPaths={orderedPaths} onOpenFile={onOpenFile}>
       <div
         ref={scrollRef}
         className="h-full overflow-y-auto p-3"
@@ -182,92 +185,45 @@ export function IconGridView({ entries, onOpenFile }: Props): React.JSX.Element 
         onMouseUp={marquee.onMouseUp}
         onMouseLeave={marquee.onMouseLeave}
       >
-        <div
-          ref={contentRef}
-          style={
-            groupBy === 'none'
-              ? { height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }
-              : { position: 'relative', width: '100%' }
-          }
-        >
-          {groupBy === 'none'
-            ? virtualizer.getVirtualItems().map((virtualRow) => {
-                const rowEntries = entries.slice(virtualRow.index * columns, virtualRow.index * columns + columns)
-                return (
-                  <div
-                    key={virtualRow.key}
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      width: '100%',
-                      height: `${virtualRow.size}px`,
-                      transform: `translateY(${virtualRow.start}px)`,
-                      display: 'grid',
-                      gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`
-                    }}
-                  >
-                    {rowEntries.map((entry) => (
-                      <Tile
-                        key={entry.path}
-                        entry={entry}
-                        orderedPaths={orderedPaths}
-                        onOpenFile={onOpenFile}
-                        isSelected={isSelected(entry.path)}
-                        isCut={fileOps.isCut(entry.path)}
-                        isRenaming={renamingPath === entry.path}
-                        isFocused={focusedPath === entry.path}
-                        currentPath={currentPath}
-                        onItemClick={onItemClick}
-                        navigate={navigate}
-                        thumbClass={sizeConfig.thumbClass}
-                        iconClass={sizeConfig.iconClass}
-                        thumbPx={sizeConfig.thumbPx}
-                      />
-                    ))}
-                  </div>
-                )
-              })
-            : /* TODO(perf): this grouped branch still renders every DOM tile
-               * up front — same un-virtualized cost GalleryView.tsx had.
-               * Not windowed here (yet) because this view's marquee-select
-               * (`useMarqueeSelect` above) does live `[data-entry-path]` DOM
-               * queries and would silently stop selecting off-screen entries
-               * under virtualization; needs that solved first. See
-               * docs/PERFORMANCE_AND_INGEST_V4_PLAN.md Phase 5 — the
-               * `GroupedVirtualGrid` extracted for GalleryView.tsx is ready
-               * to reuse here once marquee is adapted. */
-              groups.map((group) => (
-                <div key={group.key}>
-                  {group.label && (
-                    <div className="sticky top-0 z-10 bg-white px-1 py-1 text-xs font-semibold text-zinc-500">
-                      {group.label} <span className="font-normal text-zinc-400">({group.entries.length})</span>
-                    </div>
-                  )}
-                  <div style={{ display: 'grid', gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
-                    {group.entries.map((entry) => (
-                      <Tile
-                        key={entry.path}
-                        entry={entry}
-                        orderedPaths={orderedPaths}
-                        onOpenFile={onOpenFile}
-                        isSelected={isSelected(entry.path)}
-                        isCut={fileOps.isCut(entry.path)}
-                        isRenaming={renamingPath === entry.path}
-                        isFocused={focusedPath === entry.path}
-                        currentPath={currentPath}
-                        onItemClick={onItemClick}
-                        navigate={navigate}
-                        thumbClass={sizeConfig.thumbClass}
-                        iconClass={sizeConfig.iconClass}
-                        thumbPx={sizeConfig.thumbPx}
-                      />
-                    ))}
-                  </div>
+        {groupBy === 'none' ? (
+          <div
+            ref={contentRef}
+            style={{ height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }}
+          >
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const rowEntries = entries.slice(virtualRow.index * columns, virtualRow.index * columns + columns)
+              return (
+                <div
+                  key={virtualRow.key}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: `${virtualRow.size}px`,
+                    transform: `translateY(${virtualRow.start}px)`,
+                    display: 'grid',
+                    gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`
+                  }}
+                >
+                  {rowEntries.map(renderTile)}
                 </div>
-              ))}
-          <MarqueeLayer rect={marquee.marqueeRect} />
-        </div>
+              )
+            })}
+            <MarqueeLayer rect={marquee.marqueeRect} />
+          </div>
+        ) : (
+          <GroupedVirtualGrid
+            groups={groups}
+            columns={columns}
+            cellHeight={sizeConfig.cellHeight}
+            scrollRef={scrollRef}
+            containerRef={contentRef}
+            focusedPath={focusedPath}
+            renderTile={renderTile}
+            overlay={<MarqueeLayer rect={marquee.marqueeRect} />}
+          />
+        )}
       </div>
     </ExplorerContextMenu>
   )

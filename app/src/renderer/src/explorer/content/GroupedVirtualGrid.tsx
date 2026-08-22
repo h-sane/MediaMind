@@ -35,6 +35,10 @@ interface Props {
   containerRef?: React.RefObject<HTMLDivElement | null>
   focusedPath?: string | null
   renderTile: (entry: DirEntry) => React.ReactNode
+  /** Rendered inside the scrolled content container (which owns the marquee's
+   * coordinate origin) — used to place the rubber-band `MarqueeLayer` in the
+   * grouped, virtualized views (Phase 6 / F5). */
+  overlay?: React.ReactNode
 }
 
 /** Windows a grouped grid (date/type/size/... section headers + tiles) the
@@ -53,7 +57,8 @@ export function GroupedVirtualGrid({
   scrollRef,
   containerRef,
   focusedPath,
-  renderTile
+  renderTile,
+  overlay
 }: Props): React.JSX.Element {
   const rows = useMemo(() => flattenGroupsToRows(groups, columns), [groups, columns])
   const stickyIndexes = useMemo(
@@ -126,6 +131,7 @@ export function GroupedVirtualGrid({
           </div>
         )
       })}
+      {overlay}
     </div>
   )
 }
