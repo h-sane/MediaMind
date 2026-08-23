@@ -1,41 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useUpdateStore } from '../stores/update'
 
-// Bottom-right, non-blocking "a new version is available" card — the same
-// corner and card styling as JobProgressBubble. The user drives every step:
-// nothing downloads until they click Update, nothing installs until they click
-// Restart. Only ever appears in a packaged build (the main process only checks
-// for updates when app.isPackaged).
-
-type Phase = 'available' | 'downloading' | 'downloaded' | 'error'
+// Top-right, non-blocking "a new version is available" card. Persists until the
+// user dismisses it; the sidebar button (see NavigationPane) remains as a
+// persistent entry point after dismissal. The user drives every step — nothing
+// downloads until Update, nothing installs until Restart. Only ever appears in
+// a packaged build (the main process only checks for updates when isPackaged).
 
 export function UpdateBubble(): React.JSX.Element | null {
-  const [phase, setPhase] = useState<Phase | null>(null)
-  const [version, setVersion] = useState('')
-  const [percent, setPercent] = useState(0)
-  const [error, setError] = useState('')
+  const { phase, version, percent, error, bubbleDismissed, dismissBubble, download, install } =
+    useUpdateStore()
 
-  useEffect(() => {
-    window.mediamind.onUpdateAvailable((info) => {
-      setVersion(info.version)
-      setPhase('available')
-    })
-    window.mediamind.onUpdateProgress((info) => setPercent(info.percent))
-    window.mediamind.onUpdateDownloaded((info) => {
-      setVersion(info.version)
-      setPhase('downloaded')
-    })
-    window.mediamind.onUpdateError((info) => {
-      setError(info.message)
-      // Only surface an error if a download was already in flight; a silent
-      // failed background check shouldn't nag the user with a red card.
-      setPhase((p) => (p === 'downloading' ? 'error' : p))
-    })
-  }, [])
-
-  if (phase === null) return null
+  if (phase === null || bubbleDismissed) return null
 
   return (
-    <div className="fixed bottom-4 right-4 z-40 w-80 rounded-lg border border-zinc-200 bg-white p-3 text-sm shadow-lg">
+    <div className="fixed top-4 right-4 z-40 w-80 rounded-lg border border-zinc-200 bg-white p-3 text-sm shadow-lg">
       <div className="flex items-start justify-between gap-2">
         <p className="font-medium text-zinc-900">
           {phase === 'available' && `MediaMind ${version} is available`}
@@ -46,7 +24,7 @@ export function UpdateBubble(): React.JSX.Element | null {
         {phase !== 'downloading' && (
           <button
             type="button"
-            onClick={() => setPhase(null)}
+            onClick={dismissBubble}
             className="shrink-0 text-zinc-400 hover:text-zinc-600"
             aria-label="Dismiss"
           >
@@ -73,10 +51,7 @@ export function UpdateBubble(): React.JSX.Element | null {
       {phase === 'available' && (
         <button
           type="button"
-          onClick={() => {
-            setPhase('downloading')
-            void window.mediamind.downloadUpdate()
-          }}
+          onClick={download}
           className="mt-2 w-full rounded-lg bg-zinc-900 py-1.5 text-xs font-medium text-white hover:bg-zinc-700"
         >
           Update now
@@ -86,7 +61,7 @@ export function UpdateBubble(): React.JSX.Element | null {
       {phase === 'downloaded' && (
         <button
           type="button"
-          onClick={() => void window.mediamind.installUpdate()}
+          onClick={install}
           className="mt-2 w-full rounded-lg bg-zinc-900 py-1.5 text-xs font-medium text-white hover:bg-zinc-700"
         >
           Restart & install
