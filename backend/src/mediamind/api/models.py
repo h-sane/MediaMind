@@ -655,6 +655,28 @@ class GlobalMoveSuggestionDismissIn(BaseModel):
     content_hash: str
 
 
+class GlobalMoveExecuteItemIn(BaseModel):
+    global_person_id: int
+    library_id: str
+    file_id: int
+
+
+class GlobalMoveExecuteIn(BaseModel):
+    items: list[GlobalMoveExecuteItemIn]
+    dry_run: bool = False
+    expected_count: int | None = None
+    expected_plan_hash: str | None = None
+
+
+class GlobalMoveExecuteOut(ExecutionReportOut):
+    """Same shape as ExecutionReportOut plus the resolved batch's plan hash
+    — a dry-run call returns this so the client can pass it back as
+    expected_plan_hash on the follow-up real execute, same pattern as
+    organize.py's preview -> execute."""
+
+    plan_hash: str
+
+
 class GlobalLinkSuggestionPairIn(BaseModel):
     """Identifies a cross-library suggestion pair — same shape used by both
     the dismiss ("not the same person") and link (accept) actions."""

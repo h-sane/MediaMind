@@ -1,4 +1,4 @@
-import { Globe2, Home, Users } from 'lucide-react'
+import { Globe2, Home, Sparkles, Users } from 'lucide-react'
 import { HOME_PATH, isRealFolder, useExplorerStore } from '../../stores/explorer'
 import { TOOL_RAIL_MAX, TOOL_RAIL_MIN, usePaneLayoutStore } from '../../stores/paneLayout'
 import { PaneResizer } from '../layout/PaneResizer'
@@ -77,6 +77,31 @@ function GlobalPeopleRow(): React.JSX.Element {
   )
 }
 
+/** Cross-library review queue: cross-library link suggestions and physical
+ * move suggestions, both requiring explicit confirmation. Not folder-scoped,
+ * same reasoning as `GlobalPeopleRow` — distinct from the existing
+ * folder-scoped `suggestions` toolMode (duplicates + per-library pending
+ * face matches). */
+function GlobalSuggestionsRow(): React.JSX.Element {
+  const toolMode = useExplorerStore((s) => s.toolMode)
+  const setToolMode = useExplorerStore((s) => s.setToolMode)
+  const isActive = toolMode === 'global-suggestions'
+
+  return (
+    <button
+      type="button"
+      onClick={() => setToolMode(isActive ? 'none' : 'global-suggestions')}
+      title="Cross-library suggestions"
+      className={`flex w-full items-center gap-1.5 py-1 pl-3 pr-2 text-left text-sm ${
+        isActive ? 'bg-blue-50 text-blue-700' : 'text-zinc-700 hover:bg-zinc-100'
+      }`}
+    >
+      <Sparkles className={`h-4 w-4 shrink-0 ${isActive ? 'text-blue-600' : 'text-zinc-400'}`} />
+      <span className="truncate">Suggestions (All Libraries)</span>
+    </button>
+  )
+}
+
 /** Left sidebar, split top/bottom: Home, pinned Quick Access folders, and the
  * live folder tree (rooted at This PC) scroll in the top half; the media
  * tools (dedupe, faces — see `ToolRail`) sit pinned in the bottom half,
@@ -97,6 +122,7 @@ export function NavigationPane(): React.JSX.Element {
         <HomeRow />
         <PeopleRow />
         <GlobalPeopleRow />
+        <GlobalSuggestionsRow />
         <QuickAccess />
         <FolderTree />
       </div>

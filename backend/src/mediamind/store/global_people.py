@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -271,3 +272,32 @@ def dismissed_move_hashes(conn: sqlite3.Connection, global_person_id: int) -> se
         (global_person_id,),
     ).fetchall()
     return {r["content_hash"] for r in rows}
+
+
+# ---------------------------------------------------------------------------
+# Move-action audit trail (cross-library moves have no single library's
+# `organize_actions` table to belong to)
+# ---------------------------------------------------------------------------
+
+def record_move_action(
+    conn: sqlite3.Connection,
+    global_person_id: int,
+    dest_folder: str,
+    file_count: int,
+    dry_run: bool,
+    manifest_path: str,
+    ok_count: int,
+    error_count: int,
+) -> str:
+    action_id = uuid.uuid4().hex[:12]
+    now = time.time()
+    conn.execute(
+        "INSERT INTO global_move_actions "
+        "(id, global_person_id, dest_folder, file_count, dry_run, manifest_path, "
+        " started_at, finished_at, ok_count, error_count) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (action_id, global_person_id, dest_folder, file_count, int(dry_run), manifest_path,
+         now, now, ok_count, error_count),
+    )
+    conn.commit()
+    return action_id

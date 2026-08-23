@@ -396,6 +396,42 @@ export interface GlobalLinkSuggestion {
 
 export type GlobalLinkSuggestionPair = Omit<GlobalLinkSuggestion, 'similarity'>
 
+export interface GlobalMoveSuggestionItem {
+  library_id: string
+  file_id: number
+  abs_path: string
+  content_hash: string | null
+}
+
+export interface GlobalMoveSuggestionGroup {
+  global_person_id: number
+  global_person_name: string
+  primary_location: string
+  items: GlobalMoveSuggestionItem[]
+}
+
+export interface GlobalMoveSuggestionDismiss {
+  global_person_id: number
+  content_hash: string
+}
+
+export interface GlobalMoveExecuteItem {
+  global_person_id: number
+  library_id: string
+  file_id: number
+}
+
+export interface GlobalMoveExecuteBody {
+  items: GlobalMoveExecuteItem[]
+  dry_run?: boolean
+  expected_count?: number | null
+  expected_plan_hash?: string | null
+}
+
+export interface GlobalMoveExecuteReport extends ExecutionReport {
+  plan_hash: string
+}
+
 export interface PersonsOut {
   scan_id: string
   scanned_at: number | null
@@ -1068,6 +1104,14 @@ export const api = {
       request<{ ok: boolean }>('POST', '/v1/global/link-suggestions/link', s),
 
     dismissLinkSuggestion: (s: GlobalLinkSuggestionPair) =>
-      request<{ ok: boolean }>('POST', '/v1/global/link-suggestions/dismiss', s)
+      request<{ ok: boolean }>('POST', '/v1/global/link-suggestions/dismiss', s),
+
+    moveSuggestions: () => request<GlobalMoveSuggestionGroup[]>('GET', '/v1/global/move-suggestions'),
+
+    dismissMoveSuggestion: (body: GlobalMoveSuggestionDismiss) =>
+      request<{ ok: boolean }>('POST', '/v1/global/move-suggestions/dismiss', body),
+
+    executeMove: (body: GlobalMoveExecuteBody) =>
+      request<GlobalMoveExecuteReport>('POST', '/v1/global/move-suggestions/execute', body)
   }
 }

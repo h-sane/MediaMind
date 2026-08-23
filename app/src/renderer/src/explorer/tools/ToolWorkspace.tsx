@@ -3,6 +3,7 @@ import { isRealFolder, useExplorerStore } from '../../stores/explorer'
 import { DedupeToolPanel } from './dedupe/DedupeToolPanel'
 import { FacesToolPanel } from './faces/FacesToolPanel'
 import { GlobalPeoplePanel } from './faces/GlobalPeoplePanel'
+import { GlobalMoveSuggestionsPanel } from './suggestions/GlobalMoveSuggestionsPanel'
 import { SuggestionsToolPanel } from './suggestions/SuggestionsToolPanel'
 
 /**
@@ -16,12 +17,12 @@ export function ToolWorkspace(): React.JSX.Element {
   const toolMode = useExplorerStore((s) => s.toolMode)
   const { data: library, isPending, isError } = useEnsureLibrary(currentPath)
 
-  if (toolMode === 'global-people') {
-    // Not folder-scoped — spans every registered library — so it skips the
+  if (toolMode === 'global-people' || toolMode === 'global-suggestions') {
+    // Not folder-scoped — spans every registered library — so these skip the
     // useEnsureLibrary/isRealFolder gate every other tool needs.
     return (
       <div className="relative flex-1 overflow-hidden bg-white">
-        <GlobalPeoplePanel />
+        {toolMode === 'global-people' ? <GlobalPeoplePanel /> : <GlobalMoveSuggestionsPanel />}
       </div>
     )
   }

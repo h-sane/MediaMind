@@ -9,14 +9,20 @@ library it's linked in."
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
+import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
-from mediamind.config import library_data_dir
+from mediamind.config import global_moves_dir, library_data_dir
 from mediamind.core.libraries import Library, LibraryRegistry
+from mediamind.core.safety import FileOp
+from mediamind.core.safety import execute as safety_execute
 from mediamind.store import global_people as gp_store
 from mediamind.store import persons as persons_store
 from mediamind.store.db import library_db_path, open_db
@@ -281,3 +287,180 @@ def resolve_link_suggestion(
     gp_store.link(gp_conn, gid_a, library_id_b, local_person_id_b, provider_id)
     if gid_b is not None and not gp_store.links_for_global(gp_conn, gid_b):
         gp_store.delete_global_person(gp_conn, gid_b)
+
+
+# ---------------------------------------------------------------------------
+# Bulk cross-drive move execution — the only place files under a "primary
+# location" story actually move. Reuses core/safety.py's execute()
+# unchanged: copy-then-delete, fsync, collision-safe naming, per-file error
+# isolation, dry-run, manifest, count check — every CLAUDE.md safety
+# invariant, no new safety code here.
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class MoveRequestItem:
+    global_person_id: int
+    library_id: str
+    file_id: int
+
+
+@dataclass(frozen=True)
+class ResolvedMoveItem:
+    global_person_id: int
+    library_id: str
+    file_id: int
+    source_abs: Path
+    dest_folder: Path
+
+
+def move_plan_hash(items: list[ResolvedMoveItem]) -> str:
+    """Content hash of a move batch's (library, file, destination) triples,
+    order-independent — mirrors `organize_plan.plan_hash`'s reasoning: a
+    same-count-but-different-contents drift between preview and execute
+    (e.g. a suggestion was dismissed and a different one took its slot)
+    should still be caught, not just a count check."""
+    triples = sorted((r.library_id, r.file_id, str(r.dest_folder)) for r in items)
+    h = hashlib.sha256()
+    for library_id, file_id, dest in triples:
+        h.update(library_id.encode("utf-8"))
+        h.update(b"\0")
+        h.update(str(file_id).encode("utf-8"))
+        h.update(b"\0")
+        h.update(dest.encode("utf-8"))
+        h.update(b"\n")
+    return h.hexdigest()
+
+
+def resolve_move_items(
+    gp_conn: sqlite3.Connection, registry: LibraryRegistry, items: list[MoveRequestItem]
+) -> list[ResolvedMoveItem]:
+    """Resolve each requested (global_person_id, library_id, file_id) into a
+    concrete source path + destination folder. The destination is always
+    read server-side from the person's own `primary_location` — never taken
+    from client input directly, so a client can't smuggle in an arbitrary
+    destination. A file that's vanished since the suggestion was generated
+    (already moved/deleted) is skipped, not a hard error — the rest of the
+    batch still proceeds."""
+    library_by_id = {lib.id: lib for lib in registry.list()}
+    person_cache: dict[int, gp_store.GlobalPerson] = {}
+    conns: dict[str, sqlite3.Connection] = {}
+    resolved: list[ResolvedMoveItem] = []
+    try:
+        for item in items:
+            person = person_cache.get(item.global_person_id)
+            if person is None:
+                person = gp_store.get_global_person(gp_conn, item.global_person_id)
+                if person is None:
+                    raise ValueError(f"Unknown global person {item.global_person_id}")
+                person_cache[item.global_person_id] = person
+            if not person.primary_location:
+                raise ValueError(f'"{person.name}" has no primary location set')
+
+            lib = library_by_id.get(item.library_id)
+            if lib is None:
+                raise ValueError(f"Unknown library {item.library_id}")
+            conn = conns.get(item.library_id)
+            if conn is None:
+                conn = open_library_db(lib)
+                conns[item.library_id] = conn
+
+            row = conn.execute("SELECT path FROM files WHERE id = ?", (item.file_id,)).fetchone()
+            if row is None:
+                continue
+            resolved.append(
+                ResolvedMoveItem(
+                    global_person_id=item.global_person_id,
+                    library_id=item.library_id,
+                    file_id=item.file_id,
+                    source_abs=Path(lib.path) / row["path"],
+                    dest_folder=Path(person.primary_location),
+                )
+            )
+    finally:
+        for conn in conns.values():
+            conn.close()
+    return resolved
+
+
+def execute_move_plan(
+    gp_conn: sqlite3.Connection,
+    registry: LibraryRegistry,
+    items: list[MoveRequestItem],
+    *,
+    dry_run: bool,
+    expected_count: int | None,
+    expected_plan_hash: str | None,
+    on_progress: Callable[[int, int], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> dict:
+    resolved = resolve_move_items(gp_conn, registry, items)
+    if not resolved:
+        raise ValueError("Nothing to move — every requested file was already gone")
+
+    if expected_count is not None and len(resolved) != expected_count:
+        raise ValueError(
+            f"Plan changed: expected {expected_count} moves but server computed "
+            f"{len(resolved)}. Refresh and re-confirm."
+        )
+    if expected_plan_hash is not None and move_plan_hash(resolved) != expected_plan_hash:
+        raise ValueError(
+            "Plan contents changed since you confirmed (a suggestion was dismissed or "
+            "added) even though the count may match. Refresh and re-confirm."
+        )
+
+    ops = [FileOp(source=r.source_abs, dest_folder=r.dest_folder, mode="move") for r in resolved]
+    manifest_path = global_moves_dir() / "manifests" / f"{time.strftime('%Y%m%d-%H%M%S')}_global-move.csv"
+
+    report = safety_execute(
+        ops, manifest_path=manifest_path, dry_run=dry_run,
+        on_progress=on_progress, should_cancel=should_cancel,
+    )
+
+    by_person: dict[int, int] = {}
+    for r in resolved:
+        by_person[r.global_person_id] = by_person.get(r.global_person_id, 0) + 1
+    for gid, count in by_person.items():
+        person = gp_store.get_global_person(gp_conn, gid)
+        gp_store.record_move_action(
+            gp_conn, gid,
+            dest_folder=str(person.primary_location) if person and person.primary_location else "",
+            file_count=count, dry_run=dry_run, manifest_path=str(manifest_path),
+            ok_count=report.handled, error_count=len(report.errors),
+        )
+
+    if not dry_run:
+        # Filesystem is source of truth: the moved file is gone from its
+        # source library, so drop its stale `files` row there. If the
+        # destination is itself a registered library, its own watcher/ingest
+        # picks the arrived file up independently — appearing as an
+        # unlinked local cluster there, not auto-relinked to this global
+        # identity (a deliberate, safe ceiling: no silent wrong auto-tag).
+        moved_sources = {e.source for e in report.entries if e.action == "moved"}
+        by_library: dict[str, list[int]] = {}
+        for r in resolved:
+            if str(r.source_abs) in moved_sources:
+                by_library.setdefault(r.library_id, []).append(r.file_id)
+        library_by_id = {lib.id: lib for lib in registry.list()}
+        for library_id, file_ids in by_library.items():
+            lib = library_by_id.get(library_id)
+            if lib is None:
+                continue
+            conn = open_library_db(lib)
+            try:
+                conn.executemany("DELETE FROM files WHERE id = ?", [(fid,) for fid in file_ids])
+                conn.commit()
+            finally:
+                conn.close()
+
+    return {
+        "planned": report.planned,
+        "handled": report.handled,
+        "ok": report.ok,
+        "dry_run": dry_run,
+        "manifest_path": str(report.manifest_path) if report.manifest_path else None,
+        "entries": [
+            {"source": e.source, "action": e.action, "destination": e.destination, "error": e.error}
+            for e in report.entries
+        ],
+        "plan_hash": move_plan_hash(resolved),
+    }

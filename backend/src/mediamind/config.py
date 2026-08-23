@@ -112,3 +112,13 @@ def fs_ops_dir() -> Path:
     d = app_data_dir() / "fs_ops"
     (d / "manifests").mkdir(parents=True, exist_ok=True)
     return d
+
+
+def global_moves_dir() -> Path:
+    """Manifests for cross-library global-person physical moves
+    (`core/global_people.py`'s `execute_move_plan`). A move spans two
+    libraries, so it has no single `.mediamind` home either — same reasoning
+    as `fs_ops_dir()`."""
+    d = app_data_dir() / "global_moves"
+    (d / "manifests").mkdir(parents=True, exist_ok=True)
+    return d

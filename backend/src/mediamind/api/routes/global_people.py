@@ -14,6 +14,8 @@ from fastapi import APIRouter, HTTPException, Request
 from mediamind.api.models import (
     GlobalLinkSuggestionOut,
     GlobalLinkSuggestionPairIn,
+    GlobalMoveExecuteIn,
+    GlobalMoveExecuteOut,
     GlobalMoveSuggestionDismissIn,
     GlobalMoveSuggestionGroupOut,
     GlobalPersonCreateIn,
@@ -24,12 +26,15 @@ from mediamind.api.models import (
     GlobalPersonRenameIn,
 )
 from mediamind.core.global_people import (
+    MoveRequestItem,
+    execute_move_plan,
     list_aggregated,
     list_link_suggestions,
     list_move_suggestions,
     open_library_db,
     resolve_link_suggestion,
 )
+from mediamind.core.jobs import JobContext
 from mediamind.core.libraries import LibraryRegistry
 from mediamind.store import global_people as gp_store
 from mediamind.store.persons import latest_faces_scan
@@ -285,3 +290,76 @@ def dismiss_move_suggestion(body: GlobalMoveSuggestionDismissIn, request: Reques
     finally:
         gp_conn.close()
     return {"ok": True}
+
+
+_MOVE_PLAN_GUARD_MARKERS = ("Plan changed", "Plan contents changed", "Nothing to move", "no primary location", "Unknown")
+
+
+def _move_error_status(error: str) -> int:
+    return 409 if any(marker in error for marker in _MOVE_PLAN_GUARD_MARKERS) else 500
+
+
+@router.post("/move-suggestions/execute", response_model=GlobalMoveExecuteOut)
+def execute_move_suggestions(body: GlobalMoveExecuteIn, request: Request):
+    """Execute (or dry-run) a batch of cross-library physical moves — the
+    ONLY endpoint that ever moves a file for the global-people feature.
+    Call once with dry_run=true to get back `plan_hash`/counts, then again
+    with dry_run=false and that hash to actually move (same preview ->
+    execute pattern as `organize.py`).
+
+    A real (non-dry-run) run goes through `JobManager.run_sync` so it's
+    visible to `running_for()` for its whole duration; dry-run touches
+    nothing on disk so it skips that guard entirely, same reasoning as
+    organize.py's dry-run branch.
+    """
+    registry = _registry(request)
+    items = [
+        MoveRequestItem(global_person_id=i.global_person_id, library_id=i.library_id, file_id=i.file_id)
+        for i in body.items
+    ]
+
+    if body.dry_run:
+        gp_conn = gp_store.open_global_db()
+        try:
+            try:
+                result = execute_move_plan(
+                    gp_conn, registry, items,
+                    dry_run=True,
+                    expected_count=body.expected_count,
+                    expected_plan_hash=body.expected_plan_hash,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=_move_error_status(str(exc)), detail=str(exc)) from exc
+        finally:
+            gp_conn.close()
+        return GlobalMoveExecuteOut(**result)
+
+    jm = request.app.state.job_manager
+    for library_id in {i.library_id for i in body.items}:
+        if jm.running_for(library_id) is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Library {library_id} has a job already running — try again shortly",
+            )
+
+    def runner(ctx: JobContext) -> dict:
+        gp_conn = gp_store.open_global_db()
+        try:
+            return execute_move_plan(
+                gp_conn, registry, items,
+                dry_run=False,
+                expected_count=body.expected_count,
+                expected_plan_hash=body.expected_plan_hash,
+                on_progress=lambda done, total: ctx.report_progress(done, total, "moving"),
+                should_cancel=ctx.cancelled,
+            )
+        finally:
+            gp_conn.close()
+
+    job = jm.run_sync("__global_move__", "global-move-execute", runner)
+    if job.state == "failed":
+        error = job.error or "Move failed"
+        raise HTTPException(status_code=_move_error_status(error), detail=error)
+
+    _invalidate_cache()  # membership under primary_location changed
+    return GlobalMoveExecuteOut(**job.result)
