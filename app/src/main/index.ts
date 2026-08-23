@@ -120,7 +120,13 @@ function createWindow(): BrowserWindow {
     backgroundColor: '#fafafa',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+      sandbox: false,
+      // Chromium throttles timers, pauses rAF, and deprioritizes rendering
+      // and media loading once the window is minimized or occluded — which
+      // stalls thumbnail/image/video loading whenever MediaMind is in the
+      // background. This is a working file manager, not a battery-sipping tab;
+      // keep it running at full speed when it doesn't have focus.
+      backgroundThrottling: false
     }
   })
 
