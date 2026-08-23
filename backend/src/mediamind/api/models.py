@@ -699,3 +699,24 @@ class GlobalMoveUndoInfoOut(BaseModel):
 class GlobalMoveUndoOut(ExecutionReportOut):
     """Result of reversing the last move batch — same shape as a move's own
     report (no plan_hash: undo replays a fixed manifest, it isn't re-planned)."""
+
+
+# ---------------------------------------------------------------------------
+# Folder faces (Explorer folder icons show the named people inside)
+# ---------------------------------------------------------------------------
+
+class FolderPersonOut(BaseModel):
+    person_id: int
+    name: str
+    sample_face_id: int
+
+
+class FolderFacesOut(BaseModel):
+    """Named people detected inside a folder. `library_id` is null when the
+    folder is outside any registered/scanned library — the caller then shows
+    the plain folder icon. `total_persons` is the true distinct count so the
+    UI can render "+N" beyond the capped `persons` list."""
+
+    library_id: str | None
+    persons: list[FolderPersonOut]
+    total_persons: int

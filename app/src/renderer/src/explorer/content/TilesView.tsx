@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Folder, HardDrive } from 'lucide-react'
 import { FileThumbnail } from '../../components/FileThumbnail'
+import { FolderFaceThumbnail } from '../../components/FolderFaceThumbnail'
 import { useExplorerStore } from '../../stores/explorer'
 import { useSelectionStore } from '../../stores/selection'
 import { ExplorerContextMenu } from '../context/ContextMenu'
@@ -66,14 +67,21 @@ const Tile = memo(function Tile({
     >
       {entry.type === 'file' ? (
         <FileThumbnail path={entry.path} kind={entry.kind ?? 'other'} size={96} className="h-11 w-11 shrink-0" />
-      ) : (
+      ) : entry.type === 'drive' ? (
         <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-zinc-50">
-          {entry.type === 'drive' ? (
-            <HardDrive className="h-6 w-6 text-zinc-300" />
-          ) : (
-            <Folder className="h-6 w-6 text-amber-300" />
-          )}
+          <HardDrive className="h-6 w-6 text-zinc-300" />
         </div>
+      ) : (
+        <FolderFaceThumbnail
+          path={entry.path}
+          size={44}
+          className="shrink-0"
+          fallback={
+            <div className="flex h-11 w-11 items-center justify-center rounded-md bg-zinc-50">
+              <Folder className="h-6 w-6 text-amber-300" />
+            </div>
+          }
+        />
       )}
       <div className="min-w-0 flex-1">
         {isRenaming ? (

@@ -42,8 +42,9 @@ logger = logging.getLogger("mediamind.faces.scan")
 # stalled network/encrypted-drive mount (e.g. a Cryptomator vault gone
 # unresponsive) it can hang forever with no exception to catch, freezing the
 # whole scan on file #1 with no progress and no error. Mirrors dedupe.py's
-# identical guard around the same hash_file() call. This is a floor, not a
-# flat cap — hash_timeout_for() scales it up for large files (see below).
+# identical guard around the same hash_file() call. This is the floor
+# hash_timeout_for() scales up for large files and caps at
+# MAX_FILE_TIMEOUT_SECONDS so a single stalled read can't freeze the scan.
 DEFAULT_HASH_TIMEOUT_SECONDS = 30.0
 MAX_LEAKED_STALL_THREADS = 64
 

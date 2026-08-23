@@ -32,6 +32,8 @@ from mediamind.api.models import (
     BrowseMetadataOut,
     DiskUsageOut,
     DriveOut,
+    FolderFacesOut,
+    FolderPersonOut,
     FolderStatsOut,
     QuickAccessEntryOut,
     QuickAccessOut,
@@ -50,6 +52,7 @@ from mediamind.config import LIBRARY_DATA_DIRNAME, discovery_db_path
 from mediamind.core import discovery
 from mediamind.core.explorer_media import EXPLORER_KINDS, explorer_kind_of
 from mediamind.core.file_facts import file_facts, stat_facts
+from mediamind.core.folder_faces import folder_named_persons
 from mediamind.core.folder_stats import FolderStatsIndex
 from mediamind.core.gallery import DEFAULT_GALLERY_LIMIT, MAX_COLLECTED, MAX_GALLERY_LIMIT, iter_gallery_items
 from mediamind.core.media_index import MediaIndex
@@ -342,6 +345,33 @@ def prewarm(request: Request, path: str = Query(...), size: int = Query(default=
         raise HTTPException(status_code=404, detail="Folder not found")
     request.app.state.thumb_prewarmer.warm(resolved, size)
     return {"ok": True}
+
+
+@router.get("/folder-faces", response_model=FolderFacesOut)
+def folder_faces(
+    request: Request,
+    path: str = Query(...),
+    limit: int = Query(default=3, ge=1, le=100),
+):
+    """Named people detected inside a folder — drives the Explorer's face
+    folder icons (`limit=3`, the default) and the Properties "People in this
+    folder" list (a higher limit to show them all). Read-only; returns
+    library_id=None (caller shows the plain folder icon) when the folder is
+    outside any registered/scanned library."""
+    resolved = resolve_os_path(path)
+    if resolved is None or not resolved.is_dir():
+        raise HTTPException(status_code=404, detail="Folder not found")
+    result = folder_named_persons(request.app.state.registry, resolved, limit=limit)
+    if result is None:
+        return FolderFacesOut(library_id=None, persons=[], total_persons=0)
+    return FolderFacesOut(
+        library_id=result.library_id,
+        persons=[
+            FolderPersonOut(person_id=p.person_id, name=p.name, sample_face_id=p.sample_face_id)
+            for p in result.persons
+        ],
+        total_persons=result.total_persons,
+    )
 
 
 @router.get("/preview")

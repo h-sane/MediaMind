@@ -279,6 +279,18 @@ export interface FolderStats {
   total_bytes: number | null
 }
 
+export interface FolderPerson {
+  person_id: number
+  name: string
+  sample_face_id: number
+}
+
+export interface FolderFaces {
+  library_id: string | null // null = folder outside any registered/scanned library
+  persons: FolderPerson[] // capped (~3), most-frequent in this folder first
+  total_persons: number // true distinct-named count, for the "+N" badge
+}
+
 export interface DiskUsage {
   path: string
   total_bytes: number
@@ -705,6 +717,9 @@ export const api = {
 
     folderStats: (path: string) =>
       request<FolderStats>('GET', `/v1/fs/folder-stats?path=${encodeURIComponent(path)}`),
+
+    folderFaces: (path: string, limit = 3) =>
+      request<FolderFaces>('GET', `/v1/fs/folder-faces?path=${encodeURIComponent(path)}&limit=${limit}`),
 
     diskUsage: (path: string) =>
       request<DiskUsage>('GET', `/v1/fs/disk-usage?path=${encodeURIComponent(path)}`),

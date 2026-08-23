@@ -24,12 +24,24 @@ TIMED_OUT = _TimedOut()
 # timeout can't, and was skipping large-but-healthy video files outright.
 MIN_HASH_THROUGHPUT_BYTES_PER_SEC = 5 * 1024 * 1024  # 5 MB/s floor - conservative even for a slow HDD/network share
 
+# ...but the size-scaling assumes steady throughput, which a *stalled* read
+# (a cloud-sync placeholder that never hydrates, a wedged mount) never
+# delivers: a 6 GB placeholder would be handed a ~1200s budget and freeze the
+# whole scan for 20 minutes on that one file instead of skipping it. A blocked
+# read() can't be interrupted mid-call, so the only lever is the budget itself
+# — cap it. A file that genuinely needs longer than this to read is skipped
+# from dedupe/faces (read-only, logged, and it still shows in the browse
+# surface — "everything routes somewhere" is unaffected); progress advances at
+# most every MAX_FILE_TIMEOUT_SECONDS instead of appearing frozen indefinitely.
+MAX_FILE_TIMEOUT_SECONDS = 90.0
+
 
 def hash_timeout_for(size_bytes: int, floor: float) -> float:
     """Timeout for hashing a file of this size: scales with size so large
-    files aren't skipped just for being large, floored so small stalled
-    files still time out quickly."""
-    return max(floor, size_bytes / MIN_HASH_THROUGHPUT_BYTES_PER_SEC)
+    files aren't skipped just for being large, floored so small stalled files
+    still time out quickly, and capped at MAX_FILE_TIMEOUT_SECONDS so a single
+    stalled read can never freeze the whole scan."""
+    return min(max(floor, size_bytes / MIN_HASH_THROUGHPUT_BYTES_PER_SEC), MAX_FILE_TIMEOUT_SECONDS)
 
 
 def run_with_timeout(
