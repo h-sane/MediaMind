@@ -2,7 +2,9 @@ import { useState } from 'react'
 import {
   useDismissGlobalMoveSuggestion,
   useExecuteGlobalMove,
-  useGlobalMoveSuggestions
+  useGlobalMoveSuggestions,
+  useUndoableGlobalMove,
+  useUndoGlobalMove
 } from '../../../api/hooks'
 import type { GlobalMoveSuggestionGroup, GlobalMoveSuggestionItem } from '../../../api/client'
 
@@ -194,6 +196,47 @@ function GroupSection({
   )
 }
 
+function UndoLastMoveBar(): React.JSX.Element | null {
+  const { data: info } = useUndoableGlobalMove()
+  const undo = useUndoGlobalMove()
+  const [message, setMessage] = useState<string | null>(null)
+
+  if (!info?.available && !message) return null
+
+  const handleUndo = async () => {
+    setMessage(null)
+    try {
+      const report = await undo.mutateAsync()
+      setMessage(
+        report.ok
+          ? `Moved ${report.handled} files back.`
+          : `Moved ${report.handled} of ${report.planned} back — some failed, see ${report.manifest_path}.`
+      )
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Undo failed.')
+    }
+  }
+
+  return (
+    <div className="mb-4 flex items-center justify-between rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-2.5">
+      <p className="text-xs text-zinc-600">
+        {info?.available
+          ? `Last move: ${info.file_count} file${info.file_count === 1 ? '' : 's'} can be moved back.`
+          : (message ?? '')}
+      </p>
+      {info?.available && (
+        <button
+          onClick={handleUndo}
+          disabled={undo.isPending}
+          className="shrink-0 rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-white disabled:opacity-50"
+        >
+          {undo.isPending ? 'Undoing…' : 'Undo last move'}
+        </button>
+      )}
+    </div>
+  )
+}
+
 export function GlobalMoveSuggestionsPanel(): React.JSX.Element {
   const { data: groups, isPending, isError } = useGlobalMoveSuggestions()
   const [excluded, setExcluded] = useState<Set<string>>(new Set())
@@ -228,6 +271,8 @@ export function GlobalMoveSuggestionsPanel(): React.JSX.Element {
           confirm.
         </p>
       </div>
+
+      <UndoLastMoveBar />
 
       {isPending && <p className="text-sm text-zinc-400">Checking every library…</p>}
       {isError && <p className="text-sm text-red-600">Could not load move suggestions.</p>}

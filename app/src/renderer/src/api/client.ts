@@ -432,6 +432,14 @@ export interface GlobalMoveExecuteReport extends ExecutionReport {
   plan_hash: string
 }
 
+export interface GlobalMoveUndoInfo {
+  available: boolean
+  file_count: number
+  destinations: string[]
+}
+
+export type GlobalMoveUndoReport = ExecutionReport
+
 export interface PersonsOut {
   scan_id: string
   scanned_at: number | null
@@ -1112,6 +1120,10 @@ export const api = {
       request<{ ok: boolean }>('POST', '/v1/global/move-suggestions/dismiss', body),
 
     executeMove: (body: GlobalMoveExecuteBody) =>
-      request<GlobalMoveExecuteReport>('POST', '/v1/global/move-suggestions/execute', body)
+      request<GlobalMoveExecuteReport>('POST', '/v1/global/move-suggestions/execute', body),
+
+    undoableMove: () => request<GlobalMoveUndoInfo>('GET', '/v1/global/moves/undoable'),
+
+    undoMove: () => request<GlobalMoveUndoReport>('POST', '/v1/global/moves/undo')
   }
 }

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -18,6 +19,8 @@ from mediamind.api.models import (
     GlobalMoveExecuteOut,
     GlobalMoveSuggestionDismissIn,
     GlobalMoveSuggestionGroupOut,
+    GlobalMoveUndoInfoOut,
+    GlobalMoveUndoOut,
     GlobalPersonCreateIn,
     GlobalPersonLinkIn,
     GlobalPersonMemberOut,
@@ -28,10 +31,12 @@ from mediamind.api.models import (
 from mediamind.core.global_people import (
     MoveRequestItem,
     execute_move_plan,
+    execute_undo,
     list_aggregated,
     list_link_suggestions,
     list_move_suggestions,
     open_library_db,
+    plan_undo,
     resolve_link_suggestion,
 )
 from mediamind.core.jobs import JobContext
@@ -335,7 +340,8 @@ def execute_move_suggestions(body: GlobalMoveExecuteIn, request: Request):
         return GlobalMoveExecuteOut(**result)
 
     jm = request.app.state.job_manager
-    for library_id in {i.library_id for i in body.items}:
+    source_libs = {i.library_id for i in body.items}
+    for library_id in source_libs:
         if jm.running_for(library_id) is not None:
             raise HTTPException(
                 status_code=409,
@@ -356,10 +362,81 @@ def execute_move_suggestions(body: GlobalMoveExecuteIn, request: Request):
         finally:
             gp_conn.close()
 
-    job = jm.run_sync("__global_move__", "global-move-execute", runner)
+    # Mark every source library busy for the move's whole duration so a
+    # concurrent scan/organize on any of them is blocked (the job itself runs
+    # under a synthetic id for progress; without these marks it would be
+    # invisible to `running_for(source_lib)`, letting an organize race it).
+    with ExitStack() as stack:
+        for library_id in source_libs:
+            stack.enter_context(jm.mark_busy(library_id, "global-move-execute"))
+        job = jm.run_sync("__global_move__", "global-move-execute", runner)
     if job.state == "failed":
         error = job.error or "Move failed"
         raise HTTPException(status_code=_move_error_status(error), detail=error)
 
     _invalidate_cache()  # membership under primary_location changed
     return GlobalMoveExecuteOut(**job.result)
+
+
+@router.get("/moves/undoable", response_model=GlobalMoveUndoInfoOut)
+def undoable_move(request: Request):
+    """Does a reversible cross-library move exist, and what would undoing it
+    do? Drives whether the Suggestions tab shows an "Undo last move"
+    affordance (mirrors organize.py's undo being offered only when there's
+    something to reverse)."""
+    gp_conn = gp_store.open_global_db()
+    try:
+        plan = plan_undo(gp_conn, _registry(request))
+    finally:
+        gp_conn.close()
+    if plan is None:
+        return GlobalMoveUndoInfoOut(available=False, file_count=0, destinations=[])
+    return GlobalMoveUndoInfoOut(
+        available=True,
+        file_count=len(plan.ops),
+        destinations=plan.undoable.dest_folders,
+    )
+
+
+@router.post("/moves/undo", response_model=GlobalMoveUndoOut)
+def undo_move(request: Request):
+    """Reverse the most recent cross-library move batch, moving every file
+    back to where it came from through the same copy-then-delete `execute()`.
+    Guarded on the same libraries as a forward move so it can't race a scan."""
+    registry = _registry(request)
+    gp_conn = gp_store.open_global_db()
+    try:
+        plan = plan_undo(gp_conn, registry)
+        if plan is None:
+            raise HTTPException(status_code=404, detail="Nothing to undo")
+
+        jm = request.app.state.job_manager
+        for library_id in plan.involved_libraries:
+            if jm.running_for(library_id) is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Library {library_id} has a job already running — try again shortly",
+                )
+
+        def runner(ctx: JobContext) -> dict:
+            inner = gp_store.open_global_db()
+            try:
+                return execute_undo(
+                    inner, plan,
+                    on_progress=lambda done, total: ctx.report_progress(done, total, "undoing"),
+                    should_cancel=ctx.cancelled,
+                )
+            finally:
+                inner.close()
+
+        with ExitStack() as stack:
+            for library_id in plan.involved_libraries:
+                stack.enter_context(jm.mark_busy(library_id, "global-move-execute"))
+            job = jm.run_sync("__global_move_undo__", "global-move-execute", runner)
+    finally:
+        gp_conn.close()
+
+    if job.state == "failed":
+        raise HTTPException(status_code=500, detail=job.error or "Undo failed")
+    _invalidate_cache()
+    return GlobalMoveUndoOut(**job.result)

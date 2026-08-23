@@ -685,3 +685,17 @@ class GlobalLinkSuggestionPairIn(BaseModel):
     local_person_id_a: int
     library_id_b: str
     local_person_id_b: int
+
+
+class GlobalMoveUndoInfoOut(BaseModel):
+    """Whether the last cross-library move can be undone, for the UI to
+    decide if it shows an "Undo last move" affordance."""
+
+    available: bool
+    file_count: int
+    destinations: list[str]
+
+
+class GlobalMoveUndoOut(ExecutionReportOut):
+    """Result of reversing the last move batch — same shape as a move's own
+    report (no plan_hash: undo replays a fixed manifest, it isn't re-planned)."""
