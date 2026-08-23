@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react'
 import { useQueries } from '@tanstack/react-query'
 import { Folder, X } from 'lucide-react'
 import { api } from '../../api/client'
-import { useFileMetadata } from '../../api/hooks'
+import { useFileMetadata, useFolderFaces } from '../../api/hooks'
+import { FaceThumbnail } from '../../components/FaceThumbnail'
 import { FileThumbnail } from '../../components/FileThumbnail'
 import { useExplorerStore } from '../../stores/explorer'
 import { formatDate, formatDuration, formatSize } from '../format'
@@ -42,6 +43,27 @@ function AttributeCheckbox({ label, checked }: { label: string; checked: boolean
 function parentOf(path: string): string {
   const idx = Math.max(path.lastIndexOf('\\'), path.lastIndexOf('/'))
   return idx > 0 ? path.slice(0, idx) : path
+}
+
+/** "People in this folder" — the named people MediaMind detected inside the
+ * folder, shown so the user can see who's inside without opening it. Renders
+ * nothing when the folder is outside a scanned library or has no named people. */
+function FolderPeopleSection({ path, enabled }: { path: string; enabled: boolean }): React.JSX.Element | null {
+  const { data } = useFolderFaces(path, enabled, 50)
+  if (!data?.library_id || data.persons.length === 0) return null
+  return (
+    <div className="mt-3 border-t border-zinc-100 pt-3">
+      <p className="mb-2 text-xs font-medium text-zinc-500">People in this folder</p>
+      <div className="flex flex-wrap gap-x-3 gap-y-2">
+        {data.persons.map((p) => (
+          <div key={p.person_id} className="flex items-center gap-1.5" title={p.name}>
+            <FaceThumbnail libraryId={data.library_id!} faceId={p.sample_face_id} size={24} />
+            <span className="max-w-28 truncate text-xs text-zinc-700">{p.name}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 /**
@@ -168,6 +190,9 @@ export function PropertiesDialog({ open, onClose, entries }: Props): React.JSX.E
                   <AttributeCheckbox label="Hidden" checked={singleEntry!.hidden} />
                   <AttributeCheckbox label="System" checked={singleEntry!.system} />
                 </div>
+              )}
+              {isSingle && singleEntry!.type === 'folder' && (
+                <FolderPeopleSection path={singleEntry!.path} enabled={open} />
               )}
             </>
           ) : (
