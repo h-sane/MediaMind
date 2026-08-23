@@ -1,7 +1,10 @@
 import { useRef, useState } from 'react'
 import {
+  useAcceptGlobalLinkSuggestion,
   useCreateGlobalPerson,
   useDeleteGlobalPerson,
+  useDismissGlobalLinkSuggestion,
+  useGlobalLinkSuggestions,
   useGlobalPeople,
   useRenameGlobalPerson,
   useSetGlobalPrimaryLocation,
@@ -9,7 +12,7 @@ import {
 } from '../../../api/hooks'
 import { FaceThumbnail } from '../../../components/FaceThumbnail'
 import { personPath, useExplorerStore } from '../../../stores/explorer'
-import type { GlobalPerson, GlobalPersonMember } from '../../../api/client'
+import type { GlobalLinkSuggestion, GlobalPerson, GlobalPersonMember } from '../../../api/client'
 
 /** A person identity that can span multiple registered libraries (drives,
  * mounts) — every media location it's linked to is listed as a "member".
@@ -217,6 +220,80 @@ function GlobalPersonDetail({ person }: { person: GlobalPerson }): React.JSX.Ele
   )
 }
 
+/** Finds a member tile's display info (name, thumbnail) for a suggestion's
+ * side from the already-loaded aggregation — every named local person is
+ * guaranteed a member entry somewhere (see `sync_named_persons`), so no
+ * extra fetch is needed just to render the suggestion strip. */
+function findMember(
+  people: GlobalPerson[] | undefined,
+  libraryId: string,
+  localPersonId: number
+): GlobalPersonMember | undefined {
+  for (const p of people ?? []) {
+    const m = p.members.find((m) => m.library_id === libraryId && m.local_person_id === localPersonId)
+    if (m) return m
+  }
+  return undefined
+}
+
+function LinkSuggestionsStrip({ people }: { people: GlobalPerson[] | undefined }): React.JSX.Element | null {
+  const { data: suggestions } = useGlobalLinkSuggestions()
+  const accept = useAcceptGlobalLinkSuggestion()
+  const dismiss = useDismissGlobalLinkSuggestion()
+
+  if (!suggestions || suggestions.length === 0) return null
+
+  return (
+    <div className="border-b border-zinc-200 bg-amber-50 px-4 py-3">
+      <p className="mb-2 text-xs font-medium text-zinc-600">
+        Same person, different library? Never linked automatically — you decide.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {suggestions.map((s: GlobalLinkSuggestion) => {
+          const a = findMember(people, s.library_id_a, s.local_person_id_a)
+          const b = findMember(people, s.library_id_b, s.local_person_id_b)
+          const key = `${s.library_id_a}:${s.local_person_id_a}|${s.library_id_b}:${s.local_person_id_b}`
+          return (
+            <div
+              key={key}
+              className="flex items-center gap-2 rounded-xl border border-amber-200 bg-white px-3 py-2 shadow-sm"
+            >
+              <div className="flex -space-x-2">
+                {a?.sample_face_ids[0] != null && (
+                  <FaceThumbnail libraryId={a.library_id} faceId={a.sample_face_ids[0]} size={36} className="ring-2 ring-white" />
+                )}
+                {b?.sample_face_ids[0] != null && (
+                  <FaceThumbnail libraryId={b.library_id} faceId={b.sample_face_ids[0]} size={36} className="ring-2 ring-white" />
+                )}
+              </div>
+              <div className="text-xs">
+                <p className="font-medium text-zinc-800">
+                  {a?.name ?? '?'} ({a?.library_name}) ↔ {b?.name ?? '?'} ({b?.library_name})
+                </p>
+                <p className="text-zinc-500">{Math.round(s.similarity * 100)}% alike</p>
+              </div>
+              <button
+                onClick={() => accept.mutate(s)}
+                disabled={accept.isPending}
+                className="rounded-lg bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-700 disabled:opacity-50"
+              >
+                Link
+              </button>
+              <button
+                onClick={() => dismiss.mutate(s)}
+                disabled={dismiss.isPending}
+                className="rounded-lg border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-50 disabled:opacity-50"
+              >
+                Not the same
+              </button>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export function GlobalPeoplePanel(): React.JSX.Element {
   const { data: people, isPending, isError } = useGlobalPeople()
   const createPerson = useCreateGlobalPerson()
@@ -260,6 +337,8 @@ export function GlobalPeoplePanel(): React.JSX.Element {
           </button>
         </form>
       </div>
+
+      <LinkSuggestionsStrip people={people} />
 
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1 overflow-y-auto p-4">

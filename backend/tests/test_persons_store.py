@@ -215,7 +215,9 @@ def test_merge_same_person_returns_false(conn):
 
 
 # ---------------------------------------------------------------------------
-# pending_for_named
+# pending_for_named (confidence-gated: SUGGEST_MATCH_THRESHOLD..AUTO_MATCH_THRESHOLD
+# offers a pending suggestion regardless of named/unnamed; >= AUTO_MATCH_THRESHOLD
+# auto-attaches even to a named person, per Hussain's revised decision)
 # ---------------------------------------------------------------------------
 
 def test_pending_match_created_for_named_person(conn):
@@ -228,7 +230,9 @@ def test_pending_match_created_for_named_person(conn):
     pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
     rename_person(conn, pid, "Carol")
 
-    # New file with same person → should create pending match
+    # New file, own cluster, moderately similar to Carol (~0.71 — well below
+    # AUTO_MATCH_THRESHOLD but above SUGGEST_MATCH_THRESHOLD) → pending, not
+    # auto-attached and not silently dropped.
     fid2 = upsert_file(conn, "r2.jpg", "photo", 100, 0.0, "h_r2", True)
     conn.execute("DELETE FROM scans")
     conn.commit()
@@ -236,14 +240,14 @@ def test_pending_match_created_for_named_person(conn):
     import time
     file_faces2 = [
         FileFaces(file_id=fid, content_hash="h_r", decoded_ok=True, faces=[_fake_face(1, 0, 0)]),
-        FileFaces(file_id=fid2, content_hash="h_r2", decoded_ok=True, faces=[_fake_face(0.99, 0.01, 0)]),
+        FileFaces(file_id=fid2, content_hash="h_r2", decoded_ok=True, faces=[_fake_face(0.7, 0.7, 0)]),
     ]
     persist_face_scan(
         conn,
         scan_id="test-scan-2",
         provider_id=PROVIDER,
         file_faces=file_faces2,
-        labels=np.array([0, 0]),
+        labels=np.array([0, 1]),
         owners=[0, 1],
         started_at=time.time() - 1,
         finished_at=time.time(),
@@ -256,6 +260,48 @@ def test_pending_match_created_for_named_person(conn):
     pending = conn.execute("SELECT * FROM pending_matches WHERE decision IS NULL").fetchall()
     assert len(pending) == 1
     assert pending[0]["person_id"] == pid
+    # its own (brand-new) cluster identity stands until the suggestion is
+    # confirmed — pending is an offer to reassign, not a hold.
+    face2 = conn.execute(
+        "SELECT person_id FROM faces WHERE file_id = ? AND provider_id = ?", (fid2, PROVIDER)
+    ).fetchone()
+    assert face2["person_id"] is not None
+    assert face2["person_id"] != pid
+
+
+def test_high_confidence_match_auto_attaches_even_to_named_person(conn):
+    """Revised behavior: only similarity is what gates auto-attach vs. pending
+    now — a near-identical face auto-attaches directly to a named person, no
+    review needed, unlike the old named-person-always-pending rule."""
+    fid = upsert_file(conn, "r.jpg", "photo", 100, 0.0, "h_r", True)
+    conn.commit()
+    _do_scan(conn, [FileFaces(file_id=fid, content_hash="h_r", decoded_ok=True, faces=[_fake_face(1, 0, 0)])], labels=[0])
+    pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
+    rename_person(conn, pid, "Carol")
+
+    fid2 = upsert_file(conn, "r2.jpg", "photo", 100, 0.0, "h_r2", True)
+    conn.execute("DELETE FROM scans")
+    conn.commit()
+
+    import time
+    file_faces2 = [
+        FileFaces(file_id=fid, content_hash="h_r", decoded_ok=True, faces=[_fake_face(1, 0, 0)]),
+        FileFaces(file_id=fid2, content_hash="h_r2", decoded_ok=True, faces=[_fake_face(0.99, 0.01, 0)]),
+    ]
+    persist_face_scan(
+        conn, scan_id="test-scan-2", provider_id=PROVIDER, file_faces=file_faces2,
+        labels=np.array([0, 0]), owners=[0, 1],
+        started_at=time.time() - 1, finished_at=time.time(),
+        params={"provider_id": PROVIDER}, summary={"files": 2, "faces": 2, "people": 1},
+        pending_for_named=True, new_file_ids={fid2},
+    )
+
+    pending = conn.execute("SELECT * FROM pending_matches WHERE decision IS NULL").fetchall()
+    assert pending == []
+    face2 = conn.execute(
+        "SELECT person_id FROM faces WHERE file_id = ? AND provider_id = ?", (fid2, PROVIDER)
+    ).fetchone()
+    assert face2["person_id"] == pid
 
 
 def test_rejected_pending_match_stays_suppressed_across_rescans(conn):
@@ -274,16 +320,17 @@ def test_rejected_pending_match_stays_suppressed_across_rescans(conn):
     pid = conn.execute("SELECT id FROM persons WHERE provider_id = ?", (PROVIDER,)).fetchone()["id"]
     rename_person(conn, pid, "Carol")
 
-    # Scan 2: r2.jpg appears for the first time and matches Carol -> pending.
+    # Scan 2: r2.jpg appears for the first time, own cluster, moderately
+    # similar to Carol (~0.71 — suggest band, not auto-attach) -> pending.
     conn.execute("DELETE FROM scans")
     conn.commit()
     file_faces = [
         FileFaces(file_id=fid, content_hash="hash_r", decoded_ok=True, faces=[_fake_face(1, 0, 0)]),
-        FileFaces(file_id=fid2, content_hash="hash_r2", decoded_ok=True, faces=[_fake_face(0.99, 0.01, 0)]),
+        FileFaces(file_id=fid2, content_hash="hash_r2", decoded_ok=True, faces=[_fake_face(0.7, 0.7, 0)]),
     ]
     persist_face_scan(
         conn, scan_id="s2", provider_id=PROVIDER, file_faces=file_faces,
-        labels=np.array([0, 0]), owners=[0, 1],
+        labels=np.array([0, 1]), owners=[0, 1],
         started_at=0.0, finished_at=1.0, params={"provider_id": PROVIDER}, summary={},
         pending_for_named=True, new_file_ids={fid2},
     )
@@ -300,7 +347,7 @@ def test_rejected_pending_match_stays_suppressed_across_rescans(conn):
     conn.commit()
     persist_face_scan(
         conn, scan_id="s3", provider_id=PROVIDER, file_faces=file_faces,
-        labels=np.array([0, 0]), owners=[0, 1],
+        labels=np.array([0, 1]), owners=[0, 1],
         started_at=1.0, finished_at=2.0, params={"provider_id": PROVIDER}, summary={},
         pending_for_named=True, new_file_ids={fid2},
     )
@@ -308,10 +355,16 @@ def test_rejected_pending_match_stays_suppressed_across_rescans(conn):
     pending_after = conn.execute("SELECT * FROM pending_matches WHERE decision IS NULL").fetchall()
     assert pending_after == [], "a rejected pending match was re-suggested after a rescan"
 
+    # A rejected, never-durably-recorded suggestion means each full rescan
+    # re-clusters this face into its own fresh Person_NNN — the specific id
+    # isn't stable across rescans (documented ponytail tradeoff in
+    # persist_face_scan), but it must never be blanked or silently pointed at
+    # the rejected candidate.
     face_row = conn.execute(
         "SELECT person_id FROM faces WHERE file_id = ? AND provider_id = ?", (fid2, PROVIDER)
     ).fetchone()
-    assert face_row["person_id"] is None, "rejected face must stay unassigned, not get silently auto-confirmed"
+    assert face_row["person_id"] is not None
+    assert face_row["person_id"] != pid
 
 
 # ---------------------------------------------------------------------------

@@ -330,6 +330,10 @@ class PersonPrimaryFolderIn(BaseModel):
     path: str | None
 
 
+class FaceReassignIn(BaseModel):
+    person_id: int
+
+
 class MergeSuggestionOut(BaseModel):
     person_a: int
     person_b: int
@@ -423,6 +427,7 @@ class PendingMatchOut(BaseModel):
 class PendingDecisionItem(BaseModel):
     pending_id: int
     decision: str   # "confirmed" | "rejected"
+    reassign_to_person_id: int | None = None  # "confirmed" only — assign to a different person than suggested
 
 
 class PendingDecisionsIn(BaseModel):
@@ -631,7 +636,10 @@ class GlobalLinkSuggestionOut(BaseModel):
     similarity: float
 
 
-class GlobalLinkSuggestionDismissIn(BaseModel):
+class GlobalLinkSuggestionPairIn(BaseModel):
+    """Identifies a cross-library suggestion pair — same shape used by both
+    the dismiss ("not the same person") and link (accept) actions."""
+
     library_id_a: str
     local_person_id_a: int
     library_id_b: str

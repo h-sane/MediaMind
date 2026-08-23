@@ -12,6 +12,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 
 from mediamind.api.models import (
+    GlobalLinkSuggestionOut,
+    GlobalLinkSuggestionPairIn,
     GlobalPersonCreateIn,
     GlobalPersonLinkIn,
     GlobalPersonMemberOut,
@@ -19,7 +21,7 @@ from mediamind.api.models import (
     GlobalPersonPrimaryLocationIn,
     GlobalPersonRenameIn,
 )
-from mediamind.core.global_people import list_aggregated, open_library_db
+from mediamind.core.global_people import list_aggregated, list_link_suggestions, open_library_db, resolve_link_suggestion
 from mediamind.core.libraries import LibraryRegistry
 from mediamind.store import global_people as gp_store
 from mediamind.store.persons import latest_faces_scan
@@ -181,4 +183,71 @@ def unlink_local_person(body: GlobalPersonLinkIn, request: Request):
     if not ok:
         raise HTTPException(status_code=404, detail="Link not found")
     _invalidate_cache()
+    return {"ok": True}
+
+
+@router.get("/link-suggestions", response_model=list[GlobalLinkSuggestionOut])
+def link_suggestions(request: Request):
+    """"Are these the same person, in two different libraries?" pairs — never
+    auto-linked, regardless of similarity (see `resolve_link_suggestion`
+    docstring)."""
+    gp_conn = gp_store.open_global_db()
+    try:
+        suggestions = list_link_suggestions(gp_conn, _registry(request))
+    finally:
+        gp_conn.close()
+    return [GlobalLinkSuggestionOut(**s) for s in suggestions]
+
+
+@router.post("/link-suggestions/link")
+def accept_link_suggestion(body: GlobalLinkSuggestionPairIn, request: Request):
+    """Explicit accept — the only way two libraries' persons ever become one
+    global identity."""
+    registry = _registry(request)
+    lib_b = registry.get(body.library_id_b)
+    if lib_b is None:
+        raise HTTPException(status_code=404, detail="Unknown library")
+    conn = open_library_db(lib_b)
+    try:
+        scan = latest_faces_scan(conn)
+        if scan is None:
+            raise HTTPException(status_code=422, detail="Library has no face scan")
+        provider_id = json.loads(scan["params"] or "{}").get("provider_id", "")
+    finally:
+        conn.close()
+
+    gp_conn = gp_store.open_global_db()
+    try:
+        try:
+            resolve_link_suggestion(
+                gp_conn,
+                body.library_id_a,
+                body.local_person_id_a,
+                body.library_id_b,
+                body.local_person_id_b,
+                provider_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        gp_conn.close()
+    _invalidate_cache()
+    return {"ok": True}
+
+
+@router.post("/link-suggestions/dismiss")
+def dismiss_link_suggestion(body: GlobalLinkSuggestionPairIn, request: Request):
+    """"Not the same person" — durably suppress this pair from future
+    link-suggestion results."""
+    gp_conn = gp_store.open_global_db()
+    try:
+        gp_store.dismiss_link_suggestion(
+            gp_conn,
+            body.library_id_a,
+            body.local_person_id_a,
+            body.library_id_b,
+            body.local_person_id_b,
+        )
+    finally:
+        gp_conn.close()
     return {"ok": True}

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Copy, CopyCheck, FolderPlus, Sparkles, UserCheck, X } from 'lucide-react'
 import {
   useDecidePending,
@@ -8,6 +9,7 @@ import {
   useDuplicates,
   useLibraries,
   usePendingMatches,
+  usePersons,
   useRegisterDiscoveredFolder
 } from '../../../api/hooks'
 import { useExplorerStore, parentPath } from '../../../stores/explorer'
@@ -153,14 +155,102 @@ function DiscoverySuggestionsSection(): React.JSX.Element | null {
 // / `useDecidePending` so confirming here keeps that panel in sync too.
 // ---------------------------------------------------------------------------
 
+function PendingMatchCard({
+  libraryId,
+  match,
+  otherPersons,
+  onDecide,
+  disabled
+}: {
+  libraryId: string
+  match: PendingMatch
+  otherPersons: { id: number; label: string }[]
+  onDecide: (decision: 'confirmed' | 'rejected', reassignToPersonId?: number) => void
+  disabled: boolean
+}): React.JSX.Element {
+  const [reassigning, setReassigning] = useState(false)
+
+  return (
+    <div className="flex items-center gap-4 rounded-2xl border border-zinc-200 bg-white p-4">
+      <FaceThumbnail libraryId={libraryId} faceId={match.face_id} size={48} />
+      <div className="min-w-0 flex-1">
+        {reassigning ? (
+          <select
+            autoFocus
+            defaultValue=""
+            onChange={(e) => {
+              const id = Number(e.target.value)
+              if (id) onDecide('confirmed', id)
+            }}
+            onBlur={() => setReassigning(false)}
+            className="w-full rounded-lg border border-zinc-200 px-2 py-1 text-sm"
+          >
+            <option value="" disabled>
+              Assign to who?
+            </option>
+            {otherPersons.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <>
+            <p className="text-sm font-medium text-zinc-800">
+              Assign to <span className="text-zinc-900">{match.person_name}</span>?
+            </p>
+            <p className="mt-0.5 text-xs text-zinc-400">{Math.round(match.confidence * 100)}% confidence</p>
+          </>
+        )}
+      </div>
+      {!reassigning && (
+        <div className="flex shrink-0 gap-2">
+          <button
+            onClick={() => onDecide('rejected')}
+            disabled={disabled}
+            className="rounded-lg border border-zinc-200 px-3 py-1.5 text-sm text-zinc-600 transition hover:bg-zinc-50 disabled:opacity-50"
+          >
+            Not {match.person_name}
+          </button>
+          {otherPersons.length > 0 && (
+            <button
+              onClick={() => setReassigning(true)}
+              disabled={disabled}
+              className="rounded-lg border border-zinc-200 px-3 py-1.5 text-sm text-zinc-600 transition hover:bg-zinc-50 disabled:opacity-50"
+            >
+              Someone else…
+            </button>
+          )}
+          <button
+            onClick={() => onDecide('confirmed')}
+            disabled={disabled}
+            className="rounded-lg bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:opacity-50"
+          >
+            Confirm
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Google-Photos-style review queue: per-face confirm/reassign/skip, plus a
+ * bulk "all N of these are {person}" action for when a whole batch is
+ * obviously the same person — reuses the same `pending_matches` queue and
+ * `useDecidePending` the Facial Recognition tab's own review panel writes
+ * to, so acting here keeps that panel in sync too. */
 function PendingMatchesSection({ libraryId }: { libraryId: string }): React.JSX.Element | null {
   const { data: matches, isLoading } = usePendingMatches(libraryId)
+  const { data: personsData } = usePersons(libraryId)
   const decide = useDecidePending(libraryId)
 
   if (isLoading || !matches || matches.length === 0) return null
 
-  const onDecide = (match: PendingMatch, decision: 'confirmed' | 'rejected') => {
-    decide.mutate([{ pending_id: match.id, decision }])
+  const allPersons = personsData?.persons ?? []
+
+  const grouped = new Map<number, PendingMatch[]>()
+  for (const m of matches) {
+    grouped.set(m.person_id, [...(grouped.get(m.person_id) ?? []), m])
   }
 
   return (
@@ -169,35 +259,41 @@ function PendingMatchesSection({ libraryId }: { libraryId: string }): React.JSX.
         <UserCheck className="h-4 w-4 text-zinc-400" />
         <h3 className="text-sm font-semibold text-zinc-800">New photos to confirm</h3>
       </div>
-      <div className="space-y-2">
-        {matches.map((match) => (
-          <div
-            key={match.id}
-            className="flex items-center gap-4 rounded-2xl border border-zinc-200 bg-white p-4"
-          >
-            <FaceThumbnail libraryId={libraryId} faceId={match.face_id} size={48} />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-zinc-800">
-                Assign to <span className="text-zinc-900">{match.person_name}</span>?
-              </p>
-              <p className="mt-0.5 text-xs text-zinc-400">{Math.round(match.confidence * 100)}% confidence</p>
-            </div>
-            <div className="flex shrink-0 gap-2">
-              <button
-                onClick={() => onDecide(match, 'rejected')}
+      <div className="space-y-4">
+        {[...grouped.entries()].map(([personId, group]) => (
+          <div key={personId} className="space-y-2">
+            {group.length > 1 && (
+              <div className="flex items-center justify-between px-1">
+                <p className="text-xs text-zinc-500">
+                  {group.length} photos suggested as {group[0].person_name}
+                </p>
+                <button
+                  onClick={() =>
+                    decide.mutate(group.map((m) => ({ pending_id: m.id, decision: 'confirmed' as const })))
+                  }
+                  disabled={decide.isPending}
+                  className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+                >
+                  All {group.length} are {group[0].person_name}
+                </button>
+              </div>
+            )}
+            {group.map((match) => (
+              <PendingMatchCard
+                key={match.id}
+                libraryId={libraryId}
+                match={match}
+                otherPersons={allPersons
+                  .filter((p) => p.id !== match.person_id)
+                  .map((p) => ({ id: p.id, label: p.name ?? p.auto_label }))}
                 disabled={decide.isPending}
-                className="rounded-lg border border-zinc-200 px-3 py-1.5 text-sm text-zinc-600 transition hover:bg-zinc-50 disabled:opacity-50"
-              >
-                Reject
-              </button>
-              <button
-                onClick={() => onDecide(match, 'confirmed')}
-                disabled={decide.isPending}
-                className="rounded-lg bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:opacity-50"
-              >
-                Confirm
-              </button>
-            </div>
+                onDecide={(decision, reassignToPersonId) => {
+                  decide.mutate([
+                    { pending_id: match.id, decision, reassign_to_person_id: reassignToPersonId ?? null }
+                  ])
+                }}
+              />
+            ))}
           </div>
         ))}
       </div>

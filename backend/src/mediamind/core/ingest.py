@@ -17,7 +17,7 @@ Ingest never moves or deletes a file. It only writes index rows (`files`,
 `embeddings`, `faces`, `pending_matches`, `duplicate_flags`) and warms the
 thumbnail cache — CLAUDE.md's "never break user media" / "review before
 commit" rules apply to every write here (see `_match_faces_to_existing_persons`
-for how the named-person review gate is preserved).
+for how the confidence-based review gate is preserved).
 """
 
 from __future__ import annotations
@@ -38,10 +38,9 @@ from mediamind.store import face_assignments
 from mediamind.store.duplicate_flags import flag_duplicate
 from mediamind.store.embeddings import CachedFace, get_cached_faces, put_cached_faces
 from mediamind.store.persons import (
-    AUTO_MATCH_THRESHOLD,
+    SUGGEST_MATCH_THRESHOLD,
     gate_face_match,
     load_person_centroids,
-    named_person_ids,
     upsert_file,
 )
 from mediamind.store.rejected_faces import is_rejected, regions_for
@@ -212,10 +211,12 @@ def _find_existing_match(
 
 def _best_person(embedding: np.ndarray, persons: dict[int, np.ndarray]) -> tuple[int | None, float]:
     """argmax cosine similarity against every existing person centroid,
-    clearing AUTO_MATCH_THRESHOLD — mirrors persist_face_scan's per-cluster
-    matching (store/persons.py), applied per-face instead of per-cluster."""
+    clearing SUGGEST_MATCH_THRESHOLD — the floor worth reporting at all;
+    `gate_face_match` (store/persons.py) decides auto-attach vs. pending vs.
+    drop from there. Mirrors persist_face_scan's per-cluster matching,
+    applied per-face instead of per-cluster."""
     best_pid: int | None = None
-    best_sim = AUTO_MATCH_THRESHOLD
+    best_sim = SUGGEST_MATCH_THRESHOLD
     for pid, centroid in persons.items():
         sim = float(np.dot(embedding, centroid))
         if sim > best_sim:
@@ -276,14 +277,13 @@ def _match_faces_to_existing_persons(
         return 0, 0
 
     persons = load_person_centroids(conn, provider_id)
-    named = named_person_ids(conn, provider_id)
 
     new_faces = 0
     pending_faces = 0
     for f in faces:
         pid, sim = _best_person(f.embedding, persons)
         was_rejected = pid is not None and _was_rejected(conn, content_hash, f.frame_no, pid)
-        decision = gate_face_match(pid, named, pending_for_named=True, was_rejected=was_rejected)
+        decision = gate_face_match(pid, sim, pending_enabled=True, was_rejected=was_rejected)
 
         embedding_blob = np.asarray(f.embedding, dtype=np.float32).tobytes()
         cur = conn.execute(

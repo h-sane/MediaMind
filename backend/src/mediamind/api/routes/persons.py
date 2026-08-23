@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
 from mediamind.api.models import (
+    FaceReassignIn,
     MergeSuggestionDismissIn,
     MergeSuggestionOut,
     PersonMediaItemOut,
@@ -32,6 +33,7 @@ from mediamind.store.persons import (
     merge_persons,
     merge_suggestions,
     person_media,
+    reassign_face,
     rename_person,
     set_primary_folder,
     latest_faces_scan,
@@ -243,6 +245,22 @@ def list_person_media(library_id: str, person_id: int, request: Request):
         )
         for fi in items
     ]
+
+
+@router.patch("/libraries/{library_id}/faces/{face_id}/person")
+def reassign_face_endpoint(library_id: str, face_id: int, body: FaceReassignIn, request: Request):
+    """Manually move a face to a different person from that person's own
+    media view — for correcting a misclassification after the fact, not part
+    of the pending-review queue (see `api/routes/pending.py` for that)."""
+    _, library_root = _get_library_and_root(request, library_id)
+    conn = _open_library_db(library_root)
+    try:
+        ok = reassign_face(conn, face_id, body.person_id)
+    finally:
+        conn.close()
+    if not ok:
+        raise HTTPException(status_code=404, detail="Unknown face id")
+    return {"ok": True}
 
 
 @router.post("/libraries/{library_id}/faces/{face_id}/reject")

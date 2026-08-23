@@ -394,6 +394,8 @@ export interface GlobalLinkSuggestion {
   similarity: number
 }
 
+export type GlobalLinkSuggestionPair = Omit<GlobalLinkSuggestion, 'similarity'>
+
 export interface PersonsOut {
   scan_id: string
   scanned_at: number | null
@@ -481,6 +483,12 @@ export interface PendingMatch {
   person_id: number
   person_name: string
   confidence: number
+}
+
+export interface PendingDecisionItem {
+  pending_id: number
+  decision: 'confirmed' | 'rejected'
+  reassign_to_person_id?: number | null
 }
 
 // ---------------------------------------------------------------------------
@@ -874,10 +882,7 @@ export const api = {
   pending: {
     list: (libraryId: string) =>
       request<PendingMatch[]>('GET', `/v1/libraries/${libraryId}/pending`),
-    decide: (
-      libraryId: string,
-      decisions: { pending_id: number; decision: 'confirmed' | 'rejected' }[]
-    ) =>
+    decide: (libraryId: string, decisions: PendingDecisionItem[]) =>
       request<{ updated: number }>('POST', `/v1/libraries/${libraryId}/pending/decisions`, {
         decisions
       })
@@ -931,6 +936,11 @@ export const api = {
 
     rejectFace: (libraryId: string, faceId: number) =>
       request<{ ok: boolean }>('POST', `/v1/libraries/${libraryId}/faces/${faceId}/reject`),
+
+    reassignFace: (libraryId: string, faceId: number, personId: number) =>
+      request<{ ok: boolean }>('PATCH', `/v1/libraries/${libraryId}/faces/${faceId}/person`, {
+        person_id: personId
+      }),
 
     materializePreview: (libraryId: string, personId: number) =>
       request<MaterializePreview>(
@@ -1050,6 +1060,14 @@ export const api = {
       request<{ ok: boolean }>('POST', '/v1/global/people/unlink', {
         library_id: libraryId,
         local_person_id: localPersonId
-      })
+      }),
+
+    linkSuggestions: () => request<GlobalLinkSuggestion[]>('GET', '/v1/global/link-suggestions'),
+
+    acceptLinkSuggestion: (s: GlobalLinkSuggestionPair) =>
+      request<{ ok: boolean }>('POST', '/v1/global/link-suggestions/link', s),
+
+    dismissLinkSuggestion: (s: GlobalLinkSuggestionPair) =>
+      request<{ ok: boolean }>('POST', '/v1/global/link-suggestions/dismiss', s)
   }
 }

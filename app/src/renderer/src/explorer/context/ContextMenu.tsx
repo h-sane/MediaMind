@@ -23,8 +23,10 @@ import {
   useAddLibrary,
   useEnsureLibrary,
   useLibraries,
+  usePersons,
   usePinQuickAccess,
   useQuickAccess,
+  useReassignFace,
   useRejectFace,
   useUnpinQuickAccess
 } from '../../api/hooks'
@@ -82,7 +84,10 @@ export function ExplorerContextMenu({ entries, orderedPaths, onOpenFile, childre
   const personView = parsePersonView(currentPath)
   const { data: personLibrary } = useEnsureLibrary(personView ? personView.folderRoot : null)
   const rejectFace = useRejectFace(personLibrary?.id ?? '')
+  const reassignFace = useReassignFace(personLibrary?.id ?? '')
+  const { data: personsInLibrary } = usePersons(personLibrary?.id ?? '')
   const canReject = !!entry && entry.type === 'file' && entry.faceId != null && !!personLibrary
+  const otherPersons = (personsInLibrary?.persons ?? []).filter((p) => p.id !== personView?.personId)
 
   // Resolve which tile (if any) was right-clicked from the DOM before Radix
   // opens the menu, and make sure it's selected — the per-tile ensureSelected
@@ -246,6 +251,26 @@ export function ExplorerContextMenu({ entries, orderedPaths, onOpenFile, childre
                   >
                     <UserX className="h-4 w-4" /> Not a face
                   </RadixContextMenu.Item>
+                  {otherPersons.length > 0 && (
+                    <RadixContextMenu.Sub>
+                      <RadixContextMenu.SubTrigger className={itemClass}>
+                        Reassign to <ChevronRight className="ml-auto h-3.5 w-3.5" />
+                      </RadixContextMenu.SubTrigger>
+                      <RadixContextMenu.Portal>
+                        <RadixContextMenu.SubContent className={subContentClass} sideOffset={2} alignOffset={-4}>
+                          {otherPersons.map((p) => (
+                            <RadixContextMenu.Item
+                              key={p.id}
+                              className={itemClass}
+                              onSelect={() => reassignFace.mutate({ faceId: entry.faceId as number, personId: p.id })}
+                            >
+                              {p.name ?? p.auto_label}
+                            </RadixContextMenu.Item>
+                          ))}
+                        </RadixContextMenu.SubContent>
+                      </RadixContextMenu.Portal>
+                    </RadixContextMenu.Sub>
+                  )}
                   <div className={separatorClass} />
                 </>
               )}

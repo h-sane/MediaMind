@@ -13,6 +13,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import numpy as np
+
 from mediamind.config import library_data_dir
 from mediamind.core.libraries import Library, LibraryRegistry
 from mediamind.store import global_people as gp_store
@@ -120,3 +122,102 @@ def list_aggregated(gp_conn: sqlite3.Connection, registry: LibraryRegistry) -> l
             }
         )
     return out
+
+
+# ---------------------------------------------------------------------------
+# Cross-library link suggestions — always a suggestion, never auto-linked
+# (Hussain: "even above 90-95% [...] always require my permission" for
+# cross-library identity, unlike the confidence-gated auto-classification
+# within one library, Phase 5).
+# ---------------------------------------------------------------------------
+
+def list_link_suggestions(gp_conn: sqlite3.Connection, registry: LibraryRegistry) -> list[dict]:
+    """Pairs of NAMED local persons, in different libraries, whose centroids
+    are close enough to plausibly be the same person — most-similar first.
+    Restricted to named persons (like the global identities themselves,
+    Phase 2) so a suggestion always has two real names to compare, and to
+    pairs sharing `provider_id` — embeddings from different face-recognition
+    models/providers are not comparable, so cross-provider pairs are silently
+    skipped rather than compared."""
+    sync_named_persons(gp_conn, registry)
+    dismissed = gp_store.dismissed_link_pairs(gp_conn)
+
+    entries: list[dict] = []
+    for lib in registry.list():
+        try:
+            conn = open_library_db(lib)
+        except (OSError, sqlite3.Error):
+            continue
+        try:
+            scan = persons_store.latest_faces_scan(conn)
+            if scan is None:
+                continue
+            provider_id = json.loads(scan["params"] or "{}").get("provider_id", "")
+            centroids = persons_store.load_person_centroids(conn, provider_id)
+            named_rows = conn.execute(
+                "SELECT id FROM persons WHERE provider_id = ? AND name IS NOT NULL", (provider_id,)
+            ).fetchall()
+            named_ids = {r["id"] for r in named_rows}
+            for pid, centroid in centroids.items():
+                if pid in named_ids:
+                    entries.append(
+                        {"library_id": lib.id, "local_person_id": pid, "provider_id": provider_id, "centroid": centroid}
+                    )
+        finally:
+            conn.close()
+
+    out: list[dict] = []
+    for i in range(len(entries)):
+        for j in range(i + 1, len(entries)):
+            a, b = entries[i], entries[j]
+            if a["library_id"] == b["library_id"] or a["provider_id"] != b["provider_id"]:
+                continue
+            gid_a = gp_store.global_for_local(gp_conn, a["library_id"], a["local_person_id"])
+            gid_b = gp_store.global_for_local(gp_conn, b["library_id"], b["local_person_id"])
+            if gid_a is not None and gid_a == gid_b:
+                continue  # already the same global identity
+            key_a = (a["library_id"], a["local_person_id"])
+            key_b = (b["library_id"], b["local_person_id"])
+            lo, hi = (key_a, key_b) if key_b >= key_a else (key_b, key_a)
+            if (lo[0], lo[1], hi[0], hi[1]) in dismissed:
+                continue
+            sim = float(np.dot(a["centroid"], b["centroid"]))
+            if sim >= persons_store.MERGE_SUGGESTION_MIN_SIM:
+                out.append(
+                    {
+                        "library_id_a": a["library_id"],
+                        "local_person_id_a": a["local_person_id"],
+                        "library_id_b": b["library_id"],
+                        "local_person_id_b": b["local_person_id"],
+                        "similarity": sim,
+                    }
+                )
+    out.sort(key=lambda s: s["similarity"], reverse=True)
+    return out[: persons_store.MAX_MERGE_SUGGESTIONS]
+
+
+def resolve_link_suggestion(
+    gp_conn: sqlite3.Connection,
+    library_id_a: str,
+    local_person_id_a: int,
+    library_id_b: str,
+    local_person_id_b: int,
+    provider_id: str,
+) -> None:
+    """Accept a suggestion — always an explicit user action, never automatic.
+    Both sides are expected to already have a global identity (every named
+    local person gets one lazily via `sync_named_persons`); B's link is
+    repointed onto A's global person, and B's now-empty global person (if it
+    had no other members) is pruned so accepting a suggestion doesn't leave a
+    duplicate single-member identity behind."""
+    gid_a = gp_store.global_for_local(gp_conn, library_id_a, local_person_id_a)
+    gid_b = gp_store.global_for_local(gp_conn, library_id_b, local_person_id_b)
+    if gid_a is None and gid_b is None:
+        raise ValueError("Neither local person has a global identity yet")
+    if gid_a is None:
+        gid_a = gid_b
+    if gid_a == gid_b:
+        return
+    gp_store.link(gp_conn, gid_a, library_id_b, local_person_id_b, provider_id)
+    if gid_b is not None and not gp_store.links_for_global(gp_conn, gid_b):
+        gp_store.delete_global_person(gp_conn, gid_b)
