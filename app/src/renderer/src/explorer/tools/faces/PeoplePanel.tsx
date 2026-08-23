@@ -15,7 +15,7 @@ import { selectJobForLibrary, useJobsStore } from '../../../stores/jobs'
 import { useZoomScale } from '../../../hooks/useZoomScale'
 import { PersonCard } from './PersonCard'
 import { GroupSuggestionStrip } from './GroupSuggestionStrip'
-import { MergeSuggestionStrip, pairKey } from './MergeSuggestionStrip'
+import { MergeReviewModal, pairKey, visibleMergePairs } from './MergeReviewModal'
 import { RespectedFolders } from './RespectedFolders'
 import { MatchReviewModal } from './MatchReviewModal'
 import { MaterializeReviewModal } from './MaterializeReviewModal'
@@ -77,7 +77,6 @@ export function PeoplePanel({
   // query refetching — the backend dismissal (dismiss_merge_suggestion) is
   // what actually makes "Not the same" survive reload.
   const [dismissedPairs, setDismissedPairs] = useState<Set<string>>(new Set())
-  const [mergingPairKey, setMergingPairKey] = useState<string | null>(null)
 
   const { data: suggestionsData } = useBindingSuggestions(libraryId)
   const { data: bindingsData } = useBindings(libraryId)
@@ -85,6 +84,7 @@ export function PeoplePanel({
   const acceptSuggestion = useAcceptBindingSuggestion(libraryId)
   const dismissSuggestion = useDismissBindingSuggestion(libraryId)
 
+  const [showMergeReview, setShowMergeReview] = useState(false)
   const [mergingSuggestionId, setMergingSuggestionId] = useState<number | null>(null)
   const [mergeResult, setMergeResult] = useState<ExecutionReport | null>(null)
   const [reviewingSuggestion, setReviewingSuggestion] = useState<BindingSuggestion | null>(null)
@@ -129,11 +129,12 @@ export function PeoplePanel({
   // survivor is chosen deterministically (named/most-photos) and an accidental
   // merge is itself one Merge-mode click to undo by re-splitting later.
   const handleSuggestionMerge = (sourceId: number, targetId: number) => {
-    setMergingPairKey(pairKey(sourceId, targetId))
-    mergePersons.mutate(
-      { sourceId, targetId },
-      { onSettled: () => setMergingPairKey(null) }
-    )
+    mergePersons.mutate({ sourceId, targetId })
+  }
+
+  const dismissMergePair = (personAId: number, personBId: number) => {
+    setDismissedPairs((prev) => new Set(prev).add(pairKey(personAId, personBId)))
+    dismissMergeSuggestion.mutate({ personAId, personBId })
   }
 
   const suggestions = suggestionsData?.suggestions ?? []
@@ -148,6 +149,7 @@ export function PeoplePanel({
   )
 
   const persons = personsData?.persons ?? []
+  const mergePairs = visibleMergePairs(mergeSuggestionsData ?? [], persons, dismissedPairs)
   const personDisplayName = (id: number): string =>
     persons.find((p) => p.id === id)?.name ?? persons.find((p) => p.id === id)?.auto_label ?? `#${id}`
   // Actionable folder-match suggestions float to the top; below them, rank by
@@ -201,6 +203,17 @@ export function PeoplePanel({
         </div>
 
         <div className="flex flex-wrap gap-2">
+          {!isScanning && mergePairs.length > 0 && (
+            <button
+              onClick={() => setShowMergeReview(true)}
+              className="flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-700 transition hover:bg-indigo-100"
+            >
+              Review suggestions
+              <span className="rounded-full bg-indigo-200 px-1.5 py-0.5 text-xs font-medium">
+                {mergePairs.length}
+              </span>
+            </button>
+          )}
           {!!personsData?.pending_count && (
             <button
               onClick={onReviewPending}
@@ -266,21 +279,6 @@ export function PeoplePanel({
           suggestions={groupSuggestions}
           onReview={handleReviewSuggestion}
           onDismiss={(s) => dismissSuggestion.mutate(s.id)}
-        />
-      )}
-
-      {!isScanning && !isLoading && persons.length > 0 && (
-        <MergeSuggestionStrip
-          libraryId={libraryId}
-          suggestions={mergeSuggestionsData ?? []}
-          persons={persons}
-          dismissed={dismissedPairs}
-          busyKey={mergingPairKey}
-          onMerge={handleSuggestionMerge}
-          onDismiss={(personAId, personBId) => {
-            setDismissedPairs((prev) => new Set(prev).add(pairKey(personAId, personBId)))
-            dismissMergeSuggestion.mutate({ personAId, personBId })
-          }}
         />
       )}
 
@@ -419,6 +417,18 @@ export function PeoplePanel({
           person={materializingPerson}
           onClose={() => setMaterializingPerson(null)}
           onCommitted={() => setMaterializingPerson(null)}
+        />
+      )}
+
+      {showMergeReview && (
+        <MergeReviewModal
+          libraryId={libraryId}
+          suggestions={mergeSuggestionsData ?? []}
+          persons={persons}
+          dismissed={dismissedPairs}
+          onMerge={handleSuggestionMerge}
+          onDismiss={dismissMergePair}
+          onClose={() => setShowMergeReview(false)}
         />
       )}
     </div>
