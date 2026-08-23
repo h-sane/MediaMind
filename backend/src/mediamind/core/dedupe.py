@@ -35,9 +35,9 @@ DEFAULT_NEAR_THRESHOLD = 5  # max pHash hamming distance to call two images "nea
 # one file's I/O time. Seen in practice with cloud-sync placeholder files
 # (OneDrive Files-On-Demand, Google Drive streaming) and stalled
 # network/encrypted-drive mounts, where a single `open()`/`read()` can block
-# indefinitely. This is a floor, not a flat cap — hash_timeout_for() scales it
-# up for large files so a big-but-healthy video isn't skipped just for being
-# big, while small stalled files still time out quickly.
+# indefinitely. This is the floor hash_timeout_for() scales up for large files
+# (so a big-but-healthy video isn't skipped just for being big) and caps at
+# MAX_FILE_TIMEOUT_SECONDS (so a single stalled read can't freeze the scan).
 DEFAULT_FILE_TIMEOUT_SECONDS = 30.0
 
 # Mirrors scanner.MAX_LEAKED_STALL_THREADS: a file whose read times out
