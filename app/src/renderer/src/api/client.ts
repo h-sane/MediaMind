@@ -595,6 +595,14 @@ export const api = {
         `/v1/fs/has-media?${paths.map((p) => `paths=${encodeURIComponent(p)}`).join('&')}`
       ),
 
+    // Fire-and-forget: ask the backend to pre-warm this folder's thumbnails at
+    // the view's tile size so below-the-fold tiles are cache hits on scroll.
+    prewarm: (path: string, size: number) =>
+      request<{ ok: boolean }>(
+        'GET',
+        `/v1/fs/prewarm?path=${encodeURIComponent(path)}&size=${size}`
+      ),
+
     // Thumbnails are plain `<img src>` now — see `fsThumbUrl`.
     // Direct backend URL — no fetch, no blob. Range-seekable by the browser
     // itself; the main process injects the auth token header on this origin.

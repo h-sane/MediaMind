@@ -18,6 +18,16 @@ productName: "MediaMind"
 copyright: "Copyright © 2024-2025 MediaMind contributors"
 asar: true
 
+# In-app auto-update feed. electron-builder writes app-update.yml into the
+# package from this block, and electron-updater (see src/main/updater.ts)
+# reads the repo's GitHub Releases to find newer versions. Publishing a build
+# with `electron-builder --publish always` (needs a GH_TOKEN) uploads the
+# installer + latest.yml that the running app then discovers.
+publish:
+  provider: github
+  owner: h-sane
+  repo: MediaMind
+
 directories:
   output: dist
   buildResources: build-resources

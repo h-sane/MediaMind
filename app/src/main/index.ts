@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { startBackend, stopBackend, getBackendInfo } from './backend'
+import { initUpdater } from './updater'
 import { logLine, logPath } from './log'
 import type { ShellOpenResult } from '../shared/types'
 
@@ -350,6 +351,11 @@ app.whenReady().then(async () => {
         '(see backend/README.md).'
     )
   }
+
+  // Check for an app update in the background once the window is up (no-op in
+  // dev / unpackaged builds). Non-blocking: the renderer shows a bubble if one
+  // is found.
+  initUpdater()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

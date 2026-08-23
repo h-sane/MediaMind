@@ -25,6 +25,7 @@ from mediamind.core.media_index import MediaIndex
 from mediamind.core.quick_access import QuickAccessStore
 from mediamind.core.recent import RecentFilesStore
 from mediamind.core.settings import SettingsStore
+from mediamind.core.thumb_prewarm import ThumbnailPrewarmer
 from mediamind.providers.manager import ProviderManager
 
 logger = logging.getLogger("mediamind.api")
@@ -36,6 +37,7 @@ async def _lifespan(app: FastAPI):
     app.state.registry = LibraryRegistry()
     app.state.media_index = MediaIndex(browse_index_db_path())
     app.state.folder_stats = FolderStatsIndex(folder_stats_db_path())
+    app.state.thumb_prewarmer = ThumbnailPrewarmer()
     app.state.quick_access = QuickAccessStore()
     app.state.recent_files = RecentFilesStore()
     app.state.settings = SettingsStore()

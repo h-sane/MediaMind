@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useDeferredValue, useMemo } from 'react'
 import { useBrowseDir, useDrives, useEnsureLibrary, usePersonMedia } from '../../api/hooks'
 import { useGalleryItems } from '../../api/useGallery'
 import { useRecursiveSearch } from '../../api/useSearch'
@@ -246,29 +246,23 @@ export function useDirectoryListing() {
   const personLibrary = useEnsureLibrary(personView ? personView.folderRoot : null)
   const personMediaQuery = usePersonMedia(personLibrary.data?.id ?? '', personView?.personId ?? -1)
 
-  const entries = useMemo((): DirEntry[] => {
-    if (personView) {
-      const raw = personMediaToEntries(personMediaQuery.data ?? [], sortKey, sortDir)
-      return filterEntries(raw, { searchQuery, filterType, filterDate, filterSize })
-    }
+  // Split the (expensive) sort from the (cheap) filter so typing in the search
+  // box never re-sorts the whole listing — only re-runs the filter (Phase 6 /
+  // F3). `raw` depends on the data + sort key/dir only; the search query and
+  // filter chips feed the second memo.
+  const raw = useMemo((): DirEntry[] => {
+    if (personView) return personMediaToEntries(personMediaQuery.data ?? [], sortKey, sortDir)
     if (recursiveSearchActive && recursiveSearchRoot) {
-      const raw = sortSearchResults(searchResultsQuery.data?.results ?? [], sortKey, sortDir)
-      // The name match already happened server-side — only the type/date/size
-      // chips still make sense to re-apply here, on the returned set.
-      return filterEntries(raw, { searchQuery: '', filterType, filterDate, filterSize })
+      return sortSearchResults(searchResultsQuery.data?.results ?? [], sortKey, sortDir)
     }
-    if (galleryActive) {
-      const raw = galleryToEntries(galleryQuery.data?.items ?? [])
-      return filterEntries(raw, { searchQuery, filterType, filterDate, filterSize })
-    }
-    const raw = isRoot
+    if (galleryActive) return galleryToEntries(galleryQuery.data?.items ?? [])
+    return isRoot
       ? [...(drivesQuery.data ?? [])]
           .sort((a, b) => a.label.localeCompare(b.label))
           .map((d): DirEntry => ({ type: 'drive', name: d.label, path: d.path }))
       : dirQuery.data
         ? sortEntries(dirQuery.data.folders, dirQuery.data.files, sortKey, sortDir)
         : []
-    return filterEntries(raw, { searchQuery, filterType, filterDate, filterSize })
   }, [
     personView?.personId,
     personMediaQuery.data,
@@ -281,12 +275,18 @@ export function useDirectoryListing() {
     drivesQuery.data,
     dirQuery.data,
     sortKey,
-    sortDir,
-    searchQuery,
-    filterType,
-    filterDate,
-    filterSize
+    sortDir
   ])
+
+  // Deferring the search query keeps the input responsive while the (cheap)
+  // re-filter of a large listing runs at lower priority — React's built-in
+  // debounce, no timers (Phase 6 / F3). Recursive search already name-matched
+  // server-side, so its own query is not re-applied to the local filter.
+  const deferredSearch = useDeferredValue(searchQuery)
+  const entries = useMemo((): DirEntry[] => {
+    const q = recursiveSearchActive ? '' : deferredSearch
+    return filterEntries(raw, { searchQuery: q, filterType, filterDate, filterSize })
+  }, [raw, recursiveSearchActive, deferredSearch, filterType, filterDate, filterSize])
 
   return {
     entries,

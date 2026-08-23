@@ -1,4 +1,5 @@
 import * as RadixContextMenu from '@radix-ui/react-context-menu'
+import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   ChevronRight,
@@ -32,8 +33,10 @@ import { useFileOps } from '../useFileOps'
 import type { DirEntry } from '../content/useDirectoryListing'
 
 interface Props {
-  /** The entry under the cursor, or null for a right-click on empty space. */
-  entry: DirEntry | null
+  /** The full current listing, so a right-click can resolve the entry under
+   * the cursor from its `data-entry-path` — one menu for the whole view
+   * instead of a Radix machine per tile (Phase 6 / F1). */
+  entries: DirEntry[]
   orderedPaths: string[]
   onOpenFile: (path: string) => void
   children: React.ReactNode
@@ -45,10 +48,13 @@ const separatorClass = 'my-1 h-px bg-zinc-200'
 const contentClass = 'z-50 w-52 rounded-lg border border-zinc-200 bg-white py-1 shadow-lg'
 const subContentClass = 'z-50 w-44 rounded-lg border border-zinc-200 bg-white py-1 shadow-lg'
 
-/** One right-click menu, reused for every row across all three views and
- * for empty-space clicks. Menu contents branch on `entry` and the current
- * selection rather than each view building its own menu. */
-export function ExplorerContextMenu({ entry, orderedPaths, onOpenFile, children }: Props): React.JSX.Element {
+/** One right-click menu per view, wrapping the whole content area. The
+ * right-clicked entry is resolved from the DOM (`data-entry-path`) on
+ * contextmenu — `entry === null` means empty space. Menu contents branch on
+ * that entry and the current selection rather than each view building its own
+ * menu, and there is no longer a Radix context-menu instance per tile. */
+export function ExplorerContextMenu({ entries, orderedPaths, onOpenFile, children }: Props): React.JSX.Element {
+  const [entry, setEntry] = useState<DirEntry | null>(null)
   const navigate = useExplorerStore((s) => s.navigate)
   const currentPath = useExplorerStore((s) => s.currentPath)
   const sortKey = useExplorerStore((s) => s.sortKey)
@@ -73,9 +79,16 @@ export function ExplorerContextMenu({ entry, orderedPaths, onOpenFile, children 
   const rejectFace = useRejectFace(personLibrary?.id ?? '')
   const canReject = !!entry && entry.type === 'file' && entry.faceId != null && !!personLibrary
 
-  function ensureSelected(): void {
-    if (entry && !selected.has(entry.path)) {
-      click(entry.path, { ctrl: false, shift: false }, orderedPaths)
+  // Resolve which tile (if any) was right-clicked from the DOM before Radix
+  // opens the menu, and make sure it's selected — the per-tile ensureSelected
+  // this replaces (Phase 6 / F1).
+  function onContextMenu(e: React.MouseEvent): void {
+    const el = (e.target as HTMLElement).closest('[data-entry-path]')
+    const path = el?.getAttribute('data-entry-path') ?? null
+    const found = path ? entries.find((x) => x.path === path) ?? null : null
+    setEntry(found)
+    if (found && !selected.has(found.path)) {
+      click(found.path, { ctrl: false, shift: false }, orderedPaths)
     }
   }
 
@@ -151,7 +164,7 @@ export function ExplorerContextMenu({ entry, orderedPaths, onOpenFile, children 
 
   return (
     <RadixContextMenu.Root>
-      <RadixContextMenu.Trigger asChild onContextMenu={ensureSelected}>
+      <RadixContextMenu.Trigger asChild onContextMenu={onContextMenu}>
         {children}
       </RadixContextMenu.Trigger>
       <RadixContextMenu.Portal>

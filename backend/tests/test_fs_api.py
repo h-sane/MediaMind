@@ -273,6 +273,52 @@ def test_has_media_endpoint_polls_only_given_paths(client, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# ThumbnailPrewarmer — background pre-warm of a just-opened folder (Phase 5, E1)
+# ---------------------------------------------------------------------------
+
+def test_prewarmer_warms_media_in_name_order(tmp_path, monkeypatch):
+    """`_run` decodes only media files, in name order, and skips non-media."""
+    from mediamind.core import thumb_prewarm
+
+    (tmp_path / "b.png").write_bytes(b"x")
+    (tmp_path / "a.jpg").write_bytes(b"x")
+    (tmp_path / "notes.txt").write_text("skip me")
+
+    calls: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        thumb_prewarm, "media_thumbnail_jpeg", lambda p, k, s: calls.append((p.name, s))
+    )
+    pw = thumb_prewarm.ThumbnailPrewarmer()
+    pw._run(tmp_path, 128, pw._generation)  # gen == current -> proceeds
+
+    assert calls == [("a.jpg", 128), ("b.png", 128)]  # media only, name-sorted
+
+
+def test_prewarmer_supersedes_stale_generation(tmp_path, monkeypatch):
+    """A run whose generation is behind the current one bails immediately, so a
+    new folder open abandons the previous folder's remaining work."""
+    from mediamind.core import thumb_prewarm
+
+    Image.new("RGB", (8, 8), (255, 0, 0)).save(tmp_path / "a.jpg")
+    calls: list = []
+    monkeypatch.setattr(
+        thumb_prewarm, "media_thumbnail_jpeg", lambda p, k, s: calls.append(p.name)
+    )
+    pw = thumb_prewarm.ThumbnailPrewarmer()
+    pw._generation = 5
+    pw._run(tmp_path, 128, 4)  # stale
+    assert calls == []
+
+
+def test_prewarm_endpoint(client, tmp_path):
+    folder = tmp_path / "album"
+    folder.mkdir()
+    resp = client.get("/v1/fs/prewarm", params={"path": str(folder), "size": 128})
+    assert resp.status_code == 200 and resp.json() == {"ok": True}
+    assert client.get("/v1/fs/prewarm", params={"path": str(tmp_path / "nope")}).status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # FolderStatsIndex — lazy recursive count/size cache (M12 Phase E)
 # ---------------------------------------------------------------------------
 

@@ -14,6 +14,12 @@ interface MediaMindBridge {
   clipboardCopyPath: (paths: string[]) => Promise<void>
   clipboardWriteFiles: (paths: string[]) => Promise<boolean>
   getDesktopPath: () => Promise<string>
+  onUpdateAvailable: (cb: (info: { version: string }) => void) => void
+  onUpdateProgress: (cb: (info: { percent: number }) => void) => void
+  onUpdateDownloaded: (cb: (info: { version: string }) => void) => void
+  onUpdateError: (cb: (info: { message: string }) => void) => void
+  downloadUpdate: () => Promise<void>
+  installUpdate: () => Promise<void>
 }
 
 declare global {

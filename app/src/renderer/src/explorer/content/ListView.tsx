@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef } from 'react'
 import { Folder, HardDrive } from 'lucide-react'
 import { FileThumbnail } from '../../components/FileThumbnail'
 import { useExplorerStore } from '../../stores/explorer'
@@ -6,8 +6,8 @@ import { useSelectionStore } from '../../stores/selection'
 import { ExplorerContextMenu } from '../context/ContextMenu'
 import { useEntryDnd } from '../dnd/useEntryDnd'
 import { RenameInput } from '../interactions/RenameInput'
-import { useFileOps } from '../useFileOps'
 import { useSelectionModel } from '../selection/useSelectionModel'
+import { useTileFlags } from '../selection/useTileFlags'
 import { groupEntries } from './grouping'
 import type { DirEntry } from './useDirectoryListing'
 
@@ -25,60 +25,51 @@ interface RowProps {
   entry: DirEntry
   orderedPaths: string[]
   onOpenFile: (path: string) => void
-  isSelected: boolean
-  isCut: boolean
-  isRenaming: boolean
-  isFocused: boolean
   currentPath: string | null
   onItemClick: (e: React.MouseEvent, path: string) => void
   navigate: (path: string) => void
 }
 
-function Row({
+const Row = memo(function Row({
   entry,
   orderedPaths,
   onOpenFile,
-  isSelected,
-  isCut,
-  isRenaming,
-  isFocused,
   currentPath,
   onItemClick,
   navigate
 }: RowProps): React.JSX.Element {
   const { ref, isDragging, isOver } = useEntryDnd(entry, orderedPaths)
+  const { isSelected, isCut, isRenaming, isFocused } = useTileFlags(entry.path)
 
   return (
-    <ExplorerContextMenu entry={entry} orderedPaths={orderedPaths} onOpenFile={onOpenFile}>
-      <button
-        type="button"
-        ref={ref}
-        data-entry-path={entry.path}
-        onClick={(e) => onItemClick(e, entry.path)}
-        onDoubleClick={() => (entry.type === 'file' ? onOpenFile(entry.path) : navigate(entry.path))}
-        className={`flex min-w-0 items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-zinc-100 ${
-          isSelected ? 'bg-blue-100 hover:bg-blue-100' : ''
-        } ${isFocused ? 'outline outline-1 outline-offset-[-2px] outline-zinc-500' : ''} ${
-          isCut ? 'opacity-40' : ''
-        } ${isDragging ? 'opacity-40' : ''} ${isOver ? 'ring-2 ring-inset ring-blue-400 bg-blue-50' : ''}`}
-        title={entry.name}
-      >
-        {entry.type === 'file' ? (
-          <FileThumbnail path={entry.path} kind={entry.kind ?? 'other'} size={96} className="h-5 w-5 shrink-0" />
-        ) : entry.type === 'drive' ? (
-          <HardDrive className="h-4 w-4 shrink-0 text-zinc-400" />
-        ) : (
-          <Folder className="h-4 w-4 shrink-0 text-amber-400" />
-        )}
-        {isRenaming ? (
-          <RenameInput path={entry.path} name={entry.name} isFile={entry.type === 'file'} folder={currentPath ?? ''} />
-        ) : (
-          <span className="truncate">{entry.name}</span>
-        )}
-      </button>
-    </ExplorerContextMenu>
+    <button
+      type="button"
+      ref={ref}
+      data-entry-path={entry.path}
+      onClick={(e) => onItemClick(e, entry.path)}
+      onDoubleClick={() => (entry.type === 'file' ? onOpenFile(entry.path) : navigate(entry.path))}
+      className={`flex min-w-0 items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-zinc-100 ${
+        isSelected ? 'bg-blue-100 hover:bg-blue-100' : ''
+      } ${isFocused ? 'outline outline-1 outline-offset-[-2px] outline-zinc-500' : ''} ${
+        isCut ? 'opacity-40' : ''
+      } ${isDragging ? 'opacity-40' : ''} ${isOver ? 'ring-2 ring-inset ring-blue-400 bg-blue-50' : ''}`}
+      title={entry.name}
+    >
+      {entry.type === 'file' ? (
+        <FileThumbnail path={entry.path} kind={entry.kind ?? 'other'} size={96} className="h-5 w-5 shrink-0" />
+      ) : entry.type === 'drive' ? (
+        <HardDrive className="h-4 w-4 shrink-0 text-zinc-400" />
+      ) : (
+        <Folder className="h-4 w-4 shrink-0 text-amber-400" />
+      )}
+      {isRenaming ? (
+        <RenameInput path={entry.path} name={entry.name} isFile={entry.type === 'file'} folder={currentPath ?? ''} />
+      ) : (
+        <span className="truncate">{entry.name}</span>
+      )}
+    </button>
   )
-}
+})
 
 /** Explorer's "List" view — small icon + name, flowing into columns. Never
  * had marquee-select in real Explorer either (unlike Details, which Phase J
@@ -86,14 +77,12 @@ function Row({
 export function ListView({ entries, onOpenFile }: Props): React.JSX.Element {
   const navigate = useExplorerStore((s) => s.navigate)
   const currentPath = useExplorerStore((s) => s.currentPath)
-  const renamingPath = useSelectionStore((s) => s.renamingPath)
   const focusedPath = useSelectionStore((s) => s.focusedPath)
   const groupBy = useExplorerStore((s) => s.groupBy)
   const setContentColumns = useExplorerStore((s) => s.setContentColumns)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const orderedPaths = entries.map((e) => e.path)
-  const { onItemClick, isSelected } = useSelectionModel(orderedPaths)
-  const fileOps = useFileOps()
+  const orderedPaths = useMemo(() => entries.map((e) => e.path), [entries])
+  const { onItemClick } = useSelectionModel(orderedPaths)
   const groups = useMemo(() => groupEntries(entries, groupBy), [entries, groupBy])
 
   useEffect(() => {
@@ -119,10 +108,6 @@ export function ListView({ entries, onOpenFile }: Props): React.JSX.Element {
         entry={entry}
         orderedPaths={orderedPaths}
         onOpenFile={onOpenFile}
-        isSelected={isSelected(entry.path)}
-        isCut={fileOps.isCut(entry.path)}
-        isRenaming={renamingPath === entry.path}
-        isFocused={focusedPath === entry.path}
         currentPath={currentPath}
         onItemClick={onItemClick}
         navigate={navigate}
@@ -131,7 +116,7 @@ export function ListView({ entries, onOpenFile }: Props): React.JSX.Element {
   }
 
   return (
-    <ExplorerContextMenu entry={null} orderedPaths={orderedPaths} onOpenFile={onOpenFile}>
+    <ExplorerContextMenu entries={entries} orderedPaths={orderedPaths} onOpenFile={onOpenFile}>
       <div ref={scrollRef} className="h-full overflow-y-auto p-2">
         {groupBy === 'none' ? (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))]">{entries.map(renderRow)}</div>

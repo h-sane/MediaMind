@@ -176,6 +176,55 @@ def media_thumbnail_jpeg(path: Path, kind: str, size: int) -> bytes | None:
     return data
 
 
+_EXIF_THUMB_MAX_SIZE = 256
+
+
+def _embedded_thumbnail_bgr(path: Path):
+    """Return a JPEG's embedded EXIF thumbnail as a BGR ndarray, or None.
+
+    Cameras and phones store a ~160 px thumbnail in the APP1/EXIF block;
+    decoding that few-KB JPEG is far cheaper than DCT-scaling the full frame,
+    and it's what Windows Explorer shows for its small icon tiers (technique
+    #4). Only worthwhile for `size <= _EXIF_THUMB_MAX_SIZE`; larger tiles need
+    the real frame. Any parse/decode failure returns None so the draft/full
+    decode path still runs.
+
+    The IFD1 `JpegIFOffset` (0x0201) is relative to the TIFF header, which
+    starts after the 6-byte "Exif\\x00\\x00" identifier in `im.info["exif"]`
+    (offset arithmetic verified against a synthesised sample — see
+    `tests/test_thumbnails.py`).
+
+    ponytail: fast-path only — re-encoded/stripped JPEGs (all of this repo's
+    fixtures) simply carry no thumbnail and fall through, so this is never a
+    correctness dependency, only a speed win on untouched originals.
+    """
+    try:
+        import cv2
+        import numpy as np
+        from PIL import Image
+        from PIL.ExifTags import IFD
+
+        with Image.open(str(path)) as im:
+            raw = im.info.get("exif")
+            if not raw:
+                return None
+            ifd1 = im.getexif().get_ifd(IFD.IFD1)
+        offset = ifd1.get(0x0201)
+        length = ifd1.get(0x0202)
+        if not offset or not length:
+            return None
+        start = 6 + int(offset)
+        blob = raw[start : start + int(length)]
+        if len(blob) < 2 or blob[:2] != b"\xff\xd8":  # not a JPEG SOI marker
+            return None
+        frame = cv2.imdecode(np.frombuffer(blob, np.uint8), cv2.IMREAD_COLOR)
+        if frame is None or frame.ndim != 3:
+            return None
+        return frame
+    except Exception:
+        return None
+
+
 def _draft_decode_bgr(path: Path, size: int):
     """Decode a still image *small* via PIL `Image.draft`, returning a BGR
     ndarray, or None to fall back to the full cv2/PIL chain.
@@ -208,7 +257,10 @@ def _generate_thumbnail_jpeg(path: Path, kind: str, size: int) -> bytes | None:
     try:
         frame = None
         if kind == KIND_IMAGE:
-            frame = _draft_decode_bgr(path, size)
+            if size <= _EXIF_THUMB_MAX_SIZE:
+                frame = _embedded_thumbnail_bgr(path)
+            if frame is None:
+                frame = _draft_decode_bgr(path, size)
         if frame is None:
             frame = _first_frame(path, kind)
         if frame is None:
