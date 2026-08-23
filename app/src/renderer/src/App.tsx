@@ -5,6 +5,7 @@ import { useProgressSocket } from './api/progress'
 import { useJobsStore } from './stores/jobs'
 import { ExplorerShell } from './explorer/ExplorerShell'
 import { JobProgressBubble } from './components/JobProgressBubble'
+import { UpdateBubble } from './components/UpdateBubble'
 import { DevLogPanel } from './components/DevLogPanel'
 import { DEV_LOG_PANEL_ENABLED } from './devLogConfig'
 
@@ -97,6 +98,7 @@ export default function App(): React.JSX.Element {
       <EngineStatusBanner />
       <ExplorerShell />
       <JobProgressBubble />
+      <UpdateBubble />
       <DevLogGate />
     </div>
   )

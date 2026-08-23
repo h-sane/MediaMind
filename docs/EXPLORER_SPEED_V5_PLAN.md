@@ -177,6 +177,25 @@ live in the `test` folder before moving on.
   CPU-bound, add a bounded `ProcessPoolExecutor` for decode.
 - **Verify:** cold thumbnail decode time per image before/after.
 
+**D2 resolution (2026-08-23): NOT implemented — measured and rejected.**
+`bench_decode.py` on `test/perf_1000` (8-core machine) showed cold grid-thumb
+decode at ~7 ms median / 11 ms mean. Decisive reasons against a process pool:
+1. The `/fs/thumbnail` route is a **sync `def`**, so FastAPI already runs it on
+   the anyio worker-thread pool, and cv2/PIL **release the GIL** during the
+   C-level decode — the CPU-heavy work already parallelizes across cores today.
+   A `ProcessPoolExecutor` would only parallelize the tiny Python orchestration
+   around the decode. Marginal speed gain.
+2. D1 already removes the full decode entirely for the common case (grid tiles
+   of real camera photos with embedded EXIF thumbnails).
+3. **Memory cost is large and violates the "don't reduce memory optimization"
+   rule:** each pool worker is a fresh interpreter loading cv2+PIL+numpy
+   (~150–250 MB RSS each); sized to CPU count that is >1 GB of extra resident
+   memory, plus per-frame pickling across the process boundary.
+
+Net: big memory cost for a marginal speed gain the threadpool already delivers.
+Skipped by design; revisit only if a real 24 MP-camera workload proves
+thread-pool decode is the measured bottleneck.
+
 ---
 
 ## 3. What NOT to touch

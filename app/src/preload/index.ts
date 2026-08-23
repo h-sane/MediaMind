@@ -36,7 +36,27 @@ const api = {
   clipboardWriteFiles: (paths: string[]): Promise<boolean> =>
     ipcRenderer.invoke('clipboard:write-files', paths),
   /** The real OS Desktop folder path — used by "Send to > Desktop". */
-  getDesktopPath: (): Promise<string> => ipcRenderer.invoke('paths:desktop')
+  getDesktopPath: (): Promise<string> => ipcRenderer.invoke('paths:desktop'),
+  /** A newer app version is available on GitHub Releases (packaged builds only). */
+  onUpdateAvailable: (cb: (info: { version: string }) => void): void => {
+    ipcRenderer.on('update:available', (_e, info) => cb(info))
+  },
+  /** Download progress (0–100) while the update installer is fetched. */
+  onUpdateProgress: (cb: (info: { percent: number }) => void): void => {
+    ipcRenderer.on('update:progress', (_e, info) => cb(info))
+  },
+  /** The update installer finished downloading and is ready to install. */
+  onUpdateDownloaded: (cb: (info: { version: string }) => void): void => {
+    ipcRenderer.on('update:downloaded', (_e, info) => cb(info))
+  },
+  /** An update check/download failed (offline, GitHub unreachable, etc.). */
+  onUpdateError: (cb: (info: { message: string }) => void): void => {
+    ipcRenderer.on('update:error', (_e, info) => cb(info))
+  },
+  /** Begin downloading the available update installer. */
+  downloadUpdate: (): Promise<void> => ipcRenderer.invoke('update:download'),
+  /** Quit and install the downloaded update (relaunches the app). */
+  installUpdate: (): Promise<void> => ipcRenderer.invoke('update:install')
 }
 
 export type MediaMindBridge = typeof api
