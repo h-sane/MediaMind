@@ -1,5 +1,6 @@
-import { Globe2, Home, Sparkles, Users } from 'lucide-react'
+import { Download, Globe2, Home, Sparkles, Users } from 'lucide-react'
 import { HOME_PATH, isRealFolder, useExplorerStore } from '../../stores/explorer'
+import { useUpdateStore } from '../../stores/update'
 import { TOOL_RAIL_MAX, TOOL_RAIL_MIN, usePaneLayoutStore } from '../../stores/paneLayout'
 import { PaneResizer } from '../layout/PaneResizer'
 import { ToolRail } from '../tools/ToolRail'
@@ -102,6 +103,44 @@ function GlobalSuggestionsRow(): React.JSX.Element {
   )
 }
 
+/** Persistent update entry at the very bottom of the sidebar. Unlike the
+ * top-right bubble (dismissable), this stays for as long as an update is
+ * pending, so the user always has a way back to it. Hidden when there's no
+ * update. */
+function UpdateSidebarButton(): React.JSX.Element | null {
+  const phase = useUpdateStore((s) => s.phase)
+  const version = useUpdateStore((s) => s.version)
+  const percent = useUpdateStore((s) => s.percent)
+  const download = useUpdateStore((s) => s.download)
+  const install = useUpdateStore((s) => s.install)
+
+  if (phase === null) return null
+
+  const label =
+    phase === 'downloading'
+      ? `Downloading ${percent}%`
+      : phase === 'downloaded'
+        ? 'Restart & install'
+        : phase === 'error'
+          ? 'Update failed — retry'
+          : `Update to ${version}`
+  const onClick =
+    phase === 'downloaded' ? install : phase === 'downloading' ? undefined : download
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={phase === 'downloading'}
+      title={label}
+      className="flex w-full items-center gap-1.5 border-t border-zinc-200 bg-emerald-50 py-1.5 pl-3 pr-2 text-left text-sm font-medium text-emerald-700 hover:bg-emerald-100 disabled:cursor-default disabled:hover:bg-emerald-50"
+    >
+      <Download className="h-4 w-4 shrink-0" />
+      <span className="truncate">{label}</span>
+    </button>
+  )
+}
+
 /** Left sidebar, split top/bottom: Home, pinned Quick Access folders, and the
  * live folder tree (rooted at This PC) scroll in the top half; the media
  * tools (dedupe, faces — see `ToolRail`) sit pinned in the bottom half,
@@ -137,6 +176,7 @@ export function NavigationPane(): React.JSX.Element {
       <div style={{ height: toolRailHeight }} className="shrink-0 overflow-y-auto">
         <ToolRail />
       </div>
+      <UpdateSidebarButton />
     </aside>
   )
 }

@@ -5,7 +5,7 @@
  * on stdout. A per-session random token is passed via MEDIAMIND_TOKEN and
  * required on every request — no other local process can drive the engine.
  */
-import { spawn, ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { app } from 'electron'
 import { logLine } from './log'
@@ -118,8 +118,18 @@ export function getBackendInfo(): BackendInfo | null {
 }
 
 export function stopBackend(): void {
-  if (child && !child.killed) {
-    child.kill()
+  if (child && !child.killed && child.pid) {
+    if (process.platform === 'win32') {
+      // Synchronous, forceful tree-kill. child.kill() returns before the OS
+      // tears the process down, so the NSIS updater would race ahead and still
+      // find the backend running ("MediaMind cannot be closed"). The backend
+      // exe is also named mediamind.exe, which collides case-insensitively with
+      // the app's MediaMind.exe that NSIS checks — so a lingering backend reads
+      // as the app still open. spawnSync blocks until the tree is actually gone.
+      spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'])
+    } else {
+      child.kill()
+    }
   }
   child = null
   info = null
