@@ -589,6 +589,7 @@ class MaterializeIn(BaseModel):
 class GlobalPersonMemberOut(BaseModel):
     library_id: str
     library_name: str
+    library_path: str
     local_person_id: int
     provider_id: str
     name: str | None

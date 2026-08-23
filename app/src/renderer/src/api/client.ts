@@ -362,6 +362,38 @@ export interface Person {
   primary_folder_path: string | null
 }
 
+// ---------------------------------------------------------------------------
+// Global (cross-library) people
+// ---------------------------------------------------------------------------
+
+export interface GlobalPersonMember {
+  library_id: string
+  library_name: string
+  library_path: string
+  local_person_id: number
+  provider_id: string
+  name: string | null
+  face_count: number
+  media_count: number
+  sample_face_ids: number[]
+}
+
+export interface GlobalPerson {
+  id: number
+  name: string
+  primary_location: string | null
+  media_count: number
+  members: GlobalPersonMember[]
+}
+
+export interface GlobalLinkSuggestion {
+  library_id_a: string
+  local_person_id_a: number
+  library_id_b: string
+  local_person_id_b: number
+  similarity: number
+}
+
 export interface PersonsOut {
   scan_id: string
   scanned_at: number | null
@@ -988,6 +1020,36 @@ export const api = {
     createUnsorted: (libraryId: string, dryRun: boolean) =>
       request<ExecutionReport>('POST', `/v1/libraries/${libraryId}/faces/prep/create-unsorted`, {
         dry_run: dryRun
+      })
+  },
+
+  globalPeople: {
+    list: () => request<GlobalPerson[]>('GET', '/v1/global/people'),
+
+    create: (name: string) => request<GlobalPerson>('POST', '/v1/global/people', { name }),
+
+    rename: (id: number, name: string) =>
+      request<{ ok: boolean }>('PATCH', `/v1/global/people/${id}`, { name }),
+
+    remove: (id: number) => request<{ ok: boolean }>('DELETE', `/v1/global/people/${id}`),
+
+    setPrimaryLocation: (id: number, path: string | null) =>
+      request<{ ok: boolean; primary_location: string | null }>(
+        'PUT',
+        `/v1/global/people/${id}/primary-location`,
+        { path }
+      ),
+
+    link: (globalPersonId: number, libraryId: string, localPersonId: number) =>
+      request<{ ok: boolean }>('POST', `/v1/global/people/${globalPersonId}/link`, {
+        library_id: libraryId,
+        local_person_id: localPersonId
+      }),
+
+    unlink: (libraryId: string, localPersonId: number) =>
+      request<{ ok: boolean }>('POST', '/v1/global/people/unlink', {
+        library_id: libraryId,
+        local_person_id: localPersonId
       })
   }
 }

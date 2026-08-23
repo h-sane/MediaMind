@@ -1,4 +1,4 @@
-import { Home, Users } from 'lucide-react'
+import { Globe2, Home, Users } from 'lucide-react'
 import { HOME_PATH, isRealFolder, useExplorerStore } from '../../stores/explorer'
 import { TOOL_RAIL_MAX, TOOL_RAIL_MIN, usePaneLayoutStore } from '../../stores/paneLayout'
 import { PaneResizer } from '../layout/PaneResizer'
@@ -53,6 +53,30 @@ function PeopleRow(): React.JSX.Element {
   )
 }
 
+/** A person identity that can span multiple registered libraries (different
+ * drives/mounts) — always available, unlike `PeopleRow` which needs a folder
+ * open. Not folder-scoped at all, so it just toggles `toolMode` without
+ * touching `currentPath`. */
+function GlobalPeopleRow(): React.JSX.Element {
+  const toolMode = useExplorerStore((s) => s.toolMode)
+  const setToolMode = useExplorerStore((s) => s.setToolMode)
+  const isActive = toolMode === 'global-people'
+
+  return (
+    <button
+      type="button"
+      onClick={() => setToolMode(isActive ? 'none' : 'global-people')}
+      title="People across all your libraries"
+      className={`flex w-full items-center gap-1.5 py-1 pl-3 pr-2 text-left text-sm ${
+        isActive ? 'bg-blue-50 text-blue-700' : 'text-zinc-700 hover:bg-zinc-100'
+      }`}
+    >
+      <Globe2 className={`h-4 w-4 shrink-0 ${isActive ? 'text-blue-600' : 'text-zinc-400'}`} />
+      <span className="truncate">People (All Libraries)</span>
+    </button>
+  )
+}
+
 /** Left sidebar, split top/bottom: Home, pinned Quick Access folders, and the
  * live folder tree (rooted at This PC) scroll in the top half; the media
  * tools (dedupe, faces — see `ToolRail`) sit pinned in the bottom half,
@@ -72,6 +96,7 @@ export function NavigationPane(): React.JSX.Element {
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         <HomeRow />
         <PeopleRow />
+        <GlobalPeopleRow />
         <QuickAccess />
         <FolderTree />
       </div>

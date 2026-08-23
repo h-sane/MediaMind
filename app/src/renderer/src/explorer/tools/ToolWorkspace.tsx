@@ -2,6 +2,7 @@ import { useEnsureLibrary } from '../../api/hooks'
 import { isRealFolder, useExplorerStore } from '../../stores/explorer'
 import { DedupeToolPanel } from './dedupe/DedupeToolPanel'
 import { FacesToolPanel } from './faces/FacesToolPanel'
+import { GlobalPeoplePanel } from './faces/GlobalPeoplePanel'
 import { SuggestionsToolPanel } from './suggestions/SuggestionsToolPanel'
 
 /**
@@ -14,6 +15,16 @@ export function ToolWorkspace(): React.JSX.Element {
   const currentPath = useExplorerStore((s) => s.currentPath)
   const toolMode = useExplorerStore((s) => s.toolMode)
   const { data: library, isPending, isError } = useEnsureLibrary(currentPath)
+
+  if (toolMode === 'global-people') {
+    // Not folder-scoped — spans every registered library — so it skips the
+    // useEnsureLibrary/isRealFolder gate every other tool needs.
+    return (
+      <div className="relative flex-1 overflow-hidden bg-white">
+        <GlobalPeoplePanel />
+      </div>
+    )
+  }
 
   if (!isRealFolder(currentPath)) {
     // Defensive only — ToolRail disables tool buttons off a real folder, so

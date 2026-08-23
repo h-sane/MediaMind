@@ -101,6 +101,7 @@ def list_aggregated(gp_conn: sqlite3.Connection, registry: LibraryRegistry) -> l
                 {
                     "library_id": plink.library_id,
                     "library_name": lib.name,
+                    "library_path": lib.path,
                     "local_person_id": plink.local_person_id,
                     "provider_id": plink.provider_id,
                     "name": summary.name,
