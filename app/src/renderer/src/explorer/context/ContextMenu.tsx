@@ -6,6 +6,7 @@ import {
   Copy,
   FileArchive,
   FolderPlus,
+  HardDriveDownload,
   Info,
   Link2,
   Redo2,
@@ -19,7 +20,9 @@ import {
   UserX
 } from 'lucide-react'
 import {
+  useAddLibrary,
   useEnsureLibrary,
+  useLibraries,
   usePinQuickAccess,
   useQuickAccess,
   useRejectFace,
@@ -70,6 +73,8 @@ export function ExplorerContextMenu({ entries, orderedPaths, onOpenFile, childre
   const { data: quickAccess } = useQuickAccess()
   const pinMutation = usePinQuickAccess()
   const unpinMutation = useUnpinQuickAccess()
+  const { data: libraries } = useLibraries()
+  const addLibraryMutation = useAddLibrary()
 
   // In the virtual person view, a file tile carries the detection it came from,
   // so we can flag a false positive "not a face" straight from the grid — the
@@ -101,6 +106,10 @@ export function ExplorerContextMenu({ entries, orderedPaths, onOpenFile, childre
   const isMultiSelect = !!entry && selected.size > 1 && selected.has(entry.path)
   const canOpen = !!entry && entry.type !== 'drive' && (!isMultiSelect || entry.type === 'file')
   const isPinned = !!entry && entry.type === 'folder' && (quickAccess?.pins ?? []).some((p) => p.path === entry.path)
+  const isLibrary =
+    !!entry &&
+    entry.type === 'folder' &&
+    (libraries ?? []).some((lib) => lib.path.replace(/[\\/]+$/, '').toLowerCase() === entry.path.replace(/[\\/]+$/, '').toLowerCase())
 
   const sortByGroupByViewSubmenus = (
     <>
@@ -265,6 +274,14 @@ export function ExplorerContextMenu({ entries, orderedPaths, onOpenFile, childre
                       <Star className="h-4 w-4" /> Pin to Quick access
                     </>
                   )}
+                </RadixContextMenu.Item>
+              )}
+              {!isMultiSelect && entry.type === 'folder' && !isLibrary && (
+                <RadixContextMenu.Item
+                  className={itemClass}
+                  onSelect={() => addLibraryMutation.mutate(entry.path)}
+                >
+                  <HardDriveDownload className="h-4 w-4" /> Add to MediaMind Library
                 </RadixContextMenu.Item>
               )}
               <div className={separatorClass} />

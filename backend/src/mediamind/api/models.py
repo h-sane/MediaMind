@@ -580,3 +580,58 @@ class MaterializeIn(BaseModel):
     expected_move_count: int | None = None  # safety guard: reject if plan size changed
     excluded_file_ids: list[int] = []
     reassignments: list[ReassignItemIn] = []
+
+
+# ---------------------------------------------------------------------------
+# Global (cross-library) people
+# ---------------------------------------------------------------------------
+
+class GlobalPersonMemberOut(BaseModel):
+    library_id: str
+    library_name: str
+    local_person_id: int
+    provider_id: str
+    name: str | None
+    face_count: int
+    media_count: int
+    sample_face_ids: list[int]
+
+
+class GlobalPersonOut(BaseModel):
+    id: int
+    name: str
+    primary_location: str | None
+    media_count: int
+    members: list[GlobalPersonMemberOut]
+
+
+class GlobalPersonCreateIn(BaseModel):
+    name: str
+
+
+class GlobalPersonRenameIn(BaseModel):
+    name: str
+
+
+class GlobalPersonLinkIn(BaseModel):
+    library_id: str
+    local_person_id: int
+
+
+class GlobalPersonPrimaryLocationIn(BaseModel):
+    path: str | None
+
+
+class GlobalLinkSuggestionOut(BaseModel):
+    library_id_a: str
+    local_person_id_a: int
+    library_id_b: str
+    local_person_id_b: int
+    similarity: float
+
+
+class GlobalLinkSuggestionDismissIn(BaseModel):
+    library_id_a: str
+    local_person_id_a: int
+    library_id_b: str
+    local_person_id_b: int
