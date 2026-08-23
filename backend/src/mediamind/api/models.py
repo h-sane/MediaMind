@@ -330,6 +330,10 @@ class PersonPrimaryFolderIn(BaseModel):
     path: str | None
 
 
+class FaceReassignIn(BaseModel):
+    person_id: int
+
+
 class MergeSuggestionOut(BaseModel):
     person_a: int
     person_b: int
@@ -423,6 +427,7 @@ class PendingMatchOut(BaseModel):
 class PendingDecisionItem(BaseModel):
     pending_id: int
     decision: str   # "confirmed" | "rejected"
+    reassign_to_person_id: int | None = None  # "confirmed" only — assign to a different person than suggested
 
 
 class PendingDecisionsIn(BaseModel):
@@ -580,3 +585,103 @@ class MaterializeIn(BaseModel):
     expected_move_count: int | None = None  # safety guard: reject if plan size changed
     excluded_file_ids: list[int] = []
     reassignments: list[ReassignItemIn] = []
+
+
+# ---------------------------------------------------------------------------
+# Global (cross-library) people
+# ---------------------------------------------------------------------------
+
+class GlobalPersonMemberOut(BaseModel):
+    library_id: str
+    library_name: str
+    library_path: str
+    local_person_id: int
+    provider_id: str
+    name: str | None
+    face_count: int
+    media_count: int
+    sample_face_ids: list[int]
+
+
+class GlobalPersonOut(BaseModel):
+    id: int
+    name: str
+    primary_location: str | None
+    media_count: int
+    members: list[GlobalPersonMemberOut]
+
+
+class GlobalPersonCreateIn(BaseModel):
+    name: str
+
+
+class GlobalPersonRenameIn(BaseModel):
+    name: str
+
+
+class GlobalPersonLinkIn(BaseModel):
+    library_id: str
+    local_person_id: int
+
+
+class GlobalPersonPrimaryLocationIn(BaseModel):
+    path: str | None
+
+
+class GlobalLinkSuggestionOut(BaseModel):
+    library_id_a: str
+    local_person_id_a: int
+    library_id_b: str
+    local_person_id_b: int
+    similarity: float
+
+
+class GlobalMoveSuggestionItemOut(BaseModel):
+    library_id: str
+    file_id: int
+    abs_path: str
+    content_hash: str | None
+
+
+class GlobalMoveSuggestionGroupOut(BaseModel):
+    global_person_id: int
+    global_person_name: str
+    primary_location: str
+    items: list[GlobalMoveSuggestionItemOut]
+
+
+class GlobalMoveSuggestionDismissIn(BaseModel):
+    global_person_id: int
+    content_hash: str
+
+
+class GlobalMoveExecuteItemIn(BaseModel):
+    global_person_id: int
+    library_id: str
+    file_id: int
+
+
+class GlobalMoveExecuteIn(BaseModel):
+    items: list[GlobalMoveExecuteItemIn]
+    dry_run: bool = False
+    expected_count: int | None = None
+    expected_plan_hash: str | None = None
+
+
+class GlobalMoveExecuteOut(ExecutionReportOut):
+    """Same shape as ExecutionReportOut plus the resolved batch's plan hash
+    — a dry-run call returns this so the client can pass it back as
+    expected_plan_hash on the follow-up real execute, same pattern as
+    organize.py's preview -> execute."""
+
+    plan_hash: str
+
+
+class GlobalLinkSuggestionPairIn(BaseModel):
+    """Identifies a cross-library suggestion pair — same shape used by both
+    the dismiss ("not the same person") and link (accept) actions."""
+
+    library_id_a: str
+    local_person_id_a: int
+    library_id_b: str
+    local_person_id_b: int

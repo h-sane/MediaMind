@@ -52,7 +52,37 @@ RED = np.array([0.0, 0.0, 1.0], dtype=np.float32)
 BLUE = np.array([1.0, 0.0, 0.0], dtype=np.float32)
 
 
-def test_match_to_named_person_creates_pending_not_auto_filed(tmp_path: Path, conn):
+def test_moderate_match_to_named_person_creates_pending_not_auto_filed(tmp_path: Path, conn):
+    """Confidence-gated (revised): a match to a named person only stays
+    pending when it's NOT confident enough to auto-attach — see
+    test_high_confidence_match_to_named_person_auto_attaches for the >=
+    AUTO_MATCH_THRESHOLD case, which now auto-attaches even to a named
+    person."""
+    pid = _make_person(conn, RED, name="Alice")
+    # Purple -> BGR-embeds to roughly (0.707, 0, 0.707), ~0.71 cosine-similar
+    # to Alice's pure-red centroid [0, 0, 1] — suggest band, not auto-attach.
+    Image.new("RGB", (64, 64), (128, 0, 128)).save(tmp_path / "purple.jpg")
+
+    outcome = ingest_file(
+        conn, tmp_path, _scanned(tmp_path, "purple.jpg"),
+        provider=FakeColorProvider(), provider_id=PROVIDER, warm_thumbnail=False,
+    )
+    assert outcome.new_faces == 1
+    assert outcome.pending_faces == 1
+
+    face = conn.execute("SELECT id, person_id FROM faces").fetchone()
+    assert face["person_id"] is None, "below AUTO_MATCH_THRESHOLD must never be auto-filed"
+
+    pending = conn.execute("SELECT * FROM pending_matches WHERE decision IS NULL").fetchall()
+    assert len(pending) == 1
+    assert pending[0]["person_id"] == pid
+    assert pending[0]["face_id"] == face["id"]
+
+
+def test_high_confidence_match_to_named_person_auto_attaches(tmp_path: Path, conn):
+    """Revised behavior: only similarity gates auto-attach vs. pending now —
+    a near-identical face auto-attaches directly to a named person, no
+    review needed, unlike the old named-person-always-pending rule."""
     pid = _make_person(conn, RED, name="Alice")
     Image.new("RGB", (64, 64), (255, 0, 0)).save(tmp_path / "red.jpg")
 
@@ -61,15 +91,12 @@ def test_match_to_named_person_creates_pending_not_auto_filed(tmp_path: Path, co
         provider=FakeColorProvider(), provider_id=PROVIDER, warm_thumbnail=False,
     )
     assert outcome.new_faces == 1
-    assert outcome.pending_faces == 1
+    assert outcome.pending_faces == 0
 
-    face = conn.execute("SELECT id, person_id FROM faces").fetchone()
-    assert face["person_id"] is None, "a named-person match must never be auto-filed"
+    face = conn.execute("SELECT person_id FROM faces").fetchone()
+    assert face["person_id"] == pid
 
-    pending = conn.execute("SELECT * FROM pending_matches WHERE decision IS NULL").fetchall()
-    assert len(pending) == 1
-    assert pending[0]["person_id"] == pid
-    assert pending[0]["face_id"] == face["id"]
+    assert conn.execute("SELECT * FROM pending_matches").fetchall() == []
 
 
 def test_match_to_unnamed_person_auto_attaches_and_records_assignment(tmp_path: Path, conn):
@@ -116,12 +143,15 @@ def test_rejected_match_not_restaged_for_same_content_at_new_path(tmp_path: Path
     bytes show up again at a different path."""
     pid = _make_person(conn, RED, name="Alice")
 
-    img = Image.new("RGB", (64, 64), (255, 0, 0))
-    img.save(tmp_path / "red_a.jpg")
-    img.save(tmp_path / "red_b.jpg")  # byte-identical -> same content_hash
+    # Purple (~0.71 similar to Alice's pure-red centroid) — suggest band, so
+    # this stays pending instead of auto-attaching (see the module's
+    # high-confidence auto-attach test for that case).
+    img = Image.new("RGB", (64, 64), (128, 0, 128))
+    img.save(tmp_path / "purple_a.jpg")
+    img.save(tmp_path / "purple_b.jpg")  # byte-identical -> same content_hash
 
     ingest_file(
-        conn, tmp_path, _scanned(tmp_path, "red_a.jpg"),
+        conn, tmp_path, _scanned(tmp_path, "purple_a.jpg"),
         provider=FakeColorProvider(), provider_id=PROVIDER, warm_thumbnail=False,
     )
     pending = conn.execute("SELECT * FROM pending_matches WHERE decision IS NULL").fetchall()
@@ -130,14 +160,14 @@ def test_rejected_match_not_restaged_for_same_content_at_new_path(tmp_path: Path
     conn.commit()
 
     outcome = ingest_file(
-        conn, tmp_path, _scanned(tmp_path, "red_b.jpg"),
+        conn, tmp_path, _scanned(tmp_path, "purple_b.jpg"),
         provider=FakeColorProvider(), provider_id=PROVIDER, warm_thumbnail=False,
     )
     assert outcome.new_faces == 1
     assert outcome.pending_faces == 0, "a previously-rejected match must not be re-staged"
 
     face_b = conn.execute(
-        "SELECT f.person_id FROM faces f JOIN files fi ON fi.id = f.file_id WHERE fi.path = ?", ("red_b.jpg",)
+        "SELECT f.person_id FROM faces f JOIN files fi ON fi.id = f.file_id WHERE fi.path = ?", ("purple_b.jpg",)
     ).fetchone()
     assert face_b["person_id"] is None
 

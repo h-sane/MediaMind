@@ -205,6 +205,7 @@ def create_app(
     from mediamind.api.routes import faces_prep
     from mediamind.api.routes import materialize
     from mediamind.api.routes import duplicate_flags
+    from mediamind.api.routes import global_people
 
     app.include_router(libraries.router, prefix="/v1")
     app.include_router(files.router, prefix="/v1")
@@ -221,5 +222,6 @@ def create_app(
     app.include_router(faces_prep.router, prefix="/v1")
     app.include_router(materialize.router, prefix="/v1")
     app.include_router(duplicate_flags.router, prefix="/v1")
+    app.include_router(global_people.router, prefix="/v1")
 
     return app

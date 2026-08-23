@@ -16,13 +16,24 @@ import numpy as np
 from mediamind.store import face_assignments
 from mediamind.store.embeddings import CachedFace
 
-# Threshold for matching a new/reclustered cluster's centroid to an existing
-# person's centroid. Deliberately separate from clustering.DEFAULT_EPS (which
-# governs which faces DBSCAN groups together in the first place) and set
-# stricter than the old lockstepped 0.5 — a wrong auto-match here silently
-# hijacks a person's identity (finding F3), so borderline cases fall through
-# to a new Person_NNN for the user to merge manually instead of guessing.
-AUTO_MATCH_THRESHOLD = 0.6
+# Threshold for auto-attaching a new/reclustered cluster's centroid to an
+# existing person's centroid, with NO further review — deliberately separate
+# from clustering.DEFAULT_EPS (which governs which faces DBSCAN groups
+# together in the first place). Raised from an earlier 0.6 to 0.92: Hussain,
+# after seeing 0.6 in practice, judged it unreliable ("many faces are almost
+# similar but not the same") and asked that only near-certain matches ever
+# happen silently — a wrong auto-match here silently hijacks a person's
+# identity (finding F3). Anything below this but still plausible is offered
+# as a review suggestion instead (see SUGGEST_MATCH_THRESHOLD, gate_face_match).
+AUTO_MATCH_THRESHOLD = 0.92
+
+# Below AUTO_MATCH_THRESHOLD but at least this similar, a candidate match is
+# offered as a pending-review suggestion rather than either auto-attached or
+# silently dropped — "keep them in the suggested tab" per Hussain. Same floor
+# `merge_suggestions` already uses for "these two persons look alike" — both
+# are the same kind of judgment (close enough to ask about, not close enough
+# to just do).
+SUGGEST_MATCH_THRESHOLD = 0.5
 
 
 @dataclass(frozen=True)
@@ -38,7 +49,7 @@ class PersonSummary:
 
 # Pairs of distinct persons whose centroids are at least this cosine-similar
 # surface as "are these the same person?" suggestions. Deliberately below
-# AUTO_MATCH_THRESHOLD (0.6): those are exactly the borderline pairs the
+# AUTO_MATCH_THRESHOLD: those are exactly the borderline pairs the
 # clustering split-bias (clustering.DEFAULT_EPS) leaves as separate persons for
 # the user to reconcile with one click, rather than risk a wrong auto-merge.
 MERGE_SUGGESTION_MIN_SIM = 0.5
@@ -144,15 +155,6 @@ def load_person_centroids(conn: sqlite3.Connection, provider_id: str) -> dict[in
     return {r["id"]: np.frombuffer(r["centroid"], dtype=np.float32).copy() for r in rows}
 
 
-def named_person_ids(conn: sqlite3.Connection, provider_id: str) -> set[int]:
-    return {
-        r["id"]
-        for r in conn.execute(
-            "SELECT id FROM persons WHERE provider_id = ? AND name IS NOT NULL", (provider_id,)
-        )
-    }
-
-
 @dataclass(frozen=True)
 class GateDecision:
     """What to do with a face that matched (or didn't match) a person."""
@@ -163,32 +165,36 @@ class GateDecision:
 
 
 def gate_face_match(
-    matched_person_id: int | None,
-    named_person_ids: set[int],
+    candidate_person_id: int | None,
+    similarity: float,
     *,
-    pending_for_named: bool,
+    pending_enabled: bool,
     was_rejected: bool = False,
 ) -> GateDecision:
-    """The one place that decides pending-review vs. auto-attach for a
-    freshly matched face — used by both the full face scan
-    (`persist_face_scan`, cluster-level match) and immediate per-file ingest
-    (`core.ingest._match_faces_to_existing_persons`, single-face-level
+    """The one place that decides auto-attach vs. pending-review vs. no-match
+    for a face's best-matching person candidate — used by both the full face
+    scan (`persist_face_scan`, cluster-level match) and immediate per-file
+    ingest (`core.ingest._match_faces_to_existing_persons`, single-face-level
     match) so there is one implementation of the safety gate, not a fork.
 
-    - No match at all, or a previously-rejected suggestion -> unmatched
-      (person_id stays NULL; a full scan's DBSCAN pass, or nothing further,
-      decides identity from here).
-    - Match to a named person with the gate enabled -> pending review; the
-      face's person_id is NOT set directly (CLAUDE.md "review before commit"
-      — an automatic decision about a named person always needs confirmation).
-    - Match to an unnamed person (or gate disabled) -> auto-attach, matching
-      today's existing behavior for unnamed persons.
+    Confidence-only gate — no named/unnamed distinction (Hussain: a wrong
+    silent attach is a wrong silent attach either way, named person or not).
+
+    - No candidate at all, or a previously-rejected suggestion -> unmatched
+      (person_id stays NULL).
+    - similarity >= AUTO_MATCH_THRESHOLD -> auto-attach, no review.
+    - `pending_enabled` and SUGGEST_MATCH_THRESHOLD <= similarity <
+      AUTO_MATCH_THRESHOLD -> pending review (CLAUDE.md "review before
+      commit") — the face's person_id is NOT set directly.
+    - Otherwise (too weak a candidate, or pending disabled) -> unmatched.
     """
-    if matched_person_id is None or was_rejected:
+    if candidate_person_id is None or was_rejected:
         return GateDecision(person_id=None, pending_person_id=None, record_assignment=False)
-    if pending_for_named and matched_person_id in named_person_ids:
-        return GateDecision(person_id=None, pending_person_id=matched_person_id, record_assignment=False)
-    return GateDecision(person_id=matched_person_id, pending_person_id=None, record_assignment=True)
+    if similarity >= AUTO_MATCH_THRESHOLD:
+        return GateDecision(person_id=candidate_person_id, pending_person_id=None, record_assignment=True)
+    if pending_enabled and similarity >= SUGGEST_MATCH_THRESHOLD:
+        return GateDecision(person_id=None, pending_person_id=candidate_person_id, record_assignment=False)
+    return GateDecision(person_id=None, pending_person_id=None, record_assignment=False)
 
 
 # ---------------------------------------------------------------------------
@@ -328,18 +334,29 @@ def persist_face_scan(
     # no first-come-first-served exclusion, so a person's photos that split
     # into a second cluster this scan can still both find their way home.
     sorted_labels = sorted(cluster_sizes.keys(), key=lambda l: cluster_sizes[l], reverse=True)
-    cluster_to_person: dict[int, int] = {}  # cluster label → person id
+    cluster_to_person: dict[int, int] = {}  # cluster label → person id (cleared AUTO_MATCH_THRESHOLD, auto-attach)
+
+    # Every candidate worth reporting at all (>= SUGGEST_MATCH_THRESHOLD),
+    # kept separately from `cluster_to_person` so the per-face loop (step 6)
+    # can offer a pending suggestion for a candidate that didn't clear the
+    # auto-attach bar, without that candidate ever influencing this person's
+    # centroid (only `cluster_to_person` entries do, below).
+    cluster_best_match: dict[int, tuple[int, float]] = {}
 
     for label in sorted_labels:
         centroid = cluster_centroids[label]
-        best_sim = AUTO_MATCH_THRESHOLD
+        best_sim = 0.0
         best_pid = None
         for pid, pcent in person_centroids.items():
             sim = float(np.dot(centroid, pcent))
             if sim > best_sim:
                 best_sim = sim
                 best_pid = pid
-        if best_pid is not None:
+        if best_pid is None:
+            continue
+        if best_sim >= SUGGEST_MATCH_THRESHOLD:
+            cluster_best_match[label] = (best_pid, best_sim)
+        if best_sim >= AUTO_MATCH_THRESHOLD:
             cluster_to_person[label] = best_pid
 
     # --- 5. upsert persons ---
@@ -391,11 +408,6 @@ def persist_face_scan(
     new_file_ids = new_file_ids or set()
     pending_count = 0
 
-    # named-person set for the pending gate below — only needed when the
-    # gate is enabled; reuses the same module-level helper core.ingest's
-    # immediate-match path calls.
-    named_ids = named_person_ids(conn, provider_id) if pending_for_named else set()
-
     flat_face_idx = 0
     for ff in file_faces:
         for face_idx, cached_face in enumerate(ff.faces):
@@ -428,53 +440,67 @@ def persist_face_scan(
                     cached_face.bbox[2],
                     cached_face.bbox[3],
                     embedding_blob,
-                    assigned_pid,   # will be patched below if pending
+                    assigned_pid,   # will be patched below if a rejected auto-attach
                     1.0 if assigned_pid is not None else 0.0,
                 ),
             )
             face_db_id = cur.lastrowid
             final_pid = assigned_pid
+            has_pending = False
 
-            # M6 pending logic: new file + assigned to a named person → stage
-            # as pending. Only applies to a *freshly* cluster-matched face —
-            # a durably re-attached face was already confirmed in an earlier
-            # session and must not be re-asked about (prior_pid is not None
-            # bypasses this whole block, same as before this was extracted).
-            # The named-vs-unnamed pending/auto-attach decision itself is the
-            # shared gate (gate_face_match) — see its docstring for why.
-            if prior_pid is None and assigned_pid is not None and ff.file_id in new_file_ids:
-                was_rejected = (ff.content_hash, cached_face.frame_no, assigned_pid) in rejected_pairs
-                decision = gate_face_match(
-                    assigned_pid, named_ids,
-                    pending_for_named=pending_for_named, was_rejected=was_rejected,
-                )
-                if decision.pending_person_id is not None:
-                    confidence = float(np.dot(cached_face.embedding, cluster_centroids[label]))
-                    conn.execute(
-                        "INSERT INTO pending_matches (face_id, person_id, confidence) VALUES (?, ?, ?)",
-                        (face_db_id, decision.pending_person_id, confidence),
+            # M6 pending logic, confidence-gated (see gate_face_match): a new
+            # file's face whose best candidate cleared SUGGEST_MATCH_THRESHOLD
+            # but not AUTO_MATCH_THRESHOLD gets a pending suggestion IN
+            # ADDITION to its own (possibly brand-new) `assigned_pid` — unlike
+            # the old named-person gate, this never blanks the face's own
+            # person_id; the suggestion is an offer to reassign, not a hold.
+            # Only for a *freshly* cluster-matched face — a durably
+            # re-attached face was already confirmed in an earlier session
+            # (prior_pid is not None bypasses this whole block).
+            if prior_pid is None and ff.file_id in new_file_ids:
+                best = cluster_best_match.get(label)
+                if best is not None:
+                    best_pid, best_sim = best
+                    was_rejected = (ff.content_hash, cached_face.frame_no, best_pid) in rejected_pairs
+                    decision = gate_face_match(
+                        best_pid, best_sim,
+                        pending_enabled=pending_for_named, was_rejected=was_rejected,
                     )
-                    conn.execute(
-                        "UPDATE faces SET person_id = NULL WHERE id = ?",
-                        (face_db_id,),
-                    )
-                    pending_count += 1
-                    final_pid = None
-                elif decision.person_id is None:
-                    conn.execute(
-                        "UPDATE faces SET person_id = NULL WHERE id = ?",
-                        (face_db_id,),
-                    )
-                    final_pid = None
-                # else: decision.person_id == assigned_pid — already inserted
-                # as-is (auto-attach), nothing further to do.
+                    if decision.pending_person_id is not None:
+                        conn.execute(
+                            "INSERT INTO pending_matches (face_id, person_id, confidence) VALUES (?, ?, ?)",
+                            (face_db_id, decision.pending_person_id, best_sim),
+                        )
+                        pending_count += 1
+                        has_pending = True
+                        # assigned_pid (its own cluster's identity) stands — this is an
+                        # offer to reassign, not a hold, unlike the old named-person gate.
+                    elif decision.person_id is None and assigned_pid is not None:
+                        # was_rejected on what would otherwise have auto-attached.
+                        conn.execute(
+                            "UPDATE faces SET person_id = NULL WHERE id = ?",
+                            (face_db_id,),
+                        )
+                        final_pid = None
+                    # else: decision.person_id == assigned_pid — already
+                    # inserted as-is (auto-attach), nothing further to do.
 
             # Record a durable assignment for any face that lands on a
             # concrete person_id via *this* scan's clustering (not a pending
             # match awaiting review, not a rejection) — that's what makes it
             # sticky for every future rescan. Already-durable re-attachments
             # (prior_pid is not None) are left untouched, not re-recorded.
-            if prior_pid is None and final_pid is not None:
+            # A face with an unresolved pending suggestion is deliberately
+            # left un-recorded too — durably pinning its own (possibly
+            # brand-new) cluster identity here would make the next rescan's
+            # `preassigned` short-circuit skip regenerating the suggestion
+            # entirely, silently dropping it before the user ever sees it.
+            # ponytail: a repeated full rescan while the same suggestion sits
+            # undecided churns a fresh Person_NNN id for that cluster each
+            # time (the old one gets pruned as unreferenced) — cosmetic id
+            # churn, not data loss; revisit only if that number visibly jumps
+            # around in the UI often enough to bother users.
+            if prior_pid is None and final_pid is not None and not has_pending:
                 face_assignments.record_assignment(
                     conn,
                     ff.content_hash,
@@ -686,6 +712,55 @@ def get_face(conn: sqlite3.Connection, face_id: int) -> FaceInfo | None:
         person_id=row["person_id"],
         confidence=row["confidence"],
     )
+
+
+def reassign_face(conn: sqlite3.Connection, face_id: int, person_id: int) -> bool:
+    """Manually move an already-confirmed (or already-auto-attached) face to
+    a different person, straight from a person's media view — e.g. "this
+    photo/video doesn't belong to this person, it's actually that one." A
+    direct, explicit user action, so it's recorded as durably as a confirmed
+    pending match (`source="user"`), surviving future rescans the same way."""
+    row = conn.execute(
+        """
+        SELECT f.provider_id, f.bbox_x1, f.bbox_y1, f.bbox_x2, f.bbox_y2, fi.content_hash
+        FROM faces f JOIN files fi ON fi.id = f.file_id
+        WHERE f.id = ?
+        """,
+        (face_id,),
+    ).fetchone()
+    if row is None:
+        return False
+    conn.execute("UPDATE faces SET person_id = ? WHERE id = ?", (person_id, face_id))
+    if row["content_hash"]:
+        bbox = (row["bbox_x1"], row["bbox_y1"], row["bbox_x2"], row["bbox_y2"])
+        face_assignments.record_assignment(
+            conn, row["content_hash"], row["provider_id"], bbox, person_id, source="user",
+        )
+    conn.commit()
+    return True
+
+
+@dataclass(frozen=True)
+class PersonFile:
+    file_id: int
+    path: str            # relative to library root (posix)
+    content_hash: str | None
+
+
+def files_for_person(conn: sqlite3.Connection, person_id: int) -> list[PersonFile]:
+    """Every distinct file this person is tagged in — lean shape (no face
+    crop/bbox fields) for callers that need identity (content_hash) rather
+    than a display tile, e.g. cross-library move-suggestion generation
+    (`core/global_people.py`)."""
+    rows = conn.execute(
+        """
+        SELECT DISTINCT fi.id AS file_id, fi.path, fi.content_hash
+        FROM faces f JOIN files fi ON fi.id = f.file_id
+        WHERE f.person_id = ?
+        """,
+        (person_id,),
+    ).fetchall()
+    return [PersonFile(file_id=r["file_id"], path=r["path"], content_hash=r["content_hash"]) for r in rows]
 
 
 def person_media(conn: sqlite3.Connection, person_id: int) -> list[FaceInfo]:

@@ -6,6 +6,7 @@ import {
   Copy,
   FileArchive,
   FolderPlus,
+  HardDriveDownload,
   Info,
   Link2,
   Redo2,
@@ -19,9 +20,13 @@ import {
   UserX
 } from 'lucide-react'
 import {
+  useAddLibrary,
   useEnsureLibrary,
+  useLibraries,
+  usePersons,
   usePinQuickAccess,
   useQuickAccess,
+  useReassignFace,
   useRejectFace,
   useUnpinQuickAccess
 } from '../../api/hooks'
@@ -70,6 +75,8 @@ export function ExplorerContextMenu({ entries, orderedPaths, onOpenFile, childre
   const { data: quickAccess } = useQuickAccess()
   const pinMutation = usePinQuickAccess()
   const unpinMutation = useUnpinQuickAccess()
+  const { data: libraries } = useLibraries()
+  const addLibraryMutation = useAddLibrary()
 
   // In the virtual person view, a file tile carries the detection it came from,
   // so we can flag a false positive "not a face" straight from the grid — the
@@ -77,7 +84,10 @@ export function ExplorerContextMenu({ entries, orderedPaths, onOpenFile, childre
   const personView = parsePersonView(currentPath)
   const { data: personLibrary } = useEnsureLibrary(personView ? personView.folderRoot : null)
   const rejectFace = useRejectFace(personLibrary?.id ?? '')
+  const reassignFace = useReassignFace(personLibrary?.id ?? '')
+  const { data: personsInLibrary } = usePersons(personLibrary?.id ?? '')
   const canReject = !!entry && entry.type === 'file' && entry.faceId != null && !!personLibrary
+  const otherPersons = (personsInLibrary?.persons ?? []).filter((p) => p.id !== personView?.personId)
 
   // Resolve which tile (if any) was right-clicked from the DOM before Radix
   // opens the menu, and make sure it's selected — the per-tile ensureSelected
@@ -101,6 +111,10 @@ export function ExplorerContextMenu({ entries, orderedPaths, onOpenFile, childre
   const isMultiSelect = !!entry && selected.size > 1 && selected.has(entry.path)
   const canOpen = !!entry && entry.type !== 'drive' && (!isMultiSelect || entry.type === 'file')
   const isPinned = !!entry && entry.type === 'folder' && (quickAccess?.pins ?? []).some((p) => p.path === entry.path)
+  const isLibrary =
+    !!entry &&
+    entry.type === 'folder' &&
+    (libraries ?? []).some((lib) => lib.path.replace(/[\\/]+$/, '').toLowerCase() === entry.path.replace(/[\\/]+$/, '').toLowerCase())
 
   const sortByGroupByViewSubmenus = (
     <>
@@ -237,6 +251,26 @@ export function ExplorerContextMenu({ entries, orderedPaths, onOpenFile, childre
                   >
                     <UserX className="h-4 w-4" /> Not a face
                   </RadixContextMenu.Item>
+                  {otherPersons.length > 0 && (
+                    <RadixContextMenu.Sub>
+                      <RadixContextMenu.SubTrigger className={itemClass}>
+                        Reassign to <ChevronRight className="ml-auto h-3.5 w-3.5" />
+                      </RadixContextMenu.SubTrigger>
+                      <RadixContextMenu.Portal>
+                        <RadixContextMenu.SubContent className={subContentClass} sideOffset={2} alignOffset={-4}>
+                          {otherPersons.map((p) => (
+                            <RadixContextMenu.Item
+                              key={p.id}
+                              className={itemClass}
+                              onSelect={() => reassignFace.mutate({ faceId: entry.faceId as number, personId: p.id })}
+                            >
+                              {p.name ?? p.auto_label}
+                            </RadixContextMenu.Item>
+                          ))}
+                        </RadixContextMenu.SubContent>
+                      </RadixContextMenu.Portal>
+                    </RadixContextMenu.Sub>
+                  )}
                   <div className={separatorClass} />
                 </>
               )}
@@ -265,6 +299,14 @@ export function ExplorerContextMenu({ entries, orderedPaths, onOpenFile, childre
                       <Star className="h-4 w-4" /> Pin to Quick access
                     </>
                   )}
+                </RadixContextMenu.Item>
+              )}
+              {!isMultiSelect && entry.type === 'folder' && !isLibrary && (
+                <RadixContextMenu.Item
+                  className={itemClass}
+                  onSelect={() => addLibraryMutation.mutate(entry.path)}
+                >
+                  <HardDriveDownload className="h-4 w-4" /> Add to MediaMind Library
                 </RadixContextMenu.Item>
               )}
               <div className={separatorClass} />

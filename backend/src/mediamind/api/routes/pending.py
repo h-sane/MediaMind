@@ -1,9 +1,11 @@
 """Pending face-match review: list unresolved matches and record decisions.
 
-Pending matches are created during face scans when a named person is recognised
-in a file that hasn't been scanned before (`pending_for_named=True`). The user
-reviews each suggestion and either confirms (face gets assigned to the person)
-or rejects (face stays unassigned).
+Pending matches are created during face scans when a face's best-matching
+person clears SUGGEST_MATCH_THRESHOLD but not the higher AUTO_MATCH_THRESHOLD
+(`store.persons.gate_face_match`), in a file that hasn't been scanned before.
+The user reviews each suggestion and either confirms (face gets assigned to
+the person), reassigns it to a different person, or rejects (face keeps
+whatever identity it already had — see `gate_face_match`'s docstring).
 
 Routes:
   GET  /v1/libraries/{id}/pending               -> list[PendingMatchOut]
@@ -75,8 +77,11 @@ def list_pending(library_id: str, request: Request):
 def decide_pending(library_id: str, body: PendingDecisionsIn, request: Request):
     """Confirm or reject a batch of pending face matches.
 
-    confirmed → assigns the face to the suggested person (UPDATE faces SET person_id).
-    rejected  → face stays unassigned (person_id remains NULL).
+    confirmed → assigns the face to the suggested person, or to
+                `reassign_to_person_id` if given (the swipe-review "this is a
+                different person" action) — either way, UPDATE faces SET person_id.
+    rejected  → face keeps whatever person_id it already had (its own cluster
+                identity, if any) — the suggestion is simply dismissed.
     """
     if not body.decisions:
         return {"updated": 0}
@@ -107,16 +112,17 @@ def decide_pending(library_id: str, body: PendingDecisionsIn, request: Request):
                 continue  # already decided or doesn't exist; skip silently
 
             if item.decision == "confirmed":
+                target_person_id = item.reassign_to_person_id or row["person_id"]
                 conn.execute(
                     "UPDATE faces SET person_id = ? WHERE id = ?",
-                    (row["person_id"], row["face_id"]),
+                    (target_person_id, row["face_id"]),
                 )
                 # Durably record it — a user-confirmed match must never be
                 # un-named by re-clustering on a later rescan.
                 if row["content_hash"]:
                     bbox = (row["bbox_x1"], row["bbox_y1"], row["bbox_x2"], row["bbox_y2"])
                     face_assignments.record_assignment(
-                        conn, row["content_hash"], row["provider_id"], bbox, row["person_id"], source="user",
+                        conn, row["content_hash"], row["provider_id"], bbox, target_person_id, source="user",
                     )
 
             conn.execute(
