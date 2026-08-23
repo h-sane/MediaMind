@@ -740,6 +740,29 @@ def reassign_face(conn: sqlite3.Connection, face_id: int, person_id: int) -> boo
     return True
 
 
+@dataclass(frozen=True)
+class PersonFile:
+    file_id: int
+    path: str            # relative to library root (posix)
+    content_hash: str | None
+
+
+def files_for_person(conn: sqlite3.Connection, person_id: int) -> list[PersonFile]:
+    """Every distinct file this person is tagged in — lean shape (no face
+    crop/bbox fields) for callers that need identity (content_hash) rather
+    than a display tile, e.g. cross-library move-suggestion generation
+    (`core/global_people.py`)."""
+    rows = conn.execute(
+        """
+        SELECT DISTINCT fi.id AS file_id, fi.path, fi.content_hash
+        FROM faces f JOIN files fi ON fi.id = f.file_id
+        WHERE f.person_id = ?
+        """,
+        (person_id,),
+    ).fetchall()
+    return [PersonFile(file_id=r["file_id"], path=r["path"], content_hash=r["content_hash"]) for r in rows]
+
+
 def person_media(conn: sqlite3.Connection, person_id: int) -> list[FaceInfo]:
     """One FaceInfo per distinct file for this person (the face with largest bbox).
 

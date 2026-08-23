@@ -636,6 +636,25 @@ class GlobalLinkSuggestionOut(BaseModel):
     similarity: float
 
 
+class GlobalMoveSuggestionItemOut(BaseModel):
+    library_id: str
+    file_id: int
+    abs_path: str
+    content_hash: str | None
+
+
+class GlobalMoveSuggestionGroupOut(BaseModel):
+    global_person_id: int
+    global_person_name: str
+    primary_location: str
+    items: list[GlobalMoveSuggestionItemOut]
+
+
+class GlobalMoveSuggestionDismissIn(BaseModel):
+    global_person_id: int
+    content_hash: str
+
+
 class GlobalLinkSuggestionPairIn(BaseModel):
     """Identifies a cross-library suggestion pair — same shape used by both
     the dismiss ("not the same person") and link (accept) actions."""

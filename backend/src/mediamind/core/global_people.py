@@ -196,6 +196,66 @@ def list_link_suggestions(gp_conn: sqlite3.Connection, registry: LibraryRegistry
     return out[: persons_store.MAX_MERGE_SUGGESTIONS]
 
 
+def list_move_suggestions(gp_conn: sqlite3.Connection, registry: LibraryRegistry) -> list[dict]:
+    """Files virtually tagged to a global person with a `primary_location`
+    set, whose absolute path isn't already under that location — grouped by
+    global person. A live read, not a stored/triggered write: a file
+    "becoming tagged" needs no event, the next read just reflects it, and
+    the filesystem stays the source of truth. Setting `primary_location`
+    (Phase 2/3) never moves anything by itself — this is the read that turns
+    it into concrete suggestions for the Suggestions tab (Phase 7) to
+    execute, only on explicit confirmation."""
+    library_by_id = {lib.id: lib for lib in registry.list()}
+    out: list[dict] = []
+    for gperson in gp_store.list_global_persons(gp_conn):
+        if not gperson.primary_location:
+            continue
+        primary = Path(gperson.primary_location).resolve()
+        dismissed = gp_store.dismissed_move_hashes(gp_conn, gperson.id)
+
+        items: list[dict] = []
+        for plink in gp_store.links_for_global(gp_conn, gperson.id):
+            lib = library_by_id.get(plink.library_id)
+            if lib is None:
+                continue
+            try:
+                conn = open_library_db(lib)
+            except (OSError, sqlite3.Error):
+                continue
+            try:
+                for pf in persons_store.files_for_person(conn, plink.local_person_id):
+                    if pf.content_hash and pf.content_hash in dismissed:
+                        continue
+                    abs_path = (Path(lib.path) / pf.path).resolve()
+                    try:
+                        already_there = abs_path.is_relative_to(primary)
+                    except ValueError:
+                        already_there = False
+                    if already_there:
+                        continue
+                    items.append(
+                        {
+                            "library_id": lib.id,
+                            "file_id": pf.file_id,
+                            "abs_path": str(abs_path),
+                            "content_hash": pf.content_hash,
+                        }
+                    )
+            finally:
+                conn.close()
+
+        if items:
+            out.append(
+                {
+                    "global_person_id": gperson.id,
+                    "global_person_name": gperson.name,
+                    "primary_location": gperson.primary_location,
+                    "items": items,
+                }
+            )
+    return out
+
+
 def resolve_link_suggestion(
     gp_conn: sqlite3.Connection,
     library_id_a: str,

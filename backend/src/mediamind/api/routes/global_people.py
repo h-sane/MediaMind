@@ -14,6 +14,8 @@ from fastapi import APIRouter, HTTPException, Request
 from mediamind.api.models import (
     GlobalLinkSuggestionOut,
     GlobalLinkSuggestionPairIn,
+    GlobalMoveSuggestionDismissIn,
+    GlobalMoveSuggestionGroupOut,
     GlobalPersonCreateIn,
     GlobalPersonLinkIn,
     GlobalPersonMemberOut,
@@ -21,7 +23,13 @@ from mediamind.api.models import (
     GlobalPersonPrimaryLocationIn,
     GlobalPersonRenameIn,
 )
-from mediamind.core.global_people import list_aggregated, list_link_suggestions, open_library_db, resolve_link_suggestion
+from mediamind.core.global_people import (
+    list_aggregated,
+    list_link_suggestions,
+    list_move_suggestions,
+    open_library_db,
+    resolve_link_suggestion,
+)
 from mediamind.core.libraries import LibraryRegistry
 from mediamind.store import global_people as gp_store
 from mediamind.store.persons import latest_faces_scan
@@ -248,6 +256,32 @@ def dismiss_link_suggestion(body: GlobalLinkSuggestionPairIn, request: Request):
             body.library_id_b,
             body.local_person_id_b,
         )
+    finally:
+        gp_conn.close()
+    return {"ok": True}
+
+
+@router.get("/move-suggestions", response_model=list[GlobalMoveSuggestionGroupOut])
+def move_suggestions(request: Request):
+    """Files virtually tagged to a person with a primary location set, not
+    yet physically there — a live read (see `list_move_suggestions`
+    docstring), nothing here moves a file. Execution lives in Phase 7's
+    dedicated endpoint, always behind an explicit confirm."""
+    gp_conn = gp_store.open_global_db()
+    try:
+        groups = list_move_suggestions(gp_conn, _registry(request))
+    finally:
+        gp_conn.close()
+    return [GlobalMoveSuggestionGroupOut(**g) for g in groups]
+
+
+@router.post("/move-suggestions/dismiss")
+def dismiss_move_suggestion(body: GlobalMoveSuggestionDismissIn, request: Request):
+    """Deselect one file from a person's move suggestions — durable, so it
+    doesn't reappear on the next load."""
+    gp_conn = gp_store.open_global_db()
+    try:
+        gp_store.dismiss_move_suggestion(gp_conn, body.global_person_id, body.content_hash)
     finally:
         gp_conn.close()
     return {"ok": True}
