@@ -1,8 +1,9 @@
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { asyncDataLoaderFeature, hotkeysCoreFeature, selectionFeature } from '@headless-tree/core'
 import { useTree } from '@headless-tree/react'
 import { ChevronRight, Folder, HardDrive, Laptop } from 'lucide-react'
 import { api } from '../../api/client'
+import { useDrives } from '../../api/hooks'
 import { useExplorerStore } from '../../stores/explorer'
 import { useFolderDropTarget } from '../dnd/useFolderDropTarget'
 
@@ -86,6 +87,10 @@ export function FolderTree(): React.JSX.Element {
   const currentPath = useExplorerStore((s) => s.currentPath)
   const navigate = useExplorerStore((s) => s.navigate)
   const driveLabels = useRef(new Map<string, string>())
+  // Polls every 5s (see useDrives); structural sharing keeps `data` stable
+  // until the drive set actually changes, so the effect below only reloads the
+  // tree's root when a drive is mounted/unlocked or removed.
+  const { data: drives } = useDrives()
 
   const tree = useTree<string>({
     rootItemId: ROOT_ID,
@@ -110,6 +115,19 @@ export function FolderTree(): React.JSX.Element {
     indent: 16,
     features: [asyncDataLoaderFeature, selectionFeature, hotkeysCoreFeature]
   })
+
+  // Reload the root's drive list when it changes, skipping the initial load
+  // (the tree fetches its own root children on mount).
+  const seededDrives = useRef(false)
+  useEffect(() => {
+    if (!drives) return
+    if (!seededDrives.current) {
+      seededDrives.current = true
+      return
+    }
+    for (const d of drives) driveLabels.current.set(d.path, d.label)
+    tree.getItemInstance(ROOT_ID)?.invalidateChildrenIds()
+  }, [drives, tree])
 
   return (
     <div {...tree.getContainerProps()} className="select-none overflow-y-auto py-2 text-sm">
