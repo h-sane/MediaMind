@@ -9,6 +9,7 @@ library it's linked in."
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import sqlite3
@@ -463,4 +464,103 @@ def execute_move_plan(
             for e in report.entries
         ],
         "plan_hash": move_plan_hash(resolved),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Undo — reverse the most recent cross-library move batch. The forward move's
+# manifest (written by core/safety.py) records every source -> destination, so
+# undo just replays those in reverse through the same copy-then-delete
+# `execute()`. Deliberately no `files`-row bookkeeping: the forward move
+# already dropped the source rows, and the filesystem is the source of truth
+# (safety rule #4) — the returned-to-source files are re-picked-up by that
+# library's own watcher/rescan, exactly as the arriving files were at the
+# destination. No auto-relink either: a safe ceiling, not a silent wrong tag.
+# ---------------------------------------------------------------------------
+
+def libraries_for_paths(registry: LibraryRegistry, paths: list[str]) -> set[str]:
+    """The ids of every registered library that physically contains one of
+    `paths`. Used to lock the right libraries around a move/undo so a
+    concurrent scan or organize on any of them can't race the file operations
+    (mirrors organize.py's single-library guard, generalised to the several
+    libraries a cross-drive batch spans)."""
+    libs = registry.list()
+    ids: set[str] = set()
+    for raw in paths:
+        p = Path(raw)
+        for lib in libs:
+            try:
+                if p.is_relative_to(Path(lib.path)):
+                    ids.add(lib.id)
+                    break
+            except ValueError:
+                continue
+    return ids
+
+
+def _read_manifest_moves(manifest_path: Path) -> list[tuple[str, str]]:
+    """(source, destination) for every successfully-moved row in a move
+    manifest. Rows that errored or were dry-run are ignored — only real
+    moves can be reversed."""
+    pairs: list[tuple[str, str]] = []
+    with open(manifest_path, newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            if row.get("action") == "moved" and row.get("source") and row.get("destination"):
+                pairs.append((row["source"], row["destination"]))
+    return pairs
+
+
+@dataclass(frozen=True)
+class UndoPlan:
+    undoable: gp_store.UndoableMove
+    ops: list[FileOp]           # reverse moves: destination -> original source folder
+    involved_libraries: set[str]
+
+
+def plan_undo(gp_conn: sqlite3.Connection, registry: LibraryRegistry) -> UndoPlan | None:
+    """Compute (but don't run) the reversal of the most recent move batch,
+    so the route can lock the involved libraries before executing. Returns
+    None if there's nothing to undo, or the manifest is gone/empty (a
+    manifest the user deleted can't be replayed)."""
+    undoable = gp_store.latest_undoable_move(gp_conn)
+    if undoable is None:
+        return None
+    manifest = Path(undoable.manifest_path)
+    if not manifest.is_file():
+        return None
+    pairs = _read_manifest_moves(manifest)
+    if not pairs:
+        return None
+    ops = [FileOp(source=Path(dest), dest_folder=Path(src).parent, mode="move") for src, dest in pairs]
+    involved = libraries_for_paths(registry, [p for pair in pairs for p in pair])
+    return UndoPlan(undoable=undoable, ops=ops, involved_libraries=involved)
+
+
+def execute_undo(
+    gp_conn: sqlite3.Connection,
+    plan: UndoPlan,
+    *,
+    on_progress: Callable[[int, int], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> dict:
+    """Replay a move batch in reverse. Marks the original manifest undone
+    only on a fully-clean run (report.ok) — a partial failure leaves it
+    undoable so the user can retry, matching organize.py's undo."""
+    manifest_path = global_moves_dir() / "manifests" / f"{time.strftime('%Y%m%d-%H%M%S')}_global-move-undo.csv"
+    report = safety_execute(
+        plan.ops, manifest_path=manifest_path, dry_run=False,
+        on_progress=on_progress, should_cancel=should_cancel,
+    )
+    if report.ok:
+        gp_store.mark_manifest_undone(gp_conn, plan.undoable.manifest_path)
+    return {
+        "planned": report.planned,
+        "handled": report.handled,
+        "ok": report.ok,
+        "dry_run": False,
+        "manifest_path": str(report.manifest_path) if report.manifest_path else None,
+        "entries": [
+            {"source": e.source, "action": e.action, "destination": e.destination, "error": e.error}
+            for e in report.entries
+        ],
     }

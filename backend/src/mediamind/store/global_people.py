@@ -64,7 +64,8 @@ CREATE TABLE IF NOT EXISTS global_move_actions (
     started_at REAL NOT NULL,
     finished_at REAL,
     ok_count INTEGER,
-    error_count INTEGER
+    error_count INTEGER,
+    undone INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -81,6 +82,13 @@ def open_global_db(db_path: Path | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout = 30000")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(_SCHEMA)
+    # Migration for stores created before the undo feature: add the `undone`
+    # column if this DB predates it (CREATE TABLE IF NOT EXISTS above won't
+    # alter an existing table). ALTER is not idempotent, so guard it.
+    try:
+        conn.execute("ALTER TABLE global_move_actions ADD COLUMN undone INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     conn.commit()
     return conn
 
@@ -301,3 +309,52 @@ def record_move_action(
     )
     conn.commit()
     return action_id
+
+
+@dataclass(frozen=True)
+class UndoableMove:
+    """The most recent reversible move batch, identified by its manifest.
+
+    A single `execute_move_plan` call writes ONE manifest but records one
+    `global_move_actions` row per person in the batch, all sharing that
+    `manifest_path`. Undo therefore operates on the whole manifest (all its
+    rows), not a single person's row — otherwise "undo the last move" would
+    only reverse part of what the user saw as one action."""
+    manifest_path: str
+    file_count: int
+    dest_folders: list[str]
+    started_at: float
+
+
+def latest_undoable_move(conn: sqlite3.Connection) -> UndoableMove | None:
+    """The most recent non-dry-run, not-yet-undone move batch. Returns None
+    when there is nothing to undo (so the UI can hide the affordance)."""
+    row = conn.execute(
+        "SELECT manifest_path, MAX(started_at) AS ts, SUM(file_count) AS files "
+        "FROM global_move_actions "
+        "WHERE dry_run = 0 AND undone = 0 AND manifest_path IS NOT NULL "
+        "GROUP BY manifest_path ORDER BY ts DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+    dests = conn.execute(
+        "SELECT DISTINCT dest_folder FROM global_move_actions WHERE manifest_path = ?",
+        (row["manifest_path"],),
+    ).fetchall()
+    return UndoableMove(
+        manifest_path=row["manifest_path"],
+        file_count=int(row["files"] or 0),
+        dest_folders=[d["dest_folder"] for d in dests if d["dest_folder"]],
+        started_at=float(row["ts"]),
+    )
+
+
+def mark_manifest_undone(conn: sqlite3.Connection, manifest_path: str) -> int:
+    """Mark every action row for a manifest undone so it can't be undone
+    twice; returns how many rows were flipped."""
+    cur = conn.execute(
+        "UPDATE global_move_actions SET undone = 1 WHERE manifest_path = ? AND undone = 0",
+        (manifest_path,),
+    )
+    conn.commit()
+    return cur.rowcount
