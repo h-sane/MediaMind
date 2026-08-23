@@ -343,7 +343,19 @@ export function GlobalPeoplePanel(): React.JSX.Element {
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1 overflow-y-auto p-4">
           {isPending ? (
-            <p className="text-sm text-zinc-400">Loading people from every library…</p>
+            <div
+              className="grid gap-3"
+              style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))' }}
+              aria-label="Loading people"
+            >
+              {Array.from({ length: 12 }).map((_, i) => (
+                <div key={i} className="flex flex-col items-center gap-2 p-3">
+                  <div className="h-20 w-20 animate-pulse rounded-full bg-zinc-100" />
+                  <div className="h-3 w-16 animate-pulse rounded bg-zinc-100" />
+                  <div className="h-2.5 w-10 animate-pulse rounded bg-zinc-100" />
+                </div>
+              ))}
+            </div>
           ) : isError ? (
             <p className="text-sm text-red-600">Could not load global people.</p>
           ) : !people || people.length === 0 ? (

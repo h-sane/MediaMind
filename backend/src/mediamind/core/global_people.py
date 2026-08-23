@@ -14,6 +14,7 @@ import hashlib
 import json
 import sqlite3
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -33,68 +34,95 @@ def open_library_db(library: Library) -> sqlite3.Connection:
     return open_db(library_db_path(library_data_dir(Path(library.path))))
 
 
-def sync_named_persons(gp_conn: sqlite3.Connection, registry: LibraryRegistry) -> None:
+@dataclass
+class _LibFaceData:
+    """One registered library's face data, read once: its provider, its named
+    local persons, and every local person's summary (for member counts)."""
+
+    provider_id: str
+    named: list[tuple[int, str]]  # (local_person_id, name)
+    summaries: dict[int, persons_store.PersonSummary]
+
+
+def _load_lib_face_data(lib: Library) -> _LibFaceData | None:
+    """Open one library's DB once and read everything both the sync and the
+    aggregation need. Returns None if the library has no face scan yet or its
+    DB can't be opened (removed drive, corrupt file) — same skip behavior the
+    old sequential code had, just isolated so it can run off-thread."""
+    try:
+        conn = open_library_db(lib)
+    except (OSError, sqlite3.Error):
+        return None
+    try:
+        scan = persons_store.latest_faces_scan(conn)
+        if scan is None:
+            return None
+        provider_id = json.loads(scan["params"] or "{}").get("provider_id", "")
+        named = [
+            (r["id"], r["name"])
+            for r in conn.execute(
+                "SELECT id, name FROM persons WHERE provider_id = ? AND name IS NOT NULL",
+                (provider_id,),
+            ).fetchall()
+        ]
+        summaries = {s.id: s for s in persons_store.list_person_summaries(conn, provider_id)}
+        return _LibFaceData(provider_id=provider_id, named=named, summaries=summaries)
+    finally:
+        conn.close()
+
+
+def _load_all_lib_face_data(registry: LibraryRegistry) -> dict[str, _LibFaceData]:
+    """Every registered library's face data, read concurrently — each library
+    is an independent DB open+query (sqlite connections aren't shared across
+    threads, but here every thread opens its own), so this is the N×-slower
+    sequential loop's parallel replacement. Cold "People (All Libraries)" load
+    was opening every library's DB one at a time (see the route's TTL cache,
+    which only helped repeat calls)."""
+    libs = registry.list()
+    if not libs:
+        return {}
+    with ThreadPoolExecutor(max_workers=min(8, len(libs))) as pool:
+        results = list(pool.map(_load_lib_face_data, libs))
+    return {lib.id: data for lib, data in zip(libs, results) if data is not None}
+
+
+def sync_named_persons(
+    gp_conn: sqlite3.Connection,
+    registry: LibraryRegistry,
+    *,
+    lib_data: dict[str, _LibFaceData] | None = None,
+) -> None:
     """Ensure every NAMED local person, in every registered library, has a
     global identity — auto-creating a same-name global person the first time
     it's seen unlinked. This is triggered lazily by reading the Global People
     view (see `list_aggregated`), not by a write-hook on the naming/ingest
     path, so `store/persons.py`'s `rename_person` and `core/ingest.py` stay
     untouched. A person already linked (by this sync or by an explicit
-    cross-library link, Phase 4) is left alone."""
-    for lib in registry.list():
-        try:
-            conn = open_library_db(lib)
-        except (OSError, sqlite3.Error):
-            continue
-        try:
-            scan = persons_store.latest_faces_scan(conn)
-            if scan is None:
+    cross-library link, Phase 4) is left alone.
+
+    `lib_data` lets a caller that already loaded every library's face data
+    (`list_aggregated`) share it instead of re-opening every DB; the gp_conn
+    writes stay on the calling thread (a sqlite connection can't cross
+    threads)."""
+    if lib_data is None:
+        lib_data = _load_all_lib_face_data(registry)
+    for lib_id, data in lib_data.items():
+        for pid, name in data.named:
+            if gp_store.global_for_local(gp_conn, lib_id, pid) is not None:
                 continue
-            provider_id = json.loads(scan["params"] or "{}").get("provider_id", "")
-            rows = conn.execute(
-                "SELECT id, name FROM persons WHERE provider_id = ? AND name IS NOT NULL",
-                (provider_id,),
-            ).fetchall()
-            for row in rows:
-                if gp_store.global_for_local(gp_conn, lib.id, row["id"]) is not None:
-                    continue
-                gid = gp_store.create_global_person(gp_conn, row["name"])
-                gp_store.link(gp_conn, gid, lib.id, row["id"], provider_id)
-        finally:
-            conn.close()
+            gid = gp_store.create_global_person(gp_conn, name)
+            gp_store.link(gp_conn, gid, lib_id, pid, data.provider_id)
 
 
 def list_aggregated(gp_conn: sqlite3.Connection, registry: LibraryRegistry) -> list[dict]:
     """One entry per global person, with per-library member summaries and a
-    total media count. Opens every registered library's DB — cheap at the
-    current scale (dozens of libraries/persons); cache the result at the
-    route layer with a short TTL rather than optimizing this further."""
-    sync_named_persons(gp_conn, registry)
+    total media count. Opens every registered library's DB once, concurrently
+    (`_load_all_lib_face_data`); the route layer caches the result with a short
+    TTL on top of that."""
+    lib_data = _load_all_lib_face_data(registry)
+    sync_named_persons(gp_conn, registry, lib_data=lib_data)
 
     library_by_id = {lib.id: lib for lib in registry.list()}
-    summaries_cache: dict[str, dict[int, persons_store.PersonSummary]] = {}
-
-    def summaries_for(library_id: str) -> dict[int, persons_store.PersonSummary]:
-        if library_id in summaries_cache:
-            return summaries_cache[library_id]
-        result: dict[int, persons_store.PersonSummary] = {}
-        lib = library_by_id.get(library_id)
-        if lib is not None:
-            try:
-                conn = open_library_db(lib)
-            except (OSError, sqlite3.Error):
-                conn = None
-            if conn is not None:
-                try:
-                    scan = persons_store.latest_faces_scan(conn)
-                    if scan is not None:
-                        provider_id = json.loads(scan["params"] or "{}").get("provider_id", "")
-                        for s in persons_store.list_person_summaries(conn, provider_id):
-                            result[s.id] = s
-                finally:
-                    conn.close()
-        summaries_cache[library_id] = result
-        return result
 
     out: list[dict] = []
     for gperson in gp_store.list_global_persons(gp_conn):
@@ -102,7 +130,8 @@ def list_aggregated(gp_conn: sqlite3.Connection, registry: LibraryRegistry) -> l
         total_media = 0
         for plink in gp_store.links_for_global(gp_conn, gperson.id):
             lib = library_by_id.get(plink.library_id)
-            summary = summaries_for(plink.library_id).get(plink.local_person_id)
+            data = lib_data.get(plink.library_id)
+            summary = data.summaries.get(plink.local_person_id) if data else None
             if lib is None or summary is None:
                 continue  # library removed or person deleted since linking
             total_media += summary.media_count
