@@ -12,9 +12,62 @@ Requires the `faces` extra (insightface + onnxruntime).
 
 from __future__ import annotations
 
+import logging
+import os
+
 import numpy as np
 
 from mediamind.providers.base import DetectedFace
+
+logger = logging.getLogger("mediamind.providers.insightface")
+
+
+def _scan_thread_budget() -> int:
+    """How many CPU threads a scan may use, leaving headroom so the single
+    backend process can still serve browsing/thumbnail requests for the app's
+    other tabs while a scan runs. Reserve `MEDIAMIND_SCAN_RESERVED_CORES`
+    (default 2) logical cores; never drop below 1."""
+    reserved = int(os.environ.get("MEDIAMIND_SCAN_RESERVED_CORES", "2"))
+    return max(1, (os.cpu_count() or 4) - reserved)
+
+
+def _apply_cpu_budget() -> None:
+    """Cap the two things a face scan otherwise lets run wild across every
+    core — ONNX Runtime inference and OpenCV image decoding — so a scan can't
+    starve the request-serving threads in the same process. Idempotent and
+    fully defensive: any failure here must never stop a scan from running.
+
+    ONNX Runtime defaults `intra_op_num_threads` to 0 (= all cores) and
+    InsightFace exposes no way to pass SessionOptions, so we inject a
+    thread-capped SessionOptions into the one place it builds sessions."""
+    n = _scan_thread_budget()
+    try:
+        import cv2
+
+        cv2.setNumThreads(n)
+    except Exception:
+        pass
+    try:
+        import onnxruntime as ort
+        from insightface.model_zoo import model_zoo as mz
+
+        if getattr(mz.PickableInferenceSession, "_mm_thread_capped", False):
+            return
+        orig_init = mz.PickableInferenceSession.__init__
+
+        def _capped_init(self, model_path, **kwargs):
+            if "sess_options" not in kwargs:
+                so = ort.SessionOptions()
+                so.intra_op_num_threads = n
+                so.inter_op_num_threads = n
+                kwargs["sess_options"] = so
+            orig_init(self, model_path, **kwargs)
+
+        mz.PickableInferenceSession.__init__ = _capped_init
+        mz.PickableInferenceSession._mm_thread_capped = True
+        logger.info("Face-scan CPU budget: %d threads (of %d cores)", n, os.cpu_count() or 0)
+    except Exception as exc:
+        logger.warning("Could not cap ONNX Runtime threads (scan may use all cores): %s", exc)
 
 
 class InsightFaceProvider:
@@ -37,6 +90,7 @@ class InsightFaceProvider:
     def prepare(self) -> None:
         if self._app is not None:
             return
+        _apply_cpu_budget()
         from insightface.app import FaceAnalysis
 
         kwargs = dict(name=self._pack, allowed_modules=["detection", "recognition"])

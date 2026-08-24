@@ -23,12 +23,12 @@ import type { DirEntry } from './useDirectoryListing'
  * pixel-identical for anyone who never touches icon size. */
 const ICON_SIZE_CONFIG: Record<
   IconSize,
-  { cellWidth: number; cellHeight: number; thumbClass: string; iconClass: string; thumbPx: number }
+  { cellWidth: number; cellHeight: number; thumbClass: string; iconClass: string; thumbPx: number; displayPx: number }
 > = {
-  'extra-large': { cellWidth: 176, cellHeight: 188, thumbClass: 'h-32 w-32', iconClass: 'h-14 w-14', thumbPx: 256 },
-  large: { cellWidth: 140, cellHeight: 150, thumbClass: 'h-24 w-24', iconClass: 'h-10 w-10', thumbPx: 256 },
-  medium: { cellWidth: 104, cellHeight: 116, thumbClass: 'h-16 w-16', iconClass: 'h-7 w-7', thumbPx: 128 },
-  small: { cellWidth: 72, cellHeight: 80, thumbClass: 'h-9 w-9', iconClass: 'h-5 w-5', thumbPx: 96 }
+  'extra-large': { cellWidth: 176, cellHeight: 188, thumbClass: 'h-32 w-32', iconClass: 'h-14 w-14', thumbPx: 256, displayPx: 128 },
+  large: { cellWidth: 140, cellHeight: 150, thumbClass: 'h-24 w-24', iconClass: 'h-10 w-10', thumbPx: 256, displayPx: 96 },
+  medium: { cellWidth: 104, cellHeight: 116, thumbClass: 'h-16 w-16', iconClass: 'h-7 w-7', thumbPx: 128, displayPx: 64 },
+  small: { cellWidth: 72, cellHeight: 80, thumbClass: 'h-9 w-9', iconClass: 'h-5 w-5', thumbPx: 96, displayPx: 36 }
 }
 
 interface Props {
@@ -46,6 +46,7 @@ interface TileProps {
   thumbClass: string
   iconClass: string
   thumbPx: number
+  displayPx: number
 }
 
 const Tile = memo(function Tile({
@@ -57,7 +58,8 @@ const Tile = memo(function Tile({
   navigate,
   thumbClass,
   iconClass,
-  thumbPx
+  thumbPx,
+  displayPx
 }: TileProps): React.JSX.Element {
   const { ref, isDragging, isOver } = useEntryDnd(entry, orderedPaths)
   const { isSelected, isCut, isRenaming, isFocused } = useTileFlags(entry.path)
@@ -85,7 +87,7 @@ const Tile = memo(function Tile({
       ) : (
         <FolderFaceThumbnail
           path={entry.path}
-          size={thumbPx}
+          size={displayPx}
           fallback={
             <div className={`flex items-center justify-center rounded-lg bg-zinc-50 ${thumbClass}`}>
               <Folder className={`${iconClass} text-amber-300`} />
@@ -178,6 +180,7 @@ export function IconGridView({ entries, onOpenFile }: Props): React.JSX.Element 
         thumbClass={sizeConfig.thumbClass}
         iconClass={sizeConfig.iconClass}
         thumbPx={sizeConfig.thumbPx}
+        displayPx={sizeConfig.displayPx}
       />
     )
   }
