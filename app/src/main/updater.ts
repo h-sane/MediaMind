@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { logLine } from './log'
+import { stopBackend } from './backend'
 
 // In-app auto-update, GitHub-Releases backed (see electron-builder.yml
 // `publish`). electron-updater compares the installed version against the
@@ -45,8 +46,16 @@ export function initUpdater(): void {
   })
 
   ipcMain.handle('update:download', () => autoUpdater.downloadUpdate())
-  // quitAndInstall closes every window and relaunches into the installer.
-  ipcMain.handle('update:install', () => autoUpdater.quitAndInstall())
+  // quitAndInstall closes every window and relaunches into the installer. Kill
+  // the engine first and synchronously (stopBackend does a blocking taskkill on
+  // Windows): the installer replaces files the still-running engine would
+  // otherwise lock, causing "MediaMind cannot be closed". The installer's own
+  // killEngine macro (build-resources/installer.nsh) is the backstop that also
+  // covers updates arriving from older builds without this line.
+  ipcMain.handle('update:install', () => {
+    stopBackend()
+    autoUpdater.quitAndInstall()
+  })
 
   // Fire-and-forget: a check failure (offline, GitHub down) just means no
   // bubble appears — it must never block or crash startup.
