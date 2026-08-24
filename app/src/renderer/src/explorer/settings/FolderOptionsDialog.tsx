@@ -1,6 +1,8 @@
-import { X } from 'lucide-react'
+import { useState } from 'react'
+import { Trash2, X } from 'lucide-react'
 import { useSettings, useUpdateSettings } from '../../api/hooks'
 import type { Settings } from '../../api/client'
+import { RemoveDataDialog } from './RemoveDataDialog'
 
 interface Props {
   open: boolean
@@ -40,6 +42,7 @@ const AUTO_SCAN_OPTIONS: { value: Settings['auto_scan_mode']; label: string; hel
 export function FolderOptionsDialog({ open, onClose }: Props): React.JSX.Element | null {
   const { data: settings } = useSettings()
   const updateSettings = useUpdateSettings()
+  const [removeDataOpen, setRemoveDataOpen] = useState(false)
 
   if (!open) return null
 
@@ -47,6 +50,7 @@ export function FolderOptionsDialog({ open, onClose }: Props): React.JSX.Element
   const autoScanMode = settings?.auto_scan_mode ?? 'off'
 
   return (
+    <>
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onClose}>
       <div
         className="w-[26rem] rounded-lg bg-white shadow-xl"
@@ -98,6 +102,24 @@ export function FolderOptionsDialog({ open, onClose }: Props): React.JSX.Element
               </span>
             </label>
           ))}
+
+          <h3 className="mb-2 mt-4 text-xs font-medium uppercase tracking-wide text-zinc-400">Data</h3>
+          <div className="flex items-start justify-between gap-3 py-1.5">
+            <span className="text-sm text-zinc-700">
+              Remove all MediaMind data
+              <span className="mt-0.5 block text-xs text-zinc-400">
+                Permanently delete every recognized person, index, thumbnail, and setting. Your photos and
+                videos are never touched.
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setRemoveDataOpen(true)}
+              className="flex shrink-0 items-center gap-1.5 rounded-md border border-red-200 px-2.5 py-1.5 text-sm text-red-600 hover:bg-red-50"
+            >
+              <Trash2 className="h-4 w-4" /> Remove…
+            </button>
+          </div>
         </div>
 
         <div className="flex justify-end border-t border-zinc-200 px-4 py-2.5">
@@ -111,5 +133,7 @@ export function FolderOptionsDialog({ open, onClose }: Props): React.JSX.Element
         </div>
       </div>
     </div>
+    <RemoveDataDialog open={removeDataOpen} onClose={() => setRemoveDataOpen(false)} />
+    </>
   )
 }

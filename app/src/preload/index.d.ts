@@ -1,4 +1,4 @@
-import type { BackendInfo, ShellOpenResult } from '../shared/types'
+import type { BackendInfo, DataLocation, PurgeResult, ShellOpenResult } from '../shared/types'
 
 interface MediaMindBridge {
   getBackendInfo: () => Promise<BackendInfo | null>
@@ -20,6 +20,9 @@ interface MediaMindBridge {
   onUpdateError: (cb: (info: { message: string }) => void) => void
   downloadUpdate: () => Promise<void>
   installUpdate: () => Promise<void>
+  dataLocations: () => Promise<DataLocation[]>
+  purgeData: (skipUnreachable: boolean) => Promise<PurgeResult>
+  relaunchApp: () => Promise<void>
 }
 
 declare global {

@@ -5,7 +5,16 @@ import { join } from 'node:path'
 import { startBackend, stopBackend, getBackendInfo } from './backend'
 import { initUpdater } from './updater'
 import { logLine, logPath } from './log'
-import type { ShellOpenResult } from '../shared/types'
+import { purge, readDataLocations } from './purge'
+import type { DataLocation, PurgeResult, ShellOpenResult } from '../shared/types'
+
+/** The central app-data store, matching the backend's `config.app_data_dir()`:
+ * the `MEDIAMIND_DATA_DIR` override if set (used to isolate tests from real
+ * app-data — see the backend), otherwise `%APPDATA%\MediaMind` (shared with
+ * Electron's own userData). */
+function centralDataDir(): string {
+  return process.env.MEDIAMIND_DATA_DIR || join(app.getPath('appData'), 'MediaMind')
+}
 
 // ---------------------------------------------------------------------------
 // Native "Open with" dialog (SHOpenWithDialog via COM), window-owned so it
@@ -310,6 +319,33 @@ function registerIpc(): void {
   // "Send to > Desktop (create shortcut)" needs the real Desktop path —
   // only resolvable in the main process (Electron's `app.getPath`).
   ipcMain.handle('paths:desktop', (): string => app.getPath('desktop'))
+
+  // What "Remove all MediaMind data" would delete, with per-drive reachability.
+  ipcMain.handle('appdata:locations', (): DataLocation[] => readDataLocations(centralDataDir()))
+
+  // Delete every library's `.mediamind/` on a connected drive plus the central
+  // app-data store. Stops the backend first so its file handles (models, logs,
+  // sqlite) are released — the wipe then can't fail on a lock. If any library's
+  // drive is offline and `skipUnreachable` is false, `purge` deletes nothing
+  // and reports them so the caller can connect-and-retry or skip.
+  ipcMain.handle('appdata:purge', (_event, skipUnreachable: boolean): PurgeResult => {
+    const locs = readDataLocations(centralDataDir())
+    const hasUnreachable = locs.some((l) => l.kind === 'library' && !l.reachable)
+    if (hasUnreachable && !skipUnreachable) return purge(centralDataDir(), false)
+
+    stopBackend() // release the engine's file handles before deleting them
+    const result = purge(centralDataDir(), skipUnreachable)
+    logLine('appdata:purge', `deleted ${result.deleted.length}, failed ${result.failed.length}`)
+    return result
+  })
+
+  // Restart the whole app after a purge, back to a clean first-run state. A
+  // full relaunch (not a backend-only restart) sidesteps stale port/token
+  // reconnection — the backend was just killed and its data wiped.
+  ipcMain.handle('app:relaunch', (): void => {
+    app.relaunch()
+    app.exit(0)
+  })
 
   // Fire-and-forget error reports from the renderer (fetch failures, unhandled
   // exceptions, render crashes) so they land in the same persistent log as

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { BackendInfo, ShellOpenResult } from '../shared/types'
+import type { BackendInfo, DataLocation, PurgeResult, ShellOpenResult } from '../shared/types'
 
 const api = {
   /** Engine connection details; null until the backend is up. */
@@ -56,7 +56,15 @@ const api = {
   /** Begin downloading the available update installer. */
   downloadUpdate: (): Promise<void> => ipcRenderer.invoke('update:download'),
   /** Quit and install the downloaded update (relaunches the app). */
-  installUpdate: (): Promise<void> => ipcRenderer.invoke('update:install')
+  installUpdate: (): Promise<void> => ipcRenderer.invoke('update:install'),
+  /** List everything "Remove all data" would delete, with drive reachability. */
+  dataLocations: (): Promise<DataLocation[]> => ipcRenderer.invoke('appdata:locations'),
+  /** Delete all MediaMind data. Pass `skipUnreachable: true` to proceed while
+   * some libraries' drives are offline (leaving those folders behind). */
+  purgeData: (skipUnreachable: boolean): Promise<PurgeResult> =>
+    ipcRenderer.invoke('appdata:purge', skipUnreachable),
+  /** Restart the app to a clean first-run state (after a purge). */
+  relaunchApp: (): Promise<void> => ipcRenderer.invoke('app:relaunch')
 }
 
 export type MediaMindBridge = typeof api
