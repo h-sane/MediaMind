@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Trash2, X } from 'lucide-react'
-import { useSettings, useUpdateSettings } from '../../api/hooks'
+import { useLibraries, useSettings, useUpdateSettings } from '../../api/hooks'
 import type { Settings } from '../../api/client'
 import { RemoveDataDialog } from './RemoveDataDialog'
 
@@ -41,6 +41,7 @@ const AUTO_SCAN_OPTIONS: { value: Settings['auto_scan_mode']; label: string; hel
  */
 export function FolderOptionsDialog({ open, onClose }: Props): React.JSX.Element | null {
   const { data: settings } = useSettings()
+  const { data: libraries } = useLibraries()
   const updateSettings = useUpdateSettings()
   const [removeDataOpen, setRemoveDataOpen] = useState(false)
 
@@ -102,6 +103,27 @@ export function FolderOptionsDialog({ open, onClose }: Props): React.JSX.Element
               </span>
             </label>
           ))}
+
+          {autoScanMode !== 'off' && (
+            <div className="mt-2 rounded-md bg-zinc-50 px-3 py-2">
+              {libraries && libraries.length > 0 ? (
+                <>
+                  <p className="text-xs text-zinc-500">Currently watching for new media:</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {libraries.map((lib) => (
+                      <li key={lib.id} className="truncate text-xs text-zinc-700" title={lib.path}>
+                        {lib.name}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <p className="text-xs text-zinc-500">
+                  No folders added yet — add one and it'll be watched automatically.
+                </p>
+              )}
+            </div>
+          )}
 
           <h3 className="mb-2 mt-4 text-xs font-medium uppercase tracking-wide text-zinc-400">Data</h3>
           <div className="flex items-start justify-between gap-3 py-1.5">

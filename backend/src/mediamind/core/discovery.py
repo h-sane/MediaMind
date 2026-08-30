@@ -66,14 +66,84 @@ def list_suggestions(conn: sqlite3.Connection, threshold: int = 10) -> list[dict
     ]
 
 
-def mark_registered(conn: sqlite3.Connection, folder: str) -> None:
-    conn.execute("UPDATE folder_tally SET registered = 1 WHERE folder = ?", (folder,))
+# Well-known "inbox" folders where new media typically lands. Suggested
+# proactively (ADR-0009 effortless setup) — the moment one exists and holds
+# media, without waiting for the whole-drive tally to reach threshold. Home-
+# relative so they resolve per-user and cross-platform; existence and content
+# are checked at query time (the filesystem is the source of truth).
+_INBOX_SUBPATHS: tuple[tuple[str, ...], ...] = (
+    ("Downloads",),
+    ("Downloads", "Telegram Desktop"),
+    ("Pictures",),
+    ("Videos",),
+)
+
+
+def known_inbox_folders() -> list[Path]:
+    home = Path.home()
+    return [home.joinpath(*parts) for parts in _INBOX_SUBPATHS]
+
+
+def _shallow_media_count(folder: Path, cap: int = 50) -> int:
+    """Count media files directly in `folder` (non-recursive), capped — enough
+    to show "N photos/videos" without walking a deep Downloads tree."""
+    from mediamind.core.scanner import MEDIA_KINDS, kind_of
+
+    n = 0
+    try:
+        for entry in folder.iterdir():
+            if entry.is_file() and kind_of(entry) in MEDIA_KINDS:
+                n += 1
+                if n >= cap:
+                    break
+    except OSError:
+        return 0
+    return n
+
+
+def list_inbox_suggestions(conn: sqlite3.Connection) -> list[dict]:
+    """Known inbox folders worth suggesting: they exist, hold media, and the
+    user hasn't already dismissed or registered them. Dismiss/registered state
+    is reused from `folder_tally` so a dismissed inbox stays gone."""
+    state = {
+        r["folder"]: r
+        for r in conn.execute("SELECT folder, dismissed, registered FROM folder_tally").fetchall()
+    }
+    now = time.time()
+    out: list[dict] = []
+    for folder in known_inbox_folders():
+        key = str(folder)
+        st = state.get(key)
+        if st is not None and (st["dismissed"] or st["registered"]):
+            continue
+        if not folder.is_dir():
+            continue
+        count = _shallow_media_count(folder)
+        if count == 0:
+            continue
+        out.append({"folder": key, "media_count": count, "first_seen": now, "last_seen": now})
+    return out
+
+
+def _set_flag(conn: sqlite3.Connection, folder: str, column: str) -> None:
+    # Upsert, not a bare UPDATE: a proactively-suggested inbox (ADR-0009) may
+    # have no tally row yet, and its dismissed/registered state must still
+    # persist so it stops being suggested.
+    now = time.time()
+    conn.execute(
+        f"INSERT INTO folder_tally (folder, media_count, first_seen, last_seen, {column}) "
+        f"VALUES (?, 0, ?, ?, 1) ON CONFLICT(folder) DO UPDATE SET {column} = 1",
+        (folder, now, now),
+    )
     conn.commit()
+
+
+def mark_registered(conn: sqlite3.Connection, folder: str) -> None:
+    _set_flag(conn, folder, "registered")
 
 
 def mark_dismissed(conn: sqlite3.Connection, folder: str) -> None:
-    conn.execute("UPDATE folder_tally SET dismissed = 1 WHERE folder = ?", (folder,))
-    conn.commit()
+    _set_flag(conn, folder, "dismissed")
 
 
 def fixed_drive_roots() -> list[str]:

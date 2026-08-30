@@ -659,9 +659,17 @@ class DiscoveryFolderIn(BaseModel):
 
 @router.get("/discovery/suggestions", response_model=list[DiscoverySuggestionOut])
 def discovery_suggestions(request: Request) -> list[DiscoverySuggestionOut]:
+    # Nothing to suggest when the user has opted out of auto-scan entirely.
+    if request.app.state.settings.auto_scan_mode == "off":
+        return []
     conn = discovery.connect(discovery_db_path())
     try:
-        return [DiscoverySuggestionOut(**row) for row in discovery.list_suggestions(conn)]
+        # Proactive known inboxes (ADR-0009) in any on-mode; whole-drive tally
+        # rows only exist in "system" mode. Inbox wins on folder collisions.
+        rows = discovery.list_inbox_suggestions(conn)
+        seen = {r["folder"] for r in rows}
+        rows += [r for r in discovery.list_suggestions(conn) if r["folder"] not in seen]
+        return [DiscoverySuggestionOut(**row) for row in rows]
     finally:
         conn.close()
 

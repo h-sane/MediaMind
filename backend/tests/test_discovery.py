@@ -61,6 +61,26 @@ def test_dismissed_and_registered_drop_out(tmp_path: Path):
     assert discovery.list_suggestions(conn, threshold=10) == []
 
 
+def test_inbox_suggestions_proactive_and_dismissable(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    (home / "Downloads").mkdir(parents=True)
+    (home / "Downloads" / "a.jpg").write_bytes(b"x")
+    (home / "Downloads" / "b.png").write_bytes(b"y")
+    (home / "Pictures").mkdir()  # exists but empty -> not suggested
+    monkeypatch.setattr(discovery.Path, "home", classmethod(lambda cls: home))
+
+    conn = discovery.connect(tmp_path / "discovery.sqlite3")
+    sugg = discovery.list_inbox_suggestions(conn)
+    folders = {s["folder"] for s in sugg}
+    assert str(home / "Downloads") in folders
+    assert str(home / "Pictures") not in folders  # empty
+    assert next(s for s in sugg if s["folder"].endswith("Downloads"))["media_count"] == 2
+
+    # Dismissing a never-tallied inbox must persist (upsert, not bare UPDATE).
+    discovery.mark_dismissed(conn, str(home / "Downloads"))
+    assert discovery.list_inbox_suggestions(conn) == []
+
+
 def test_deleted_folder_is_not_suggested(tmp_path: Path):
     folder = tmp_path / "Gone"
     folder.mkdir()
