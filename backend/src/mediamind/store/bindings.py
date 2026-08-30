@@ -396,6 +396,45 @@ def release_binding(conn: sqlite3.Connection, binding_id: int) -> bool:
     return cur.rowcount > 0
 
 
+def placement_confirmed_pending_ids(conn: sqlite3.Connection) -> set[int]:
+    """Pending-match ids a folder binding already confirms, so they need no
+    Suggestions review (ADR-0010: placement overrides the face model).
+
+    A file sitting inside a person's bound folder is that person's regardless
+    of the model — so a weak (SUGGEST-but-not-AUTO) match to that *same* person
+    is moot and shouldn't nag the user. Only the folder's own person is
+    suppressed: a co-appearing other person's face (Mom in Dad's folder) still
+    gets its normal suggestion so she can be surfaced. Faces rows are never
+    mutated here — attribution stays a placement fact, not a rewritten identity.
+    """
+    bindings = conn.execute(
+        "SELECT b.folder_rel, b.provider_id, m.person_id "
+        "FROM folder_bindings b JOIN folder_binding_members m ON m.binding_id = b.id"
+    ).fetchall()
+    if not bindings:
+        return set()
+    folders_by_person: dict[tuple[int, str], list[str]] = {}
+    for b in bindings:
+        folders_by_person.setdefault((b["person_id"], b["provider_id"]), []).append(b["folder_rel"])
+
+    rows = conn.execute(
+        """
+        SELECT pm.id, pm.person_id, f.provider_id, fi.path
+        FROM pending_matches pm
+        JOIN faces f ON f.id = pm.face_id
+        JOIN files fi ON fi.id = f.file_id
+        WHERE pm.decision IS NULL
+        """
+    ).fetchall()
+    suppressed: set[int] = set()
+    for r in rows:
+        for folder_rel in folders_by_person.get((r["person_id"], r["provider_id"]), ()):
+            if is_in_folder_subtree(r["path"], folder_rel):
+                suppressed.add(r["id"])
+                break
+    return suppressed
+
+
 def set_accepted_outliers(
     conn: sqlite3.Connection, binding_id: int, file_ids: list[int]
 ) -> BindingRecord | None:

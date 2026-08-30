@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Request
 from mediamind.api.models import PendingDecisionsIn, PendingMatchOut
 from mediamind.core.libraries import LibraryRegistry
 from mediamind.store import face_assignments
+from mediamind.store.bindings import placement_confirmed_pending_ids
 from mediamind.store.db import open_library_db
 
 router = APIRouter(tags=["pending"])
@@ -57,6 +58,9 @@ def list_pending(library_id: str, request: Request):
             ORDER BY pm.confidence DESC
             """
         ).fetchall()
+        # ADR-0010: a file inside a person's bound folder is confirmed by
+        # placement, so drop any pending match for that folder's own person.
+        suppressed = placement_confirmed_pending_ids(conn)
     finally:
         conn.close()
 
@@ -69,6 +73,7 @@ def list_pending(library_id: str, request: Request):
             confidence=r["confidence"],
         )
         for r in rows
+        if r["id"] not in suppressed
     ]
 
 

@@ -25,6 +25,7 @@ from mediamind.config import face_thumb_cache_dir
 from mediamind.core.faces.engine import load_frame
 from mediamind.core.libraries import LibraryRegistry
 from mediamind.core.organize_plan import safe_dest_folder_rel
+from mediamind.store.bindings import placement_confirmed_pending_ids
 from mediamind.store.db import open_library_db
 from mediamind.store.persons import (
     dismiss_merge_suggestion,
@@ -95,7 +96,7 @@ def list_persons(library_id: str, request: Request):
 
         pending_count = conn.execute(
             "SELECT COUNT(*) FROM pending_matches WHERE decision IS NULL",
-        ).fetchone()[0]
+        ).fetchone()[0] - len(placement_confirmed_pending_ids(conn))
 
         multi_person_count = conn.execute(
             """
