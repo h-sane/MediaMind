@@ -17,7 +17,13 @@ from mediamind.core import loaders
 from mediamind.core.scanner import KIND_GIF, KIND_IMAGE, KIND_VIDEO, ScannedFile
 from mediamind.providers.base import FaceProvider
 
-DEFAULT_VIDEO_FRAMES = 15
+# Flat frame cap per video. ADR-0011's hard ceiling is "never more than ~10";
+# the progressive early-exit that drops the common single-subject clip to ~2-3
+# needs the identity engine (distinct-people tracking) and lands in Block 3.
+# Until then this flat cap is the Block-2 scan-perf lever (ADR-0006): ~33% off
+# every large video vs the old 15 at no recall cost to the common case.
+# ponytail: flat cap, replace with ADR-0011 progressive early-exit in Block 3.
+DEFAULT_VIDEO_FRAMES = 10
 DEFAULT_GIF_FRAMES = 8
 DEFAULT_MIN_FACE_SIZE = 40
 

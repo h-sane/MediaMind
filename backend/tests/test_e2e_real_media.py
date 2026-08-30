@@ -46,8 +46,8 @@ EXCLUDE_NAMES = {
     "印度网红女神_Anjali_屏幕前的高贵女神_私底下却是别人操腻了的母狗_Anjali_印度_网红_女神_AnjaliArora.mp4",
 }
 
-# Real InsightFace detection on CPU costs ~1s/image and ~15-20s/video
-# (DEFAULT_VIDEO_FRAMES=15 sampled frames each). The folder has ~130 videos;
+# Real InsightFace detection on CPU costs ~1s/image and ~10-15s/video
+# (DEFAULT_VIDEO_FRAMES=10 sampled frames each). The folder has ~130 videos;
 # processing all of them would take ~40 minutes. Sample a subset spread
 # across the sorted name list for content diversity while keeping a full
 # scan to a few minutes.
