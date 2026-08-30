@@ -21,6 +21,15 @@ def make_gif(path: Path, color: tuple[int, int, int], frames: int = 4) -> Path:
     return path
 
 
+@pytest.fixture(autouse=True)
+def _isolate_app_data(tmp_path_factory, monkeypatch):
+    """Point app-data at a throwaway dir for every test. The per-library index
+    now lives in app-data (ADR-0004), so without this a test run would write
+    real indexes/caches into the user's actual MediaMind data dir. Kept off the
+    per-test `tmp_path` so recursive scans of a test library don't see it."""
+    monkeypatch.setenv("MEDIAMIND_DATA_DIR", str(tmp_path_factory.mktemp("appdata")))
+
+
 RED = (255, 0, 0)
 BLUE = (0, 0, 255)
 BLACK = (0, 0, 0)

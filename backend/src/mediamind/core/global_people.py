@@ -21,17 +21,17 @@ from typing import Callable
 
 import numpy as np
 
-from mediamind.config import global_moves_dir, library_data_dir
+from mediamind.config import global_moves_dir
 from mediamind.core.libraries import Library, LibraryRegistry
 from mediamind.core.safety import FileOp
 from mediamind.core.safety import execute as safety_execute
 from mediamind.store import global_people as gp_store
 from mediamind.store import persons as persons_store
-from mediamind.store.db import library_db_path, open_db
+from mediamind.store.db import open_library_db as _open_index_db
 
 
 def open_library_db(library: Library) -> sqlite3.Connection:
-    return open_db(library_db_path(library_data_dir(Path(library.path))))
+    return _open_index_db(Path(library.path))
 
 
 @dataclass

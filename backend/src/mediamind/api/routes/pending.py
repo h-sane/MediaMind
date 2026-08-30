@@ -19,10 +19,9 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 
 from mediamind.api.models import PendingDecisionsIn, PendingMatchOut
-from mediamind.config import library_data_dir
 from mediamind.core.libraries import LibraryRegistry
 from mediamind.store import face_assignments
-from mediamind.store.db import library_db_path, open_db
+from mediamind.store.db import open_library_db
 
 router = APIRouter(tags=["pending"])
 
@@ -39,7 +38,7 @@ def _get_library_root(request: Request, library_id: str) -> Path:
 
 
 def _open_db(library_root: Path):
-    return open_db(library_db_path(library_data_dir(library_root)))
+    return open_library_db(library_root)
 
 
 @router.get("/libraries/{library_id}/pending", response_model=list[PendingMatchOut])

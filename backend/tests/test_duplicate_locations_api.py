@@ -13,8 +13,7 @@ from PIL import Image
 from mediamind.api.app import create_app
 from mediamind.core.safety import ExecutionReport, ManifestEntry
 from mediamind.store.audit import record_action
-from mediamind.store.db import library_db_path, open_db
-from mediamind.config import library_data_dir
+from mediamind.store.db import open_library_db
 
 
 @pytest.fixture
@@ -43,7 +42,7 @@ def lib(client: TestClient, tmp_path: Path):
 def _seed_export(root: Path, kind: str = "export-by-person", undone: bool = False) -> None:
     """Record a fake export action copying group.jpg into two person folders,
     the same shape record_action() writes for a real Phase 6A export."""
-    conn = open_db(library_db_path(library_data_dir(root)))
+    conn = open_library_db(root)
     try:
         report = ExecutionReport(
             planned=2,

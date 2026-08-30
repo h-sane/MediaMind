@@ -33,7 +33,7 @@ from mediamind.core.dedupe import group_signature
 from mediamind.core.jobs import JobContext, JobManager
 from mediamind.core.libraries import LibraryRegistry
 from mediamind.core.safety import ExecutionReport, new_manifest_path, recycle_bin_supported, trash
-from mediamind.store.db import library_db_path, open_db
+from mediamind.store.db import open_library_db
 from mediamind.store.duplicates import (
     add_dismissals,
     clear_dismissals,
@@ -70,8 +70,7 @@ def _get_library_and_root(request: Request, library_id: str) -> tuple:
 
 
 def _open_library_db(library_root: Path):
-    data_dir = library_data_dir(library_root)
-    return open_db(library_db_path(data_dir))
+    return open_library_db(library_root)
 
 
 def _snapshot(job) -> JobSnapshot:

@@ -44,7 +44,7 @@ from mediamind.store import face_assignments
 from mediamind.store import rejected_persons
 from mediamind.store.audit import record_action
 from mediamind.store.bindings import BindingConflictError
-from mediamind.store.db import library_db_path, open_db
+from mediamind.store.db import open_library_db
 from mediamind.store.persons import latest_faces_scan
 
 router = APIRouter(tags=["bindings"])
@@ -66,7 +66,7 @@ def _get_library_root(request: Request, library_id: str) -> Path:
 
 
 def _open_db(library_root: Path):
-    return open_db(library_db_path(library_data_dir(library_root)))
+    return open_library_db(library_root)
 
 
 def _require_provider_id(conn, library_root: Path) -> str:

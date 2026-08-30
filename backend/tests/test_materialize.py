@@ -17,7 +17,7 @@ from mediamind.api.app import create_app
 from mediamind.config import library_data_dir
 from mediamind.providers.catalog import CatalogEntry, LicenseInfo
 from mediamind.providers.manager import ProviderManager
-from mediamind.store.db import library_db_path, open_db
+from mediamind.store.db import open_library_db
 from mediamind.store.embeddings import CachedFace
 from mediamind.store.persons import FileFaces, persist_face_scan, upsert_file
 
@@ -60,7 +60,7 @@ def _seed_scattered_person(library_root: Path, n_files: int = 4) -> int:
     (library_root / "Unsorted").mkdir(parents=True, exist_ok=True)
     (library_root / "Other").mkdir(parents=True, exist_ok=True)
     data_dir = library_data_dir(library_root)
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
 
     file_faces = []
     for i in range(n_files):
@@ -169,7 +169,7 @@ def test_materialize_respects_exclusions_and_reassignments(tmp_path: Path, clien
     # redirected file, and a later generic Organize run must not sweep
     # either of them into Dave/ (the routing-gap fix's other half).
     data_dir = library_data_dir(library_root)
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
     rejected_count = conn.execute(
         "SELECT COUNT(*) FROM rejected_person_files WHERE person_id = ?", (person_id,)
     ).fetchone()[0]

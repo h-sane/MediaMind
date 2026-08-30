@@ -27,6 +27,7 @@ from mediamind.core.recent import RecentFilesStore
 from mediamind.core.settings import SettingsStore
 from mediamind.core.thumb_prewarm import ThumbnailPrewarmer
 from mediamind.providers.manager import ProviderManager
+from mediamind.store.db import LibraryOffline
 
 logger = logging.getLogger("mediamind.api")
 
@@ -164,6 +165,13 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.exception_handler(LibraryOffline)
+    async def library_offline_handler(request: Request, exc: LibraryOffline) -> JSONResponse:
+        # ADR-0004: the drive is unmounted and this library has no off-drive
+        # index yet. Not an error — the UI badges it "offline" and offers to
+        # connect the drive. 409 (conflict with current state), not 500.
+        return JSONResponse(status_code=409, content={"detail": "library_offline", "root": str(exc)})
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:

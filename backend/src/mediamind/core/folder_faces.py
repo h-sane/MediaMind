@@ -25,11 +25,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from mediamind.config import library_data_dir
 from mediamind.core.faces.folder_patterns import FolderFileInfo, load_folder_files
 from mediamind.core.libraries import Library, LibraryRegistry
 from mediamind.store import persons as persons_store
-from mediamind.store.db import library_db_path, open_db
+from mediamind.store.db import open_library_db
 
 
 @dataclass(frozen=True)
@@ -78,7 +77,7 @@ def _is_under(file_rel: str, folder_rel: str) -> bool:
 
 
 def _open_library_db(lib: Library) -> sqlite3.Connection:
-    return open_db(library_db_path(library_data_dir(Path(lib.path))))
+    return open_library_db(Path(lib.path))
 
 
 def _load_files_cached(lib: Library, conn: sqlite3.Connection, provider_id: str) -> list[FolderFileInfo]:

@@ -8,9 +8,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from mediamind.config import library_data_dir
 from mediamind.core.libraries import LibraryRegistry
-from mediamind.store.db import library_db_path, open_db
+from mediamind.store.db import open_library_db
 from mediamind.store.duplicate_flags import dismiss_flag, list_flags
 
 router = APIRouter(tags=["duplicate-flags"])
@@ -36,7 +35,7 @@ def _get_library_root(request: Request, library_id: str) -> Path:
 
 
 def _open_library_db(library_root: Path):
-    return open_db(library_db_path(library_data_dir(library_root)))
+    return open_library_db(library_root)
 
 
 @router.get("/libraries/{library_id}/duplicate-flags", response_model=list[DuplicateFlagOut])

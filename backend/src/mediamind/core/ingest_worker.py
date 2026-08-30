@@ -21,11 +21,10 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Callable, Iterable
 
-from mediamind.config import library_data_dir
 from mediamind.core.jobs import EXCLUSIVE_JOB_TYPES, JobManager
 from mediamind.core.libraries import LibraryRegistry
 from mediamind.providers.base import FaceProvider
-from mediamind.store.db import library_db_path, open_db
+from mediamind.store.db import open_library_db
 
 logger = logging.getLogger("mediamind.ingest_worker")
 
@@ -157,7 +156,7 @@ class IngestWorker:
         provider = self._get_provider() if self._provider_factory else None
         ingest_fn = self._resolve_ingest_fn()
         with self._jm.mark_busy(library_id, "ingest"):
-            conn = open_db(library_db_path(library_data_dir(lib.root)))
+            conn = open_library_db(lib.root)
             try:
                 for path in paths:
                     try:

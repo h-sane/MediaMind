@@ -28,12 +28,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mediamind.api.app import create_app
-from mediamind.config import library_data_dir
 from mediamind.core.hashing import hash_file
 from mediamind.core.scanner import scan_folder
 from mediamind.providers.catalog import CATALOG
 from mediamind.providers.manager import ProviderManager
-from mediamind.store.db import library_db_path, open_db
+from mediamind.store.db import open_library_db
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REAL_MEDIA_DIR = REPO_ROOT / "test"
@@ -72,7 +71,7 @@ if not BUFFALO_L_DIR.is_dir():
 
 @contextlib.contextmanager
 def _conn(lib_dir: Path):
-    c = open_db(library_db_path(library_data_dir(lib_dir)))
+    c = open_library_db(lib_dir)
     try:
         yield c
     finally:

@@ -21,7 +21,7 @@ from mediamind.core.faces.folder_prep import (
 from mediamind.core.jobs import JobManager
 from mediamind.core.safety import FileOp, execute as safety_execute, new_manifest_path
 from mediamind.store.audit import record_action
-from mediamind.store.db import library_db_path, open_db
+from mediamind.store.db import open_library_db
 
 router = APIRouter(tags=["faces-prep"])
 
@@ -66,7 +66,7 @@ def create_unsorted(library_id: str, body: CreateUnsortedIn, request: Request):
     manifest_path = new_manifest_path(library_data_dir(library_root), "faces-prep-unsorted")
     report = safety_execute(ops, manifest_path=manifest_path, dry_run=body.dry_run)
 
-    conn = open_db(library_db_path(library_data_dir(library_root)))
+    conn = open_library_db(library_root)
     try:
         if not body.dry_run:
             record_action(

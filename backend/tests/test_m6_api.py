@@ -16,7 +16,7 @@ from PIL import Image
 from mediamind.api.app import create_app
 from mediamind.providers.catalog import CatalogEntry, LicenseInfo
 from mediamind.providers.manager import ProviderManager
-from mediamind.store.db import library_db_path, open_db
+from mediamind.store.db import open_library_db
 from mediamind.store.persons import (
     FileFaces,
     persist_face_scan,
@@ -73,7 +73,7 @@ def _make_library(root: Path) -> None:
 def _seed_persons_db(library_root: Path, name_alice: bool = False) -> None:
     """Insert a minimal face scan result directly into the DB (bypasses provider)."""
     data_dir = library_data_dir(library_root)
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
 
     red_emb = np.array([1.0, 0.0, 0.0], dtype=np.float32)
     blue_emb = np.array([0.0, 0.0, 1.0], dtype=np.float32)
@@ -287,7 +287,7 @@ def test_pending_decisions_confirm(client, tmp_path):
     lib_id = _add_library(client, lib_dir)
 
     data_dir = library_data_dir(lib_dir)
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
 
     # Create a pending match manually
     pid = conn.execute("SELECT id FROM persons WHERE provider_id = ? ORDER BY id LIMIT 1", (PROVIDER,)).fetchone()["id"]
@@ -318,7 +318,7 @@ def test_pending_decisions_confirm(client, tmp_path):
     assert res2.json()["updated"] == 1
 
     # Check face now assigned
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
     face = conn.execute("SELECT person_id FROM faces WHERE id = ?", (face_id,)).fetchone()
     assert face["person_id"] == pid
     pm_row = conn.execute("SELECT decision FROM pending_matches WHERE id = ?", (pending_id,)).fetchone()
@@ -334,7 +334,7 @@ def test_pending_decisions_reject(client, tmp_path):
     lib_id = _add_library(client, lib_dir)
 
     data_dir = library_data_dir(lib_dir)
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
 
     pid = conn.execute("SELECT id FROM persons WHERE provider_id = ? ORDER BY id LIMIT 1", (PROVIDER,)).fetchone()["id"]
     rename_person(conn, pid, "Frank")
@@ -354,7 +354,7 @@ def test_pending_decisions_reject(client, tmp_path):
     )
     assert res.status_code == 200
 
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
     face = conn.execute("SELECT person_id FROM faces WHERE id = ?", (face_id,)).fetchone()
     assert face["person_id"] is None  # still unassigned
     pm_row = conn.execute("SELECT decision FROM pending_matches WHERE id = ?", (pending_id,)).fetchone()
@@ -388,7 +388,7 @@ def test_persons_endpoint_includes_pending_count(client, tmp_path):
     lib_id = _add_library(client, lib_dir)
 
     data_dir = library_data_dir(lib_dir)
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
     pid = conn.execute("SELECT id FROM persons WHERE provider_id = ? ORDER BY id LIMIT 1", (PROVIDER,)).fetchone()["id"]
     face_id = conn.execute("SELECT id FROM faces WHERE person_id = ? LIMIT 1", (pid,)).fetchone()["id"]
     conn.execute("INSERT INTO pending_matches (face_id, person_id, confidence) VALUES (?, ?, ?)", (face_id, pid, 0.9))
@@ -412,7 +412,7 @@ def test_set_primary_folder_roundtrip(client, tmp_path):
     lib_id = _add_library(client, lib_dir)
 
     data_dir = library_data_dir(lib_dir)
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
     pid = conn.execute(
         "SELECT id FROM persons WHERE provider_id = ? AND name = 'Alice'", (PROVIDER,)
     ).fetchone()["id"]
@@ -452,7 +452,7 @@ def test_set_primary_folder_rejects_unsafe_paths(client, tmp_path, bad_path):
     lib_id = _add_library(client, lib_dir)
 
     data_dir = library_data_dir(lib_dir)
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
     pid = conn.execute(
         "SELECT id FROM persons WHERE provider_id = ? AND name = 'Alice'", (PROVIDER,)
     ).fetchone()["id"]
@@ -474,7 +474,7 @@ def test_organize_preview_person_scoped_without_primary_folder_422(client, tmp_p
     lib_id = _add_library(client, lib_dir)
 
     data_dir = library_data_dir(lib_dir)
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
     pid = conn.execute(
         "SELECT id FROM persons WHERE provider_id = ? AND name = 'Alice'", (PROVIDER,)
     ).fetchone()["id"]
@@ -492,7 +492,7 @@ def test_organize_execute_person_scoped_without_primary_folder_422(client, tmp_p
     lib_id = _add_library(client, lib_dir)
 
     data_dir = library_data_dir(lib_dir)
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
     pid = conn.execute(
         "SELECT id FROM persons WHERE provider_id = ? AND name = 'Alice'", (PROVIDER,)
     ).fetchone()["id"]
@@ -516,7 +516,7 @@ def test_organize_execute_person_scoped_routes_to_server_resolved_folder(client,
     lib_id = _add_library(client, lib_dir)
 
     data_dir = library_data_dir(lib_dir)
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
     pid = conn.execute(
         "SELECT id FROM persons WHERE provider_id = ? AND name = 'Alice'", (PROVIDER,)
     ).fetchone()["id"]
@@ -568,7 +568,7 @@ def test_organize_execute_person_scoped_plan_hash_drift_still_guarded(client, tm
     lib_id = _add_library(client, lib_dir)
 
     data_dir = library_data_dir(lib_dir)
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
     pid = conn.execute(
         "SELECT id FROM persons WHERE provider_id = ? AND name = 'Alice'", (PROVIDER,)
     ).fetchone()["id"]

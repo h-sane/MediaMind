@@ -1,16 +1,23 @@
 """Per-library SQLite index.
 
-Lives in `<library>/.mediamind/index.db` so it travels with the folder.
-It is a rebuildable cache — the filesystem stays the source of truth, and
-deleting the index only means the next scan starts cold.
+Lives OFF the library drive, in app-data (`config.library_index_db_path`), so
+the People view / catalog survive the library's drive (Cryptomator, cloud,
+removable) unmounting — ADR-0004. It is mostly a rebuildable cache (the
+filesystem stays the source of truth), but it also holds curated data — person
+names, rejections, folder bindings — that a rescan cannot reconstruct, which is
+why `open_library_db` migrates the pre-ADR-0004 on-drive index instead of
+letting it be silently recreated empty.
 """
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
 import threading
 from pathlib import Path
 from typing import Callable
+
+from mediamind.config import LIBRARY_DATA_DIRNAME, library_index_db_path
 
 SCHEMA_VERSION = 11
 
@@ -417,4 +424,61 @@ def open_db(db_path: Path) -> sqlite3.Connection:
 
 
 def library_db_path(library_data_dir: Path) -> Path:
+    """Index path *inside a given dir*. Retained as a plain path helper (used by
+    tests and the legacy-migration lookup); production opens the index through
+    `open_library_db`, which relocates it off-drive."""
     return library_data_dir / "index.db"
+
+
+class LibraryOffline(RuntimeError):
+    """The library's drive is unmounted and it has no off-drive index yet (never
+    opened while mounted since ADR-0004). Raised instead of fabricating an empty
+    index, which on remount would strand the real on-drive one (and its curated
+    person data). The API maps this to HTTP 409 so the UI can badge "offline".
+    """
+
+
+def _migrate_legacy_index(legacy: Path, dest: Path) -> None:
+    """One-time move of a pre-ADR-0004 on-drive index into app-data. Checkpoints
+    the WAL first so no committed writes are left in a sidecar, copies to the
+    destination, verifies the byte count, then deletes the legacy files. Copy
+    (not rename) because source and dest are on different volumes; delete only
+    after a verified copy so an interrupted migration retries cleanly."""
+    conn = sqlite3.connect(legacy)
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        conn.close()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".migrating")
+    shutil.copy2(legacy, tmp)
+    if tmp.stat().st_size != legacy.stat().st_size:
+        tmp.unlink(missing_ok=True)
+        raise OSError(f"index migration size mismatch for {legacy}")
+    tmp.replace(dest)
+    for p in (legacy, legacy.with_name(legacy.name + "-wal"), legacy.with_name(legacy.name + "-shm")):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+
+def open_library_db(library_root: Path) -> sqlite3.Connection:
+    """Open a library's index off-drive (ADR-0004). On first access, migrates a
+    pre-ADR-0004 on-drive `<root>/.mediamind/index.db` into app-data. If the
+    index has never been migrated and the drive is currently offline, raises
+    `LibraryOffline` rather than creating an empty index that could strand the
+    real one on remount. Does not touch `<root>/.mediamind`, so a mounted-drive
+    read no longer depends on the drive being writable."""
+    dest = library_index_db_path(library_root)
+    if not dest.exists():
+        legacy = library_root / LIBRARY_DATA_DIRNAME / "index.db"
+        try:
+            legacy_exists = legacy.exists()
+        except OSError:
+            legacy_exists = False
+        if legacy_exists:
+            _migrate_legacy_index(legacy, dest)
+        elif not library_root.is_dir():
+            raise LibraryOffline(str(library_root))
+    return open_db(dest)

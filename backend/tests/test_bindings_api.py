@@ -16,7 +16,7 @@ from mediamind.api.app import create_app
 from mediamind.config import library_data_dir
 from mediamind.providers.catalog import CatalogEntry, LicenseInfo
 from mediamind.providers.manager import ProviderManager
-from mediamind.store.db import library_db_path, open_db
+from mediamind.store.db import open_library_db
 from mediamind.store.embeddings import CachedFace
 from mediamind.store.persons import FileFaces, persist_face_scan, rename_person, upsert_file
 
@@ -57,7 +57,7 @@ def _seed_person_folder(library_root: Path, folder: str, n_files: int = 6) -> No
     """Create n_files real jpgs under `folder`, all one person's face."""
     (library_root / folder).mkdir(parents=True, exist_ok=True)
     data_dir = library_data_dir(library_root)
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
 
     file_faces = []
     for i in range(n_files):
@@ -91,7 +91,7 @@ def _seed_person_folder_with_outlier(library_root: Path, folder: str, n_files: i
     person, all under `folder`. Returns the outlier file's db id."""
     (library_root / folder).mkdir(parents=True, exist_ok=True)
     data_dir = library_data_dir(library_root)
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
 
     file_faces = []
     for i in range(n_files):
@@ -131,7 +131,7 @@ def _seed_person_folder_with_stray(library_root: Path, folder: str, n_files: int
     (library_root / folder).mkdir(parents=True, exist_ok=True)
     (library_root / "Random").mkdir(parents=True, exist_ok=True)
     data_dir = library_data_dir(library_root)
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
 
     file_faces = []
     for i in range(n_files):
@@ -177,7 +177,7 @@ def _seed_person_folder_with_outlier_and_stray(library_root: Path, folder: str, 
     (library_root / folder).mkdir(parents=True, exist_ok=True)
     (library_root / "Random").mkdir(parents=True, exist_ok=True)
     data_dir = library_data_dir(library_root)
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
 
     file_faces = []
     for i in range(n_files - 1):
@@ -329,7 +329,7 @@ def test_bindings_outlier_review_and_approval(client, tmp_path):
     # Organize only ever routes named people (F10) — the outlier's person
     # was never matched to the folder, so name them directly.
     data_dir = library_data_dir(lib_dir)
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
     outlier_pid = conn.execute(
         "SELECT person_id FROM faces WHERE file_id = ?", (outlier_fid,)
     ).fetchone()["person_id"]
@@ -476,7 +476,7 @@ def test_suggestion_merge_excludes_and_reassigns(client, tmp_path):
     # "Not this person" was recorded durably (not just skipped for this one
     # merge) for both the excluded stray and the redirected outlier.
     data_dir = library_data_dir(lib_dir)
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
     rejected_pids = {
         r["person_id"]
         for r in conn.execute(

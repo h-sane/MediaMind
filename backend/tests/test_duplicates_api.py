@@ -22,7 +22,7 @@ from PIL import Image
 from mediamind.api.app import create_app
 from mediamind.config import library_data_dir
 from mediamind.core.dedupe import DuplicateFile, DuplicateGroup
-from mediamind.store.db import library_db_path, open_db
+from mediamind.store.db import open_library_db
 from mediamind.store.duplicates import persist_scan
 
 
@@ -54,7 +54,7 @@ def lib_with_dups(client, tmp_path):
 
     # Persist a fake scan directly (avoids real scan latency in unit tests).
     data_dir = library_data_dir(lib_dir)
-    conn = open_db(library_db_path(data_dir))
+    conn = open_library_db(data_dir.parent)
     now = time.time()
     group = DuplicateGroup(
         files=[

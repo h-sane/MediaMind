@@ -9,12 +9,11 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 
 from mediamind.api.models import JobSnapshot, ScanIn
-from mediamind.config import library_data_dir
 from mediamind.core.dedupe import DEFAULT_NEAR_THRESHOLD, find_duplicates, group_signature
 from mediamind.core.jobs import EXCLUSIVE_JOB_TYPES, JobContext, JobManager
 from mediamind.core.libraries import LibraryRegistry
 from mediamind.core.scanner import scan_folder
-from mediamind.store.db import library_db_path, open_db
+from mediamind.store.db import open_library_db
 from mediamind.store.duplicates import get_dismissed_signatures, persist_scan
 
 router = APIRouter(tags=["scans"])
@@ -105,8 +104,7 @@ def _make_dedupe_runner(library_root: Path, threshold: int):
         # (core.ingest.lookup_file_cache/store_file_cache) instead of
         # unconditionally rehashing — the same connection is then reused
         # below for persist_scan.
-        data_dir = library_data_dir(library_root)
-        conn = open_db(library_db_path(data_dir))
+        conn = open_library_db(library_root)
         try:
             groups = find_duplicates(
                 files,

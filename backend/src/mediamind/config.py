@@ -8,6 +8,7 @@ the registry of known libraries and downloaded model files.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -71,10 +72,30 @@ def face_thumb_cache_dir() -> Path:
 
 
 def library_data_dir(library_root: Path) -> Path:
-    """`.mediamind/` inside a library (created on demand)."""
+    """`.mediamind/` inside a library — manifests, audit trail, folder-face
+    thumbs. Created on demand, so calling it requires the drive to be mounted.
+    The index DB used to live here too; it now lives off-drive, see
+    `library_index_db_path`."""
     d = library_root / LIBRARY_DATA_DIRNAME
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def library_index_db_path(library_root: Path) -> Path:
+    """Per-library index DB, relocated OFF the library drive into app-data so
+    the People view / catalog survive the drive (Cryptomator, cloud-backed,
+    removable) unmounting — ADR-0004.
+
+    Keyed by a stable hash of the library's resolved root path, not the registry
+    id: the resolved path is what every caller already holds, needs no registry
+    lookup, and survives a registry rebuild. `normcase` folds Windows path
+    casing/separators so the key is mount-state-independent. Most of the index
+    is rebuildable by rescan, but curated data (person names, rejections,
+    bindings) is NOT — so migration into this location is copy-then-delete and
+    never fabricates an empty index while the drive is offline (see
+    `store.db.open_library_db`)."""
+    key = hashlib.sha1(os.path.normcase(str(library_root)).encode("utf-8")).hexdigest()[:16]
+    return app_data_dir() / "library_index" / key / "index.db"
 
 
 def browse_index_db_path() -> Path:

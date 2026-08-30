@@ -29,9 +29,8 @@ from mediamind.core.hashing import hash_file
 from mediamind.core.ingest import lookup_file_cache, store_file_cache
 from mediamind.core.jobs import JobContext
 from mediamind.core.scanner import KIND_VIDEO, ScannedFile, scan_folder
-from mediamind.config import library_data_dir
 from mediamind.providers.base import FaceProvider
-from mediamind.store.db import library_db_path, open_db
+from mediamind.store.db import open_library_db
 from mediamind.store.embeddings import CachedFace, get_cached_faces, put_cached_faces
 from mediamind.store.persons import FileFaces, file_ids_with_faces, persist_face_scan, upsert_file
 from mediamind.store.rejected_faces import is_rejected, regions_for
@@ -131,8 +130,7 @@ def make_face_scan_runner(
         for f in scanned_files:
             (slow_files if f.kind == KIND_VIDEO and f.size >= SLOW_VIDEO_BYTES else fast_files).append(f)
 
-        data_dir = library_data_dir(library_root)
-        conn = open_db(library_db_path(data_dir))
+        conn = open_library_db(library_root)
         provider: FaceProvider | None = None
         hash_limiter = threading.Semaphore(MAX_LEAKED_STALL_THREADS)
 

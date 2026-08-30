@@ -28,7 +28,7 @@ from mediamind.core.safety import FileOp, execute as safety_execute, new_manifes
 from mediamind.store import materialize as materialize_store
 from mediamind.store import rejected_persons
 from mediamind.store.audit import record_action
-from mediamind.store.db import library_db_path, open_db
+from mediamind.store.db import open_library_db
 from mediamind.store.materialize import AlreadyBoundError
 from mediamind.store.persons import latest_faces_scan
 
@@ -63,7 +63,7 @@ def _provider_id(conn) -> str:
 )
 def preview_materialize(library_id: str, person_id: int, request: Request):
     library_root = _get_library_root(request, library_id)
-    conn = open_db(library_db_path(library_data_dir(library_root)))
+    conn = open_library_db(library_root)
     try:
         provider_id = _provider_id(conn)
         if materialize_store.is_bound(conn, person_id):
@@ -101,7 +101,7 @@ def materialize(library_id: str, person_id: int, body: MaterializeIn, request: R
     # See bindings.py::merge_suggestion's identical use of mark_busy — closes
     # the same F8/F21 concurrency gap for this execute path too.
     with jm.mark_busy(library_id, "faces-materialize-execute"):
-        conn = open_db(library_db_path(library_data_dir(library_root)))
+        conn = open_library_db(library_root)
         try:
             provider_id = _provider_id(conn)
             if materialize_store.is_bound(conn, person_id):

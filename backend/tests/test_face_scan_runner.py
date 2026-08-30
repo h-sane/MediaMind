@@ -14,11 +14,9 @@ from pathlib import Path
 
 import pytest
 from PIL import Image
-
-from mediamind.config import library_data_dir
 from mediamind.core.faces.scan import make_face_scan_runner
 from mediamind.providers.fake import FakeColorProvider
-from mediamind.store.db import library_db_path, open_db
+from mediamind.store.db import open_library_db
 
 PROVIDER = "fake-color"
 
@@ -37,7 +35,7 @@ class _StubCtx:
 
 @pytest.fixture
 def conn(tmp_path: Path):
-    c = open_db(library_db_path(library_data_dir(tmp_path)))
+    c = open_library_db(tmp_path)
     yield c
     c.close()
 

@@ -21,11 +21,11 @@ from mediamind.api.models import (
     PersonRenameIn,
     PersonsOut,
 )
-from mediamind.config import face_thumb_cache_dir, library_data_dir
+from mediamind.config import face_thumb_cache_dir
 from mediamind.core.faces.engine import load_frame
 from mediamind.core.libraries import LibraryRegistry
 from mediamind.core.organize_plan import safe_dest_folder_rel
-from mediamind.store.db import library_db_path, open_db
+from mediamind.store.db import open_library_db
 from mediamind.store.persons import (
     dismiss_merge_suggestion,
     get_face,
@@ -55,8 +55,7 @@ def _get_library_and_root(request: Request, library_id: str) -> tuple:
 
 
 def _open_library_db(library_root: Path):
-    data_dir = library_data_dir(library_root)
-    return open_db(library_db_path(data_dir))
+    return open_library_db(library_root)
 
 
 @router.get("/libraries/{library_id}/persons", response_model=PersonsOut)

@@ -26,6 +26,8 @@ export const CENTRAL_DATA_ENTRIES = [
   'discovery.sqlite3',
   'global_people.sqlite3',
   'thumb_cache',
+  'face_thumb_cache',
+  'library_index',
   'models',
   'fs_ops',
   'global_moves'
