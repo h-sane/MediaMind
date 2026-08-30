@@ -146,7 +146,9 @@ def _first_frame(path: Path, kind: str):
     return None
 
 
-def media_thumbnail_jpeg(path: Path, kind: str, size: int) -> bytes | None:
+def media_thumbnail_jpeg(
+    path: Path, kind: str, size: int, content_hash: str | None = None
+) -> bytes | None:
     """Encode a thumbnail of `path` as JPEG bytes (longest edge <= `size`).
 
     Works for images, GIFs (first frame), and videos (first sampled frame).
@@ -154,8 +156,17 @@ def media_thumbnail_jpeg(path: Path, kind: str, size: int) -> bytes | None:
     that into a placeholder or 4xx, never a 500. Cached by path+size+mtime so
     re-opening a review screen or re-scrolling a grid never re-decodes a file
     it has already thumbnailed.
+
+    When `content_hash` is given, the cache is keyed by it instead of a live
+    `stat()` (ADR-0004): the key is computable even when the original is
+    offline, so a cached preview keeps rendering after the drive unmounts, and
+    duplicate files share one cached thumbnail. Without it, the stat-based key
+    is used (unchanged behaviour for path-only Explorer browsing).
     """
-    key = _cache_key(path, kind, size)
+    if content_hash is not None:
+        key: tuple | None = ("h", content_hash, kind, size)
+    else:
+        key = _cache_key(path, kind, size)
     if key is not None:
         with _cache_lock:
             cached = _cache.get(key)

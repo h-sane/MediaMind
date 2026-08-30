@@ -494,7 +494,7 @@ def get_thumbnail(
     conn = _open_library_db(library_root)
     try:
         row = conn.execute(
-            "SELECT path, kind FROM duplicate_members WHERE id = ?", (member_id,)
+            "SELECT path, kind, content_hash FROM duplicate_members WHERE id = ?", (member_id,)
         ).fetchone()
     finally:
         conn.close()
@@ -506,7 +506,7 @@ def get_thumbnail(
 
     from mediamind.core.thumbnails import media_thumbnail_jpeg
 
-    jpeg_bytes = media_thumbnail_jpeg(abs_path, row["kind"] or "image", size)
+    jpeg_bytes = media_thumbnail_jpeg(abs_path, row["kind"] or "image", size, content_hash=row["content_hash"])
     if jpeg_bytes is None:
         raise HTTPException(status_code=422, detail="Cannot decode file")
 

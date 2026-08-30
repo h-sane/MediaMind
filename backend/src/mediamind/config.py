@@ -56,6 +56,20 @@ def thumbnail_cache_dir() -> Path:
     return d
 
 
+def face_thumb_cache_dir() -> Path:
+    """Persistent on-disk cache of cropped face thumbnails for the People view.
+
+    Lives in the app data dir, NOT inside `<library>/.mediamind/` — the whole
+    point (ADR-0004) is that a Person's face crops keep rendering when the
+    library's drive (Cryptomator, cloud-backed, removable) is unmounted. An
+    on-drive cache vanishes with the drive; this one survives. Namespaced per
+    library by the caller so relative-path keys can't collide across libraries.
+    Rebuildable at any time (safe to delete)."""
+    d = app_data_dir() / "face_thumb_cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def library_data_dir(library_root: Path) -> Path:
     """`.mediamind/` inside a library (created on demand)."""
     d = library_root / LIBRARY_DATA_DIRNAME

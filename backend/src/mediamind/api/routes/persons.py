@@ -21,7 +21,7 @@ from mediamind.api.models import (
     PersonRenameIn,
     PersonsOut,
 )
-from mediamind.config import library_data_dir
+from mediamind.config import face_thumb_cache_dir, library_data_dir
 from mediamind.core.faces.engine import load_frame
 from mediamind.core.libraries import LibraryRegistry
 from mediamind.core.organize_plan import safe_dest_folder_rel
@@ -300,9 +300,12 @@ def face_thumbnail(
     request: Request,
     size: int = Query(default=192, ge=48, le=512),
 ):
-    """Return a cropped JPEG thumbnail of a face, disk-cached under
-    `.mediamind/thumbs/faces/` so repeat requests (a People grid re-mounting,
-    scrolling back up) skip the full frame decode (F14).
+    """Return a cropped JPEG thumbnail of a face, disk-cached in the app data
+    dir (off-drive, per ADR-0004) so repeat requests (a People grid re-mounting,
+    scrolling back up) skip the full frame decode (F14) AND keep rendering when
+    the library's drive is unmounted — an on-drive cache used to vanish with the
+    drive. The cache key is the library-relative path + frame + bbox + size, so
+    it is computable and hits even while the original is offline.
 
     Keyed by faces.id for lookup — the endpoint cannot read arbitrary files;
     only faces from a scan are accessible (same rationale as duplicates
@@ -319,7 +322,7 @@ def face_thumbnail(
     if info is None:
         raise HTTPException(status_code=404, detail="Unknown face id")
 
-    cache_dir = library_data_dir(library_root) / "thumbs" / "faces"
+    cache_dir = face_thumb_cache_dir() / library_id
     cache_key = _face_thumb_cache_key(info.path, info.frame_no, info.bbox, size)
     cache_path = cache_dir / f"{cache_key}.jpg"
     if cache_path.exists():
