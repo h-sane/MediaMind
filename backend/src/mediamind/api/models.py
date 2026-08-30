@@ -537,6 +537,7 @@ class SuggestionMergePreviewOut(BaseModel):
     move_count: int
     moves: list[MovePreviewItemOut]
     folder_outliers: list[OutlierFileOut]
+    duplicate_file_ids: list[int] = []
 
 
 class ReassignItemIn(BaseModel):

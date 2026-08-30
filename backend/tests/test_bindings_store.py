@@ -92,6 +92,36 @@ def _seed_person_folder_with_outlier(conn, folder: str, n_files: int = 6) -> tup
 
 
 # ---------------------------------------------------------------------------
+# duplicate_move_file_ids (ADR-0003 consolidation soft-gate)
+# ---------------------------------------------------------------------------
+
+def test_duplicate_move_file_ids_flags_redundant_copies(conn):
+    # Destination folder already holds a copy of hash "dup".
+    upsert_file(conn, "Family/Alice/existing.jpg", "photo", 100, 0.0, "dup", True)
+    # Move-set: two copies of "dup" (one redundant vs dest, the other vs the first
+    # move), two copies of "twin" (keep one, flag one), one unique "solo".
+    a = upsert_file(conn, "Downloads/a.jpg", "photo", 100, 0.0, "dup", True)
+    b = upsert_file(conn, "Downloads/b.jpg", "photo", 100, 0.0, "dup", True)
+    c = upsert_file(conn, "Downloads/c.jpg", "photo", 100, 0.0, "twin", True)
+    d = upsert_file(conn, "Downloads/d.jpg", "photo", 100, 0.0, "twin", True)
+    solo = upsert_file(conn, "Downloads/solo.jpg", "photo", 100, 0.0, "solo", True)
+    conn.commit()
+
+    redundant = bindings_store.duplicate_move_file_ids(conn, [a, b, c, d, solo], "Family/Alice")
+    # a,b both duplicate the existing dest copy; d duplicates the kept c; solo stands alone.
+    assert set(redundant) == {a, b, d}
+    assert c not in redundant and solo not in redundant
+
+
+def test_duplicate_move_file_ids_ignores_deeper_subfolders(conn):
+    # A copy in a *subfolder* of the destination is not a direct-child match.
+    upsert_file(conn, "Family/Alice/nested/existing.jpg", "photo", 100, 0.0, "dup", True)
+    a = upsert_file(conn, "Downloads/a.jpg", "photo", 100, 0.0, "dup", True)
+    conn.commit()
+    assert bindings_store.duplicate_move_file_ids(conn, [a], "Family/Alice") == []
+
+
+# ---------------------------------------------------------------------------
 # refresh_suggestions
 # ---------------------------------------------------------------------------
 

@@ -611,6 +611,7 @@ export interface SuggestionMergePreview {
   move_count: number
   moves: MovePreviewItem[]
   folder_outliers: OutlierFile[]
+  duplicate_file_ids: number[]
 }
 
 export interface ReassignItem {

@@ -220,6 +220,9 @@ def preview_suggestion_merge(library_id: str, suggestion_id: int, request: Reque
                 for fid, src, dest, kind in plan.moves
             ],
             folder_outliers=_resolve_outliers(conn, outlier_ids),
+            duplicate_file_ids=bindings_store.duplicate_move_file_ids(
+                conn, [m[0] for m in plan.moves], plan.folder_rel
+            ),
         )
     finally:
         conn.close()

@@ -303,6 +303,54 @@ def build_suggestion_merge_moves(
     )
 
 
+def duplicate_move_file_ids(
+    conn: sqlite3.Connection,
+    move_file_ids: list[int],
+    folder_rel: str,
+) -> list[int]:
+    """Redundant copies inside a consolidation move-set (ADR-0003 soft-gate).
+
+    A move file is flagged redundant if a byte-identical copy already sits
+    directly in the destination folder, or if an earlier file in the same
+    move-set already carries that content hash (keep one, flag the rest).
+    Returned for the merge *preview* only — advisory, preselected to skip in
+    the review modal, never a hard block; execute still moves whatever the
+    user leaves un-excluded.
+
+    ponytail: exact content-hash only; add phash near-dupe grouping here if
+    resolution-variant copies slip past the upstream Dedupe tool.
+    """
+    if not move_file_ids:
+        return []
+
+    placeholders = ",".join("?" * len(move_file_ids))
+    move_rows = conn.execute(
+        f"SELECT id, content_hash FROM files WHERE id IN ({placeholders}) ORDER BY id",
+        move_file_ids,
+    ).fetchall()
+
+    dest_hashes = {
+        r["content_hash"]
+        for r in conn.execute(
+            "SELECT content_hash, path FROM files WHERE content_hash IS NOT NULL AND path LIKE ?",
+            (folder_rel + "/%",),
+        )
+        if PurePosixPath(r["path"]).parent.as_posix() == folder_rel
+    }
+
+    redundant: list[int] = []
+    kept_hashes: set[str] = set()
+    for r in move_rows:
+        h = r["content_hash"]
+        if not h:
+            continue
+        if h in dest_hashes or h in kept_hashes:
+            redundant.append(r["id"])
+        else:
+            kept_hashes.add(h)
+    return redundant
+
+
 def accept_suggestion(conn: sqlite3.Connection, suggestion_id: int) -> BindingRecord:
     """Accept a pending suggestion: create the binding, bind its members,
     auto-name a lone person from the folder's leaf name.

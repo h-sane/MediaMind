@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMergeSuggestion, useSuggestionMergePreview } from '../../../api/hooks'
 import { MediaViewer } from '../../../components/MediaViewer'
 import { FolderPickerDialog } from '../shared/FolderPickerDialog'
@@ -38,6 +38,20 @@ export function MatchReviewModal({ libraryId, suggestion, onClose, onCommitted }
 
   const outliers = preview?.folder_outliers ?? []
   const moves = preview?.moves ?? []
+  const dupSet = new Set(preview?.duplicate_file_ids ?? [])
+
+  // ADR-0003 soft-gate: redundant copies are preselected to skip so they can't
+  // be filed into the Primary Location unseen. The user can still un-exclude
+  // any of them — it's a backstop, never a hard block. Seeded once per preview.
+  const seededDupes = useRef(false)
+  useEffect(() => {
+    if (preview && !seededDupes.current) {
+      seededDupes.current = true
+      if (preview.duplicate_file_ids.length > 0) {
+        setMoveExcluded(new Set(preview.duplicate_file_ids))
+      }
+    }
+  }, [preview])
   const viewerFiles = [
     ...outliers.map((o) => ({ path: o.path, kind: o.kind })),
     ...moves.map((m) => ({ path: m.source_rel, kind: m.kind }))
@@ -213,6 +227,12 @@ export function MatchReviewModal({ libraryId, suggestion, onClose, onCommitted }
               <h3 className="mb-3 text-sm font-medium text-white">
                 {suggestion.person_names.join(', ')}&apos;s other photos, not yet in this folder
               </h3>
+              {dupSet.size > 0 && (
+                <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-200">
+                  {dupSet.size} duplicate{dupSet.size === 1 ? '' : 's'} of a photo already here (or of
+                  each other) — preselected to skip. Include one again to move it anyway.
+                </div>
+              )}
               <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))' }}>
                 {moves.map((m, i) => {
                   const excluded = moveExcluded.has(m.file_id)
@@ -221,7 +241,9 @@ export function MatchReviewModal({ libraryId, suggestion, onClose, onCommitted }
                   const statusLabel = reassignTo
                     ? 'Redirected elsewhere'
                     : excluded
-                      ? 'Will stay where it is'
+                      ? dupSet.has(m.file_id)
+                        ? 'Duplicate — will stay where it is'
+                        : 'Will stay where it is'
                       : `Will move into ${suggestion.folder_rel}`
                   return (
                     <MatchReviewCard
