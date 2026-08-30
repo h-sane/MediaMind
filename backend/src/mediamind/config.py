@@ -149,6 +149,17 @@ def fs_ops_dir() -> Path:
     return d
 
 
+def journals_dir() -> Path:
+    """Write-ahead journals for in-flight file-move batches (ADR-0005). Lives
+    off-drive in app-data so a journal survives the very unmount/crash it
+    guards against and is found on next launch for auto-resume. A journal file
+    exists only while a `safety.execute()` batch is mid-run; see
+    `core/journal.py`."""
+    d = app_data_dir() / "journals"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def global_moves_dir() -> Path:
     """Manifests for cross-library global-person physical moves
     (`core/global_people.py`'s `execute_move_plan`). A move spans two

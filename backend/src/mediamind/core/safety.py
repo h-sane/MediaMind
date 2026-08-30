@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from mediamind.core import journal
+
 
 @dataclass(frozen=True)
 class FileOp:
@@ -133,6 +135,26 @@ def execute(
     """
     report = ExecutionReport(planned=len(ops))
 
+    # Write-ahead journal (ADR-0005): records this batch off-drive so an
+    # interruption (unmount/crash/power-loss) mid-run is auto-resumed on next
+    # launch. No-op for dry runs and when journaling isn't configured (tests).
+    # The journal is deleted in the finally iff execute() returns normally — so
+    # it survives only a real interruption.
+    journal_path = None if dry_run else journal.begin(ops)
+    try:
+        return _execute_body(ops, report, dry_run, on_progress, should_cancel, manifest_path)
+    finally:
+        journal.finish(journal_path)
+
+
+def _execute_body(
+    ops: list[FileOp],
+    report: ExecutionReport,
+    dry_run: bool,
+    on_progress: Callable[[int, int], None] | None,
+    should_cancel: Callable[[], bool] | None,
+    manifest_path: Path | None,
+) -> ExecutionReport:
     # Group by source so move-deletion happens once, after all copies.
     by_source: dict[Path, list[FileOp]] = {}
     for op in ops:

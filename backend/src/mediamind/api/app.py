@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,7 +17,7 @@ from fastapi.responses import JSONResponse
 from mediamind import __version__
 from mediamind.api.security import TokenAuthMiddleware
 from mediamind.api.ws import ConnectionManager
-from mediamind.config import browse_index_db_path, discovery_db_path, folder_stats_db_path, models_dir
+from mediamind.config import browse_index_db_path, discovery_db_path, folder_stats_db_path, journals_dir, models_dir
 from mediamind.logging_setup import attach_websocket_handler, detach_websocket_handler
 from mediamind.core.folder_stats import FolderStatsIndex
 from mediamind.core.jobs import JobManager
@@ -50,6 +51,16 @@ async def _lifespan(app: FastAPI):
     # WS channel — a no-op in practice unless a client has it open (see
     # ConnectionManager.broadcast_log).
     log_handler = attach_websocket_handler(asyncio.get_event_loop(), app.state.connection_manager.broadcast_log)
+
+    # Write-ahead journal auto-resume (ADR-0005): finish any file-move batch
+    # that a previous run started but never completed (unmount/crash/power
+    # loss). Runs off the startup thread so a large leftover batch can't block
+    # the app coming up; missing source drives are simply skipped and picked up
+    # whenever the drive is back and the app relaunches.
+    from mediamind.core import journal as move_journal
+
+    move_journal.configure(journals_dir())
+    threading.Thread(target=move_journal.resume_pending, name="journal-resume", daemon=True).start()
 
     # Provider manager (injected in tests; created from config in production).
     if not hasattr(app.state, "providers") or app.state.providers is None:
