@@ -29,6 +29,9 @@ export interface DirEntry {
   /** Only set in the virtual person view — the detection this tile came from,
    * so a right-click can flag it "not a face" (rejects that detection). */
   faceId?: number
+  /** Person view only — this file is attributed to the person by folder
+   * placement (ADR-0010), not a face match, so it gets a subtle marker. */
+  viaPlacement?: boolean
 }
 
 function compareEntries(a: DirEntry, b: DirEntry, sortKey: SortKey, sortDir: SortDir): number {
@@ -153,7 +156,8 @@ function personMediaToEntries(items: PersonMediaItem[], sortKey: SortKey, sortDi
     // grid's, but older libraries stored 'photo' for stills — normalize so the
     // thumbnail component treats them as images rather than generic files.
     kind: (i.kind === 'photo' ? 'image' : i.kind) as DirEntry['kind'],
-    faceId: i.face_id
+    faceId: i.face_id ?? undefined,
+    viaPlacement: i.via_placement
   }))
   entries.sort((a, b) => compareEntries(a, b, sortKey, sortDir))
   return entries

@@ -377,8 +377,12 @@ class PersonMediaItemOut(BaseModel):
     path: str          # library-relative (posix)
     abs_path: str      # absolute on-disk path, so the Explorer content grid can browse it library-free
     kind: str
-    face_id: int
-    bbox: tuple[float, float, float, float]
+    # Placement-attributed files (ADR-0010) have no matching face for this
+    # person, so face_id/bbox are null; `via_placement` flags them so the view
+    # can mark that they're here because they sit in the person's folder.
+    face_id: int | None = None
+    bbox: tuple[float, float, float, float] | None = None
+    via_placement: bool = False
 
 
 # ---------------------------------------------------------------------------

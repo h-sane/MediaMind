@@ -382,6 +382,15 @@ export interface Person {
   primary_folder_path: string | null
 }
 
+/** ADR-0001 recurring-unnamed-faces browse surface. `total_unnamed` counts
+ * every unnamed cluster regardless of the floor, so the UI can offer a
+ * "show all" hatch below `min_appearances`. */
+export interface RecurringUnnamed {
+  persons: Person[]
+  min_appearances: number
+  total_unnamed: number
+}
+
 // ---------------------------------------------------------------------------
 // Global (cross-library) people
 // ---------------------------------------------------------------------------
@@ -493,8 +502,11 @@ export interface PersonMediaItem {
   path: string
   abs_path: string
   kind: string
-  face_id: number
-  bbox: [number, number, number, number]
+  // Placement-attributed files (ADR-0010) carry no matching face for this
+  // person — face_id/bbox are null and via_placement is true.
+  face_id: number | null
+  bbox: [number, number, number, number] | null
+  via_placement?: boolean
 }
 
 export interface MergeSuggestion {
@@ -985,6 +997,14 @@ export const api = {
 
     tree: (libraryId: string) =>
       request<PeopleTreeOut>('GET', `/v1/libraries/${libraryId}/people-tree`),
+
+    recurringUnnamed: (libraryId: string, minAppearances?: number) =>
+      request<RecurringUnnamed>(
+        'GET',
+        `/v1/libraries/${libraryId}/recurring-unnamed${
+          minAppearances != null ? `?min_appearances=${minAppearances}` : ''
+        }`
+      ),
 
     rename: (libraryId: string, personId: number, name: string | null) =>
       request<{ ok: boolean }>('PATCH', `/v1/libraries/${libraryId}/persons/${personId}`, { name }),

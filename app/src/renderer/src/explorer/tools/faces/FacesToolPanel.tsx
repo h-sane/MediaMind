@@ -11,6 +11,7 @@ import { OrganizePanel } from './OrganizePanel'
 import { PendingReviewPanel } from './PendingReviewPanel'
 import { PeoplePanel } from './PeoplePanel'
 import { PrepPanel } from './PrepPanel'
+import { RecurringUnnamedPanel } from './RecurringUnnamedPanel'
 
 interface Props {
   libraryId: string
@@ -21,6 +22,7 @@ type FacesSub =
   | { name: 'prep' }
   | { name: 'setup' }
   | { name: 'people' }
+  | { name: 'recurring-unnamed' }
   | { name: 'organize' }
   | { name: 'pending' }
   | { name: 'multi-person' }
@@ -113,7 +115,11 @@ export function FacesToolPanel({ libraryId, folderPath }: Props): React.JSX.Elem
             onOrganize={() => setSub({ name: 'organize' })}
             onReviewPending={() => setSub({ name: 'pending' })}
             onReviewMultiPerson={() => setSub({ name: 'multi-person' })}
+            onBrowseRecurring={() => setSub({ name: 'recurring-unnamed' })}
           />
+        )}
+        {sub.name === 'recurring-unnamed' && (
+          <RecurringUnnamedPanel libraryId={libraryId} onBack={goToPeople} onOpenPerson={openPerson} />
         )}
         {sub.name === 'organize' && (
           <OrganizePanel

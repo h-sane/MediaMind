@@ -79,7 +79,17 @@ const Tile = memo(function Tile({
       title={entry.name}
     >
       {entry.type === 'file' ? (
-        <FileThumbnail path={entry.path} kind={entry.kind ?? 'other'} className={thumbClass} size={thumbPx} />
+        <div className="relative">
+          <FileThumbnail path={entry.path} kind={entry.kind ?? 'other'} className={thumbClass} size={thumbPx} />
+          {entry.viaPlacement && (
+            <span
+              title="In this person's folder (no face match — kept by placement)"
+              className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-zinc-900/70 text-white"
+            >
+              <Folder className="h-2.5 w-2.5" />
+            </span>
+          )}
+        </div>
       ) : entry.type === 'drive' ? (
         <div className={`flex items-center justify-center rounded-lg bg-zinc-50 ${thumbClass}`}>
           <HardDrive className={`${iconClass} text-zinc-300`} />

@@ -40,6 +40,7 @@ from mediamind.store.persons import (
     merge_persons,
     merge_suggestions,
     person_media,
+    person_placement_media,
     reassign_face,
     rename_person,
     set_primary_folder,
@@ -331,6 +332,7 @@ def list_person_media(library_id: str, person_id: int, request: Request):
     conn = _open_library_db(library_root)
     try:
         items = person_media(conn, person_id)
+        placement = person_placement_media(conn, person_id)
     finally:
         conn.close()
     return [
@@ -343,6 +345,15 @@ def list_person_media(library_id: str, person_id: int, request: Request):
             bbox=fi.bbox,
         )
         for fi in items
+    ] + [
+        PersonMediaItemOut(
+            file_id=pf.file_id,
+            path=pf.path,
+            abs_path=str(library_root / pf.path),
+            kind=pf.kind,
+            via_placement=True,
+        )
+        for pf in placement
     ]
 
 

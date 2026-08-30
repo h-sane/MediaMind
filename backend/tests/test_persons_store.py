@@ -19,6 +19,7 @@ from mediamind.store.persons import (
     merge_suggestions,
     next_auto_label,
     person_media,
+    person_placement_media,
     persist_face_scan,
     rename_person,
     set_primary_folder,
@@ -571,3 +572,50 @@ def test_set_primary_folder_clear_to_none(conn):
 
 def test_set_primary_folder_unknown_person_returns_false(conn):
     assert set_primary_folder(conn, 999, "Family/Nobody") is False
+
+
+# ---------------------------------------------------------------------------
+# person_placement_media (ADR-0010: placement-attributed, face-unmatched files)
+# ---------------------------------------------------------------------------
+
+
+def test_person_placement_media_returns_placed_but_unmatched(conn):
+    # Dad/pic1 carries a real face -> becomes person A after the scan.
+    fid1 = upsert_file(conn, "Dad/pic1.jpg", "photo", 100, 0.0, "h1", True)
+    conn.commit()
+    _do_scan(conn, [FileFaces(fid1, "h1", True, [_fake_face(1, 0, 0)])], labels=[0])
+    # No-face files: one directly in Dad (placement), one nested (excluded),
+    # one outside the bound folder (excluded).
+    upsert_file(conn, "Dad/pic2.jpg", "photo", 100, 0.0, "h2", True)
+    upsert_file(conn, "Dad/sub/pic3.jpg", "photo", 100, 0.0, "h3", True)
+    upsert_file(conn, "Outside/pic4.jpg", "photo", 100, 0.0, "h4", True)
+    conn.commit()
+
+    person = list_person_summaries(conn, PROVIDER)[0]
+    conn.execute(
+        "INSERT INTO folder_bindings (folder_rel, kind, provider_id, created_at) "
+        "VALUES ('Dad', 'person', ?, 0)",
+        (PROVIDER,),
+    )
+    binding_id = conn.execute(
+        "SELECT id FROM folder_bindings WHERE folder_rel='Dad'"
+    ).fetchone()[0]
+    conn.execute(
+        "INSERT INTO folder_binding_members (binding_id, person_id) VALUES (?, ?)",
+        (binding_id, person.id),
+    )
+    conn.commit()
+
+    placed = person_placement_media(conn, person.id)
+    # Only the direct-child, face-unmatched file; the matched file (has a face
+    # for this person), the nested file, and the outside file are all excluded.
+    assert {p.path for p in placed} == {"Dad/pic2.jpg"}
+    assert all(p.file_id != fid1 for p in placed)
+
+
+def test_person_placement_media_unbound_person_is_empty(conn):
+    fid = upsert_file(conn, "Loose/pic.jpg", "photo", 100, 0.0, "h", True)
+    conn.commit()
+    _do_scan(conn, [FileFaces(fid, "h", True, [_fake_face(0, 1, 0)])], labels=[0])
+    person = list_person_summaries(conn, PROVIDER)[0]
+    assert person_placement_media(conn, person.id) == []

@@ -836,6 +836,64 @@ def person_media(conn: sqlite3.Connection, person_id: int) -> list[FaceInfo]:
     ]
 
 
+@dataclass(frozen=True)
+class PlacementFile:
+    """A file attributed to a person purely by folder placement (ADR-0010):
+    it sits directly inside one of the person's bound folders but the face
+    model never matched them in it (no face, or a different person's face).
+    It carries no `faces` row for this person, so `person_media` misses it —
+    yet on organize it stays put as theirs, so their view should show it."""
+
+    file_id: int
+    path: str
+    kind: str
+
+
+def person_placement_media(conn: sqlite3.Connection, person_id: int) -> list[PlacementFile]:
+    """Files directly inside this person's bound folder(s) that `person_media`
+    doesn't already return (no matching face for this person). ADR-0010:
+    placement is a confirmed human label the model can't override, so these
+    belong in the person's view alongside the face-matched ones."""
+    from pathlib import PurePosixPath
+
+    folders = [
+        r["folder_rel"]
+        for r in conn.execute(
+            "SELECT b.folder_rel FROM folder_bindings b "
+            "JOIN folder_binding_members m ON m.binding_id = b.id "
+            "WHERE m.person_id = ?",
+            (person_id,),
+        ).fetchall()
+    ]
+    if not folders:
+        return []
+
+    seen: set[int] = set()
+    out: list[PlacementFile] = []
+    for folder_rel in folders:
+        # LIKE narrows to the subtree; the parent check keeps only files sitting
+        # *directly* inside the folder (a nested subfolder may be someone else's
+        # bound folder) — same idiom as duplicate_move_file_ids.
+        rows = conn.execute(
+            "SELECT id, path, kind FROM files WHERE path LIKE ? ORDER BY path",
+            (folder_rel + "/%",),
+        ).fetchall()
+        for r in rows:
+            if r["id"] in seen:
+                continue
+            if PurePosixPath(r["path"]).parent.as_posix() != folder_rel:
+                continue
+            has_face = conn.execute(
+                "SELECT 1 FROM faces WHERE file_id = ? AND person_id = ? LIMIT 1",
+                (r["id"], person_id),
+            ).fetchone()
+            if has_face:
+                continue
+            seen.add(r["id"])
+            out.append(PlacementFile(file_id=r["id"], path=r["path"], kind=r["kind"]))
+    return out
+
+
 def file_ids_with_faces(conn: sqlite3.Connection, provider_id: str) -> set[int]:
     """Return file_ids that already have faces rows for this provider."""
     rows = conn.execute(

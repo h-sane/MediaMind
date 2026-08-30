@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ArrowLeftRight } from 'lucide-react'
 import {
   usePersons,
+  useRecurringUnnamed,
   useMergePersons,
   useMergeSuggestions,
   useDismissMergeSuggestion,
@@ -28,6 +29,7 @@ interface Props {
   onOrganize: () => void
   onReviewPending: () => void
   onReviewMultiPerson: () => void
+  onBrowseRecurring: () => void
 }
 
 function MergeResultBanner({ report, onDismiss }: { report: ExecutionReport; onDismiss: () => void }): React.JSX.Element {
@@ -63,7 +65,8 @@ export function PeoplePanel({
   onOpenPerson,
   onOrganize,
   onReviewPending,
-  onReviewMultiPerson
+  onReviewMultiPerson,
+  onBrowseRecurring
 }: Props): React.JSX.Element {
   const jobs = useJobsStore((s) => s.jobs)
   const activeJob = selectJobForLibrary(jobs, libraryId, 'faces')
@@ -71,6 +74,9 @@ export function PeoplePanel({
   const { data: personsData, isError, isLoading } = usePersons(libraryId)
   const mergePersons = useMergePersons(libraryId)
   const hasFaceScan = !!personsData
+
+  const { data: recurringData } = useRecurringUnnamed(libraryId)
+  const recurringCount = recurringData?.persons.length ?? 0
 
   const { data: mergeSuggestionsData } = useMergeSuggestions(libraryId)
   const dismissMergeSuggestion = useDismissMergeSuggestion(libraryId)
@@ -213,6 +219,17 @@ export function PeoplePanel({
               Review suggestions
               <span className="rounded-full bg-indigo-200 px-1.5 py-0.5 text-xs font-medium">
                 {mergePairs.length}
+              </span>
+            </button>
+          )}
+          {!isScanning && recurringCount > 0 && (
+            <button
+              onClick={onBrowseRecurring}
+              className="flex items-center gap-1.5 rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-600 transition hover:bg-zinc-50"
+            >
+              Name recurring faces
+              <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-xs font-medium text-zinc-500">
+                {recurringCount}
               </span>
             </button>
           )}
