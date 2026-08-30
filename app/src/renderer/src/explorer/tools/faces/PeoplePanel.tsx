@@ -14,6 +14,7 @@ import {
 import { selectJobForLibrary, useJobsStore } from '../../../stores/jobs'
 import { useZoomScale } from '../../../hooks/useZoomScale'
 import { PersonCard } from './PersonCard'
+import { GroupTreeView } from './GroupTreeView'
 import { GroupSuggestionStrip } from './GroupSuggestionStrip'
 import { MergeReviewModal, pairKey, visibleMergePairs } from './MergeReviewModal'
 import { RespectedFolders } from './RespectedFolders'
@@ -90,6 +91,7 @@ export function PeoplePanel({
   const [reviewingSuggestion, setReviewingSuggestion] = useState<BindingSuggestion | null>(null)
   const [materializingPerson, setMaterializingPerson] = useState<Person | null>(null)
 
+  const [view, setView] = useState<'flat' | 'grouped'>('flat')
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<number[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -237,6 +239,22 @@ export function PeoplePanel({
             </button>
           )}
           {persons.length > 0 && !isScanning && (
+            <div className="flex overflow-hidden rounded-lg border border-zinc-200 text-sm">
+              <button
+                onClick={() => setView('flat')}
+                className={`px-3 py-2 transition ${view === 'flat' ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-zinc-50'}`}
+              >
+                All
+              </button>
+              <button
+                onClick={() => setView('grouped')}
+                className={`px-3 py-2 transition ${view === 'grouped' ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-zinc-50'}`}
+              >
+                By folder
+              </button>
+            </div>
+          )}
+          {persons.length > 0 && !isScanning && (
             <button
               onClick={onOrganize}
               className="rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-600 transition hover:bg-zinc-50"
@@ -244,7 +262,7 @@ export function PeoplePanel({
               Export
             </button>
           )}
-          {persons.length >= 2 && !isScanning && (
+          {persons.length >= 2 && !isScanning && view === 'flat' && (
             <button
               onClick={() => { setSelectMode((m) => !m); setSelected([]) }}
               className={`rounded-lg border px-3 py-2 text-sm transition ${
@@ -282,7 +300,11 @@ export function PeoplePanel({
         />
       )}
 
-      {persons.length > 0 && (
+      {persons.length > 0 && view === 'grouped' && (
+        <GroupTreeView libraryId={libraryId} zoom={zoom} onOpenPerson={onOpenPerson} />
+      )}
+
+      {persons.length > 0 && view === 'flat' && (
         <div
           className="grid gap-3"
           style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${Math.round(130 * zoom)}px, 1fr))` }}

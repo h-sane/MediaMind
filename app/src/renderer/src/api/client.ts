@@ -472,6 +472,22 @@ export interface PersonsOut {
   multi_person_count: number
 }
 
+// People tree (ADR-0007/0008): person-centric projection. Groups mirror folder
+// nesting and hold only sub-Groups and Persons — never media directly.
+export interface PeopleGroup {
+  path: string
+  name: string
+  subgroups: PeopleGroup[]
+  persons: Person[]
+  total_persons: number
+}
+
+export interface PeopleTreeOut {
+  scan_id: string
+  scanned_at: number | null
+  root: PeopleGroup
+}
+
 export interface PersonMediaItem {
   file_id: number
   path: string
@@ -966,6 +982,9 @@ export const api = {
   persons: {
     list: (libraryId: string) =>
       request<PersonsOut>('GET', `/v1/libraries/${libraryId}/persons`),
+
+    tree: (libraryId: string) =>
+      request<PeopleTreeOut>('GET', `/v1/libraries/${libraryId}/people-tree`),
 
     rename: (libraryId: string, personId: number, name: string | null) =>
       request<{ ok: boolean }>('PATCH', `/v1/libraries/${libraryId}/persons/${personId}`, { name }),
