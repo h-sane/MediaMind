@@ -16,6 +16,8 @@ from mediamind.api.models import (
     MergeSuggestionOut,
     PersonMediaItemOut,
     PersonMergeIn,
+    GroupOut,
+    PeopleTreeOut,
     PersonOut,
     PersonPrimaryFolderIn,
     PersonRenameIn,
@@ -28,6 +30,7 @@ from mediamind.core.libraries import LibraryRegistry
 from mediamind.core.organize_plan import safe_dest_folder_rel
 from mediamind.store.bindings import placement_confirmed_pending_ids
 from mediamind.store.db import open_library_db
+from mediamind.store.people_tree import GroupNode, build_people_tree
 from mediamind.store.persons import (
     dismiss_merge_suggestion,
     get_face,
@@ -126,6 +129,53 @@ def list_persons(library_id: str, request: Request):
         unreadable_files=summary.get("unreadable_files", 0),
         pending_count=pending_count,
         multi_person_count=multi_person_count,
+    )
+
+
+def _group_to_out(node: GroupNode) -> GroupOut:
+    return GroupOut(
+        path=node.path,
+        name=node.name,
+        subgroups=[_group_to_out(g) for g in node.subgroups],
+        persons=[
+            PersonOut(
+                id=p.id,
+                auto_label=p.auto_label,
+                name=p.name,
+                face_count=p.face_count,
+                media_count=p.media_count,
+                sample_face_ids=p.sample_face_ids,
+                primary_folder_path=p.primary_folder_path,
+            )
+            for p in node.persons
+        ],
+        total_persons=node.total_persons,
+    )
+
+
+@router.get("/libraries/{library_id}/people-tree", response_model=PeopleTreeOut)
+def people_tree(library_id: str, request: Request):
+    """Person-centric People-tab projection (ADR-0007/0008): the nested Group
+    tree with named Persons homed under the folder containing their Primary
+    Location. Media is reached by drilling to a Person (person-media endpoint) —
+    Groups never hold files directly."""
+    _, library_root = _get_library_and_root(request, library_id)
+    conn = _open_library_db(library_root)
+    try:
+        scan = latest_faces_scan(conn)
+        if scan is None:
+            raise HTTPException(
+                status_code=404, detail="No face scan found — run a scan first"
+            )
+        params = json.loads(scan["params"] or "{}")
+        provider_id: str = params.get("provider_id", "")
+        root = build_people_tree(list_person_summaries(conn, provider_id))
+    finally:
+        conn.close()
+    return PeopleTreeOut(
+        scan_id=scan["id"],
+        scanned_at=scan["finished_at"],
+        root=_group_to_out(root),
     )
 
 

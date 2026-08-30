@@ -326,6 +326,24 @@ class RecurringUnnamedOut(BaseModel):
     total_unnamed: int
 
 
+class GroupOut(BaseModel):
+    """A node in the person-centric People tree (ADR-0007/0008). Groups mirror
+    folder nesting and hold only sub-Groups and Persons — never media directly.
+    `path` is posix, library-relative ("" is the root); `total_persons` is the
+    transitive count for the "show everything below" toggle."""
+    path: str
+    name: str
+    subgroups: list["GroupOut"] = []
+    persons: list[PersonOut] = []
+    total_persons: int = 0
+
+
+class PeopleTreeOut(BaseModel):
+    scan_id: str
+    scanned_at: float | None
+    root: GroupOut
+
+
 class PersonRenameIn(BaseModel):
     name: str | None
 
