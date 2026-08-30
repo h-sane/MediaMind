@@ -20,6 +20,7 @@ from mediamind.api.models import (
     PersonPrimaryFolderIn,
     PersonRenameIn,
     PersonsOut,
+    RecurringUnnamedOut,
 )
 from mediamind.config import face_thumb_cache_dir
 from mediamind.core.faces.engine import load_frame
@@ -30,7 +31,9 @@ from mediamind.store.db import open_library_db
 from mediamind.store.persons import (
     dismiss_merge_suggestion,
     get_face,
+    RECURRENCE_FLOOR,
     list_person_summaries,
+    list_recurring_unnamed,
     merge_persons,
     merge_suggestions,
     person_media,
@@ -123,6 +126,52 @@ def list_persons(library_id: str, request: Request):
         unreadable_files=summary.get("unreadable_files", 0),
         pending_count=pending_count,
         multi_person_count=multi_person_count,
+    )
+
+
+@router.get(
+    "/libraries/{library_id}/recurring-unnamed",
+    response_model=RecurringUnnamedOut,
+)
+def list_recurring_unnamed_endpoint(
+    library_id: str,
+    request: Request,
+    min_appearances: int = Query(RECURRENCE_FLOOR, ge=1),
+):
+    """ADR-0001 recurring-unnamed-faces browse surface: unnamed clusters ranked
+    by how many distinct media they appear in, above the Q13 recurrence floor.
+    Pass `min_appearances=1` for the "show all" escape hatch."""
+    _, library_root = _get_library_and_root(request, library_id)
+    conn = _open_library_db(library_root)
+    try:
+        scan = latest_faces_scan(conn)
+        if scan is None:
+            raise HTTPException(
+                status_code=404, detail="No face scan found — run a scan first"
+            )
+        params = json.loads(scan["params"] or "{}")
+        provider_id: str = params.get("provider_id", "")
+        summaries, total_unnamed = list_recurring_unnamed(
+            conn, provider_id, min_appearances
+        )
+    finally:
+        conn.close()
+
+    return RecurringUnnamedOut(
+        persons=[
+            PersonOut(
+                id=s.id,
+                auto_label=s.auto_label,
+                name=s.name,
+                face_count=s.face_count,
+                media_count=s.media_count,
+                sample_face_ids=s.sample_face_ids,
+                primary_folder_path=s.primary_folder_path,
+            )
+            for s in summaries
+        ],
+        min_appearances=min_appearances,
+        total_unnamed=total_unnamed,
     )
 
 

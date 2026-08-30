@@ -317,6 +317,15 @@ class PersonsOut(BaseModel):
     multi_person_count: int = 0
 
 
+class RecurringUnnamedOut(BaseModel):
+    """ADR-0001 recurring-unnamed-faces surface. `total_unnamed` counts every
+    unnamed cluster regardless of the floor, so the UI can show how many
+    singletons sit below `min_appearances` behind a "show all" hatch."""
+    persons: list[PersonOut]
+    min_appearances: int
+    total_unnamed: int
+
+
 class PersonRenameIn(BaseModel):
     name: str | None
 

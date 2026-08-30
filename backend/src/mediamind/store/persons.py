@@ -584,6 +584,30 @@ def list_person_summaries(conn: sqlite3.Connection, provider_id: str) -> list[Pe
     return result
 
 
+# ADR-0001 §Q13 recurrence floor. An unnamed cluster earns a spot on the
+# browsable "recurring unnamed faces" surface once it appears in at least this
+# many distinct media files; one-off background faces stay hidden behind a
+# "show all" hatch (min_appearances=1) so strangers never bloat the list. A
+# calibration knob, not a law — raise it if the surface still feels noisy.
+RECURRENCE_FLOOR = 2
+
+
+def list_recurring_unnamed(
+    conn: sqlite3.Connection, provider_id: str, min_appearances: int = RECURRENCE_FLOOR
+) -> tuple[list[PersonSummary], int]:
+    """Unnamed clusters (name IS NULL) ranked by media appearance count desc,
+    filtered to those appearing in >= min_appearances distinct media. Returns
+    (filtered summaries, total unnamed count); the total lets the UI report how
+    many clusters sit below the floor for the "show all" escape hatch."""
+    unnamed = [s for s in list_person_summaries(conn, provider_id) if s.name is None]
+    shown = sorted(
+        (s for s in unnamed if s.media_count >= min_appearances),
+        key=lambda s: s.media_count,
+        reverse=True,
+    )
+    return shown, len(unnamed)
+
+
 def rename_person(conn: sqlite3.Connection, person_id: int, name: str | None) -> bool:
     cur = conn.execute(
         "UPDATE persons SET name = ? WHERE id = ?",

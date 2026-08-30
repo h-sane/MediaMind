@@ -10,9 +10,11 @@ import pytest
 from mediamind.store.db import open_db
 from mediamind.store.embeddings import CachedFace
 from mediamind.store.persons import (
+    RECURRENCE_FLOOR,
     FileFaces,
     dismiss_merge_suggestion,
     list_person_summaries,
+    list_recurring_unnamed,
     merge_persons,
     merge_suggestions,
     next_auto_label,
@@ -94,6 +96,50 @@ def test_scan_creates_two_persons(conn):
     summaries = list_person_summaries(conn, PROVIDER)
     assert len(summaries) == 2
     assert all(s.face_count == 1 for s in summaries)
+
+
+def _build_unnamed_clusters(conn) -> None:
+    """Three unnamed clusters: red in 3 media, green in 2, blue in 1 (two
+    faces in a single file). All start unnamed."""
+    faces = []
+    labels = []
+    plan = [
+        ("r1.jpg", [(1, 0, 0)]), ("r2.jpg", [(1, 0, 0)]), ("r3.jpg", [(1, 0, 0)]),
+        ("g1.jpg", [(0, 1, 0)]), ("g2.jpg", [(0, 1, 0)]),
+        ("b1.jpg", [(0, 0, 1), (0, 0, 1)]),
+    ]
+    label_of = {0: 0, 1: 0, 2: 0, 3: 1, 4: 1, 5: 2}  # by file index
+    for i, (name, cols) in enumerate(plan):
+        fid = upsert_file(conn, name, "photo", 100, 0.0, f"h_{name}", True)
+        faces.append(FileFaces(file_id=fid, content_hash=f"h_{name}", decoded_ok=True,
+                               faces=[_fake_face(*c) for c in cols]))
+        labels += [label_of[i]] * len(cols)
+    conn.commit()
+    _do_scan(conn, faces, labels=labels)
+
+
+def test_recurring_unnamed_floor_ranks_and_filters(conn):
+    _build_unnamed_clusters(conn)
+    shown, total = list_recurring_unnamed(conn, PROVIDER)  # default floor = 2
+    assert total == 3
+    assert [s.media_count for s in shown] == [3, 2]  # blue (1 medium) below floor
+    assert RECURRENCE_FLOOR == 2
+
+
+def test_recurring_unnamed_show_all(conn):
+    _build_unnamed_clusters(conn)
+    shown, total = list_recurring_unnamed(conn, PROVIDER, min_appearances=1)
+    assert total == 3
+    assert [s.media_count for s in shown] == [3, 2, 1]  # ranked desc, none hidden
+
+
+def test_recurring_unnamed_excludes_named(conn):
+    _build_unnamed_clusters(conn)
+    top = list_recurring_unnamed(conn, PROVIDER, min_appearances=1)[0][0]
+    rename_person(conn, top.id, "Alice")
+    shown, total = list_recurring_unnamed(conn, PROVIDER, min_appearances=1)
+    assert total == 2  # named person no longer counts as unnamed
+    assert all(s.id != top.id for s in shown)
 
 
 def test_noise_faces_not_assigned(conn):
