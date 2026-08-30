@@ -17,15 +17,28 @@ from mediamind.core import loaders
 from mediamind.core.scanner import KIND_GIF, KIND_IMAGE, KIND_VIDEO, ScannedFile
 from mediamind.providers.base import FaceProvider
 
-# Flat frame cap per video. ADR-0011's hard ceiling is "never more than ~10";
-# the progressive early-exit that drops the common single-subject clip to ~2-3
-# needs the identity engine (distinct-people tracking) and lands in Block 3.
-# Until then this flat cap is the Block-2 scan-perf lever (ADR-0006): ~33% off
-# every large video vs the old 15 at no recall cost to the common case.
-# ponytail: flat cap, replace with ADR-0011 progressive early-exit in Block 3.
+# Hard frame-budget cap per video (ADR-0011: "never more than ~10"). The
+# progressive early-exit below samples toward this cap but stops as soon as the
+# cast has settled, so the common single-subject clip costs ~2-3 frames, not 10
+# — every skipped frame is one fewer seek+read on a streamed cloud file.
 DEFAULT_VIDEO_FRAMES = 10
 DEFAULT_GIF_FRAMES = 8
 DEFAULT_MIN_FACE_SIZE = 40
+
+# Progressive early-exit tuning (ADR-0011). A video's frames are sampled spread
+# across its length; after each we track the set of *distinct* people seen and
+# stop once that set stops growing. The stop signal is "found nobody new for a
+# few frames", NOT "found a named person" — stopping on first hit would miss
+# co-appearing people. Constants are the recall/speed calibration knob:
+#   VIDEO_DISTINCT_SIM  a kept face is a *new* person if its cosine similarity
+#                       to every distinct face seen so far is below this.
+#   VIDEO_EARLY_EXIT_PATIENCE  stop after this many consecutive frames add
+#                       nobody new (a frame with zero faces counts as "nobody").
+#   VIDEO_MIN_FRAMES    never exit before sampling this many frames, so a person
+#                       who only appears a couple of frames in still gets a look.
+VIDEO_DISTINCT_SIM = 0.5
+VIDEO_EARLY_EXIT_PATIENCE = 2
+VIDEO_MIN_FRAMES = 3
 
 
 @dataclass(frozen=True)
@@ -83,23 +96,32 @@ def extract_file_faces(
     Per-file fault isolation: on any exception, decoded_ok=False and faces=[].
     """
     result = MediaFaces(file=file, decoded_ok=False)
+    is_video = file.kind == KIND_VIDEO
+    distinct: list[np.ndarray] = []   # one embedding per distinct person seen so far
+    stale = 0                         # consecutive frames that added nobody new
+    frames_seen = 0
     try:
         for frame_no, frame in enumerate(_frames_for(file, video_frames, gif_frames)):
             if frame is None:
                 continue
             result.decoded_ok = True
+            added_new = False
             for face in provider.get_faces(frame):
                 w = face.bbox[2] - face.bbox[0]
                 h = face.bbox[3] - face.bbox[1]
                 if w < min_face_size or h < min_face_size:
                     continue
-                result.faces.append(
-                    FaceRecord(
-                        frame_no=frame_no,
-                        bbox=face.bbox,
-                        embedding=np.asarray(face.embedding, dtype=np.float32),
-                    )
-                )
+                embedding = np.asarray(face.embedding, dtype=np.float32)
+                result.faces.append(FaceRecord(frame_no=frame_no, bbox=face.bbox, embedding=embedding))
+                if is_video and not any(float(np.dot(embedding, d)) >= VIDEO_DISTINCT_SIM for d in distinct):
+                    distinct.append(embedding)
+                    added_new = True
+
+            if is_video:
+                frames_seen += 1
+                stale = 0 if added_new else stale + 1
+                if frames_seen >= VIDEO_MIN_FRAMES and stale >= VIDEO_EARLY_EXIT_PATIENCE:
+                    break  # cast has settled — skip the remaining sampled frames
     except Exception:
         result.decoded_ok = False
         result.faces.clear()
