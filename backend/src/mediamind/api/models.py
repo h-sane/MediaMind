@@ -526,6 +526,7 @@ class OutlierFileOut(BaseModel):
     path: str
     kind: str
     accepted: bool
+    likely_person_name: str | None = None
 
 
 class BindingOut(BaseModel):

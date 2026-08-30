@@ -82,7 +82,10 @@ def _require_provider_id(conn, library_root: Path) -> str:
 
 def _outliers_out(record) -> list[OutlierFileOut]:
     return [
-        OutlierFileOut(file_id=o.file_id, path=o.path, kind=o.kind, accepted=o.accepted)
+        OutlierFileOut(
+            file_id=o.file_id, path=o.path, kind=o.kind, accepted=o.accepted,
+            likely_person_name=o.likely_person_name,
+        )
         for o in record.outliers
     ]
 

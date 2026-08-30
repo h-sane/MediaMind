@@ -611,6 +611,7 @@ export interface OutlierFile {
   path: string
   kind: string
   accepted: boolean
+  likely_person_name: string | null
 }
 
 export interface FolderBinding {

@@ -47,12 +47,18 @@ class OutlierFile:
     `accepted` mirrors whether the file's id is currently in the binding's
     `accepted_outlier_file_ids` — the only files the organize sweep will
     actually route despite the folder being frozen.
+
+    `likely_person_name` is the name of a *different* named person detected in
+    this file, when there is one — the strongest signal that the file was
+    genuinely misplaced (it clearly belongs to someone else). Used to rank the
+    consistency-check list so the clearest offenders surface first.
     """
 
     file_id: int
     path: str
     kind: str
     accepted: bool
+    likely_person_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -107,21 +113,52 @@ def _outliers_from_folder_files(
     """
     member_set = set(person_ids)
     accepted_set = set(accepted_ids)
-    outlier_ids = [f.file_id for f in folder_files if not (f.person_ids & member_set)]
-    if not outlier_ids:
+    outlier_files = [f for f in folder_files if not (f.person_ids & member_set)]
+    if not outlier_files:
         return []
+    outlier_ids = [f.file_id for f in outlier_files]
     placeholders = ",".join("?" * len(outlier_ids))
     rows = conn.execute(
         f"SELECT id, path, kind FROM files WHERE id IN ({placeholders})", outlier_ids
     ).fetchall()
     by_id = {r["id"]: r for r in rows}
+
+    # A different *named* person in an outlier file is the strongest "this is
+    # misplaced" signal. Resolve names for every non-member person seen in these
+    # files, then rank: named-other-person first, other unnamed faces next,
+    # no-face-at-all last (tie-break on path for stability).
+    other_ids = {pid for f in outlier_files for pid in f.person_ids}
+    named: dict[int, str] = {}
+    if other_ids:
+        ph = ",".join("?" * len(other_ids))
+        named = {
+            r["id"]: r["name"]
+            for r in conn.execute(
+                f"SELECT id, name FROM persons WHERE id IN ({ph}) AND name IS NOT NULL",
+                tuple(other_ids),
+            ).fetchall()
+        }
+
+    def _build(f) -> OutlierFile | None:
+        if f.file_id not in by_id:
+            return None
+        row = by_id[f.file_id]
+        named_here = sorted(pid for pid in f.person_ids if pid in named)
+        return OutlierFile(
+            file_id=f.file_id,
+            path=row["path"],
+            kind=row["kind"],
+            accepted=f.file_id in accepted_set,
+            likely_person_name=named[named_here[0]] if named_here else None,
+        )
+
+    built = [o for o in (_build(f) for f in outlier_files) if o is not None]
     return sorted(
-        (
-            OutlierFile(file_id=fid, path=by_id[fid]["path"], kind=by_id[fid]["kind"], accepted=fid in accepted_set)
-            for fid in outlier_ids
-            if fid in by_id
+        built,
+        key=lambda o: (
+            0 if o.likely_person_name else 1,  # named other-person first
+            o.path,
         ),
-        key=lambda o: o.path,
     )
 
 

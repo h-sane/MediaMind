@@ -342,3 +342,23 @@ def test_binding_with_no_outliers_reports_empty_list(conn):
     suggestion = bindings_store.list_suggestions(conn, PROVIDER)[0]
     binding = bindings_store.accept_suggestion(conn, suggestion.id)
     assert binding.outliers == []
+
+
+def test_outlier_labelled_and_ranked_by_named_other_person(conn):
+    from mediamind.store.persons import rename_person
+
+    _, outlier_fid = _seed_person_folder_with_outlier(conn, "Family/Alice")
+    # The outlier file carries the second cluster (person id 2 by seed order).
+    other_pid = conn.execute(
+        "SELECT id FROM persons WHERE provider_id = ? ORDER BY id", (PROVIDER,)
+    ).fetchall()[1]["id"]
+    rename_person(conn, other_pid, "Bob")
+
+    bindings_store.refresh_suggestions(conn, PROVIDER)
+    suggestion = bindings_store.list_suggestions(conn, PROVIDER)[0]
+    binding = bindings_store.accept_suggestion(conn, suggestion.id)
+
+    labelled = [o for o in binding.outliers if o.file_id == outlier_fid][0]
+    assert labelled.likely_person_name == "Bob"
+    # A file with a named other-person ranks ahead of any unlabelled outlier.
+    assert binding.outliers[0].likely_person_name == "Bob"

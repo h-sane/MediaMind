@@ -58,6 +58,14 @@ function OutlierCard({
         >
           {selected && <Check className="h-3.5 w-3.5" />}
         </span>
+        {file.likely_person_name && (
+          <span
+            className="pointer-events-none absolute right-2 top-2 max-w-[85%] truncate rounded-full bg-amber-500/90 px-2 py-0.5 text-[11px] font-medium text-white"
+            title={`A face matching ${file.likely_person_name} was detected here — likely misplaced`}
+          >
+            Looks like {file.likely_person_name}
+          </span>
+        )}
       </button>
 
       <div className="px-3 py-2">
