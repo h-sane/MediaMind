@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { PlugZap } from 'lucide-react'
 import { usePersons } from '../../../api/hooks'
+import { isLibraryOffline } from '../../../api/client'
 import { personPath, useExplorerStore } from '../../../stores/explorer'
 import { selectJobForLibrary, useJobsStore } from '../../../stores/jobs'
 import { DuplicateLocationsPanel } from './DuplicateLocationsPanel'
@@ -42,7 +44,7 @@ export function FacesToolPanel({ libraryId, folderPath }: Props): React.JSX.Elem
 
   const jobs = useJobsStore((s) => s.jobs)
   const activeJob = selectJobForLibrary(jobs, libraryId, 'faces')
-  const { data: personsData, isLoading: personsLoading } = usePersons(libraryId)
+  const { data: personsData, isLoading: personsLoading, error: personsError } = usePersons(libraryId)
   const initialSubResolved = useRef<string | null>(null)
 
   // Phase 4: opening a person navigates the Explorer to a virtual "place" that
@@ -63,6 +65,22 @@ export function FacesToolPanel({ libraryId, folderPath }: Props): React.JSX.Elem
 
   const goToSetup = () => setSub({ name: 'setup' })
   const goToPeople = () => setSub({ name: 'people' })
+
+  // ADR-0004: the drive is unmounted and this library was never scanned
+  // off-drive, so there's no catalog to show — badge it rather than falling
+  // through to the misleading "run a face scan" empty state.
+  if (isLibraryOffline(personsError)) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+        <PlugZap className="h-8 w-8 text-zinc-300" />
+        <p className="text-sm font-medium text-zinc-600">Library offline</p>
+        <p className="max-w-xs text-xs text-zinc-400">
+          Reconnect this folder&apos;s drive to see its people. Your names and
+          organization are safe.
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-full flex-col">

@@ -46,6 +46,14 @@ export function libFileThumbUrl(
   return `${origin}/v1/libraries/${libraryId}/files/thumbnail?path=${encodeURIComponent(path)}&size=${size}`
 }
 
+/** True when an error is the backend's 409 `library_offline` (ADR-0004): the
+ * library drive is unmounted and this library has no off-drive index yet, so
+ * the catalog genuinely can't be shown until the drive is reconnected. `request`
+ * throws `Error(detail)`, so the detail string is the message. */
+export function isLibraryOffline(err: unknown): boolean {
+  return err instanceof Error && err.message === 'library_offline'
+}
+
 export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const { port, token } = await connectBackend()
   let res: Response

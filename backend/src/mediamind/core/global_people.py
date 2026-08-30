@@ -27,6 +27,7 @@ from mediamind.core.safety import FileOp
 from mediamind.core.safety import execute as safety_execute
 from mediamind.store import global_people as gp_store
 from mediamind.store import persons as persons_store
+from mediamind.store.db import LibraryOffline
 from mediamind.store.db import open_library_db as _open_index_db
 
 
@@ -51,7 +52,7 @@ def _load_lib_face_data(lib: Library) -> _LibFaceData | None:
     old sequential code had, just isolated so it can run off-thread."""
     try:
         conn = open_library_db(lib)
-    except (OSError, sqlite3.Error):
+    except (LibraryOffline, OSError, sqlite3.Error):
         return None
     try:
         scan = persons_store.latest_faces_scan(conn)
@@ -182,7 +183,7 @@ def list_link_suggestions(gp_conn: sqlite3.Connection, registry: LibraryRegistry
     for lib in registry.list():
         try:
             conn = open_library_db(lib)
-        except (OSError, sqlite3.Error):
+        except (LibraryOffline, OSError, sqlite3.Error):
             continue
         try:
             scan = persons_store.latest_faces_scan(conn)
@@ -256,7 +257,7 @@ def list_move_suggestions(gp_conn: sqlite3.Connection, registry: LibraryRegistry
                 continue
             try:
                 conn = open_library_db(lib)
-            except (OSError, sqlite3.Error):
+            except (LibraryOffline, OSError, sqlite3.Error):
                 continue
             try:
                 for pf in persons_store.files_for_person(conn, plink.local_person_id):

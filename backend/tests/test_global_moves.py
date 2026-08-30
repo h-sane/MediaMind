@@ -189,3 +189,28 @@ def test_undo_moves_files_back_and_marks_undone(tmp_path: Path) -> None:
     # Nothing left to undo, and the batch is marked so it can't be re-undone.
     assert plan_undo(gp_conn, reg) is None
     assert gp.latest_undoable_move(gp_conn) is None
+
+
+def test_list_aggregated_skips_offline_library(tmp_path: Path) -> None:
+    """ADR-0004: one library's drive unmounted (and never migrated off-drive)
+    must not 409 the whole cross-library People view — the offline library is
+    skipped, the mounted one's people still aggregate."""
+    import shutil
+
+    from mediamind.config import library_index_db_path
+
+    reg = LibraryRegistry(registry_path=tmp_path / "libraries.json")
+    online, _ = _make_library(reg, tmp_path / "online", {"Mom": ["a.jpg"]})
+    offline, _ = _make_library(reg, tmp_path / "offline", {"Dad": ["b.jpg"]})
+
+    # Take the offline library away: drop its off-drive index AND its root, so
+    # open_library_db raises LibraryOffline for it (no index, drive gone).
+    shutil.rmtree(library_index_db_path(Path(offline.path)).parent)
+    shutil.rmtree(offline.path)
+
+    gp_conn = gp.open_global_db()
+    people = core.list_aggregated(gp_conn, reg)  # must not raise
+
+    names = {p["name"] for p in people}
+    assert "Mom" in names
+    assert "Dad" not in names
