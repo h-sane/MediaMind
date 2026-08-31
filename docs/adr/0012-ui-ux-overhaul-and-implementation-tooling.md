@@ -51,3 +51,59 @@ Code skills rather than improvising:
 data flow, and every decision captured in these ADRs plus the current app's real
 state. A separate, dedicated front-end agent owns making it look and feel
 excellent, working from that backbone.
+
+## Block 5 kickoff — base selection (2026-08-31)
+
+A comprehensive GitHub search (177 unique file-manager/explorer repos, ranked by
+stars with license + language) established that **no mature, GUI-desktop,
+Windows-Explorer-grade file manager exists that is both permissively licensed
+(MIT/BSD/Apache) and on our React/web stack.** The best candidates each fail on
+exactly one axis:
+
+- `files-community/Files` (44.8k★, **MIT**) — the definitive modern Windows
+  Explorer clone, but **C#/WinUI3** (Windows-only, foreign stack).
+- `spacedriveapp/spacedrive` (38.9k★) — beautiful modern **React/Tailwind** UI,
+  but **FSL** (source-available, not permissive) — study only.
+- `aleksey-hoffman/sigma-file-manager` (6.5k★) — Tauri + **Vue**, custom
+  non-permissive license.
+- `kimlimjustin/xplorer` (5.7k★) — Tauri + React, but **AGPL-3.0** (copyleft).
+- `warpdesign/react-explorer` (290★, MIT) — Electron + React, but an **older
+  stack** (MobX + Blueprint.js) — a downgrade from ours.
+
+**Decision (final): adopt `files-community/Files` as the new frontend base
+(C#/.NET + WinUI 3).** After the initial base-selection above, the human
+**removed the tech-stack constraint entirely** — React/Electron was never a
+requirement (Claude chose it originally); the only requirements are speed,
+efficiency, correctness, and a clean license. With the stack open, the choice is
+unambiguous: `files-community/Files` (44.8k★) is the best mature, complete, fast,
+permissively-licensed Windows File Explorer clone in existence, and every
+modern *cross-platform* alternative is disqualified on licensing (Spacedrive =
+FSL, Sigma = custom non-permissive, Xplorer = AGPL). So we **clone Files as the
+MediaMind frontend** and build the people-flow features into it.
+
+- **License:** Files is MIT with some MPL-2.0 files. MPL-2.0 is OSI-approved
+  weak (file-level) copyleft, freely combinable with Apache-2.0; for an
+  open-source project like MediaMind, compliance is trivial (modified MPL files
+  stay open, which they already are). Acceptable despite being outside the strict
+  MIT/BSD/Apache gate. (Verify the exact per-file split in the clone's LICENSE
+  files at setup.)
+- **Backend unchanged:** the Python FastAPI face-recognition / dedupe engine
+  stays exactly as-is; the WinUI app calls it over localhost HTTP just as the
+  Electron app did. All the safety-critical Python pipeline is untouched.
+- **Consequence — Windows-only for now:** WinUI 3 / Windows App SDK is
+  Windows-only. This matches the project's stated Windows-first priority and the
+  user's platform. If cross-platform later becomes a hard requirement, that is a
+  future pivot; it does not gate Block 5.
+- **The current Electron/React `app/`** is superseded and will be retired once
+  the Files-based frontend reaches parity; it is not deleted pre-emptively.
+- **Toolchain:** the machine had no .NET SDK / Visual Studio; the C# toolchain
+  (.NET SDK + Windows App SDK + build workloads) is installed at kickoff via
+  winget. Windows 11 build 26200 supports WinUI 3.
+
+The React-rebuild path (former "option A") is superseded by this decision.
+
+**Tooling set up at kickoff:** the `frontend-design` skill (Anthropic-authored,
+`claude-plugins-official`) is installed at project scope — it enforces
+distinctive, production-grade UI and a quality floor (responsive, keyboard focus,
+reduced motion), and is the mandated design authority for all Block 5 front-end
+work. A dedicated front-end agent leads the integration design.

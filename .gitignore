@@ -65,3 +65,9 @@ app/out/
 
 # Screenshots taken by the run-desktop skill's Playwright driver
 app/.driver-shots/
+
+# Block 5 (ADR-0012): Files (files-community/Files) cloned as the new WinUI
+# frontend base. Staged here during build-viability evaluation; kept out of
+# git until it verifiably builds/runs, so the auto-commit policy can't sweep an
+# unevaluated ~300MB tree into history. Final placement decided by the blueprint.
+/winui-frontend/
