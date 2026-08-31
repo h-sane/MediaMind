@@ -141,6 +141,28 @@ def test_create_uses_shared_insightface_root(tmp_path):
     assert provider.embedding_dim == 512
 
 
+def test_default_entry_prefers_installed_preferred_else_first_installed(tmp_path):
+    """The opt-in fast-scan lever: default_entry honors a preferred pack only
+    when it's installed, otherwise falls back to first-installed in catalog order."""
+    sc = _pack_entry("buffalo_sc", required=("det_500m.onnx", "w600k_mbf.onnx"))
+    l = _pack_entry("buffalo_l")
+    pm = ProviderManager(
+        tmp_path / "appmodels",
+        catalog=[l, sc],  # buffalo_l first in catalog order
+        insightface_root=tmp_path / "ifcache",
+    )
+    _write_pack_files(tmp_path / "ifcache", "buffalo_l", ["det_10g.onnx", "w600k_r50.onnx"])
+
+    # Preferred pack not installed yet -> fall back to first installed (l).
+    assert pm.default_entry("insightface-buffalo-sc").id == "insightface-buffalo-l"
+    # No preference -> first installed.
+    assert pm.default_entry(None).id == "insightface-buffalo-l"
+
+    _write_pack_files(tmp_path / "ifcache", "buffalo_sc", ["det_500m.onnx", "w600k_mbf.onnx"])
+    # Preferred now installed -> it wins even though it's later in catalog order.
+    assert pm.default_entry("insightface-buffalo-sc").id == "insightface-buffalo-sc"
+
+
 # ---------------------------------------------------------------------------
 # direct-archive kinds (opencv_zoo): same real-files truth
 # ---------------------------------------------------------------------------

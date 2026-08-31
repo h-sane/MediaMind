@@ -178,7 +178,7 @@ def build_scan_runner(app_state, lib, scan_type: str, near_threshold: int = DEFA
         if provider_id:
             entry = pm.get_entry(provider_id)
         else:
-            entry = next((e for e in pm.entries() if pm.is_installed(e.id)), None)
+            entry = pm.default_entry(app_state.settings.active_provider_id)
         if entry is None or not pm.is_installed(entry.id):
             return None
         return make_face_scan_runner(

@@ -52,3 +52,15 @@ def test_set_auto_scan_enabled_shim_maps_to_libraries_tier(tmp_path: Path) -> No
     assert store.auto_scan_mode == "libraries"
     store.set_auto_scan_enabled(False)
     assert store.auto_scan_mode == "off"
+
+
+def test_active_provider_id_defaults_none_persists_and_clears(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    store = SettingsStore(store_path=path)
+    assert store.active_provider_id is None  # auto-pick by default
+
+    assert store.set_active_provider_id("insightface-buffalo-sc") == "insightface-buffalo-sc"
+    assert SettingsStore(store_path=path).active_provider_id == "insightface-buffalo-sc"
+
+    assert store.set_active_provider_id("") is None  # "" clears back to auto-pick
+    assert SettingsStore(store_path=path).active_provider_id is None

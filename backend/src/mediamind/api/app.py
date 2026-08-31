@@ -76,7 +76,7 @@ async def _lifespan(app: FastAPI):
     from mediamind.core.watcher import LibraryWatcher
 
     pm = app.state.providers
-    _default_entry = next((e for e in pm.entries() if pm.is_installed(e.id)), None)
+    _default_entry = pm.default_entry(app.state.settings.active_provider_id)
 
     app.state.ingest_worker = IngestWorker(
         app.state.registry,

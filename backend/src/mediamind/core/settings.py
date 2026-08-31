@@ -21,6 +21,11 @@ DEFAULT_RECENT_FILES_ENABLED = True
 # ingest pipeline run outside registered libraries).
 AUTO_SCAN_MODES = ("off", "libraries", "system")
 DEFAULT_AUTO_SCAN_MODE = "off"
+# None → auto-pick the first installed pack (catalog order). Set to a catalog
+# provider id (e.g. "insightface-buffalo-sc") to make that pack the default for
+# scans and always-on ingest — the opt-in fast-scan lever. Selection still
+# guards on is_installed, so a stale id harmlessly falls back to auto-pick.
+DEFAULT_ACTIVE_PROVIDER_ID = None
 
 
 class SettingsStore:
@@ -28,6 +33,7 @@ class SettingsStore:
         self._path = store_path or settings_path()
         self._recent_files_enabled = DEFAULT_RECENT_FILES_ENABLED
         self._auto_scan_mode = DEFAULT_AUTO_SCAN_MODE
+        self._active_provider_id = DEFAULT_ACTIVE_PROVIDER_ID
         self._load()
 
     def _load(self) -> None:
@@ -50,6 +56,9 @@ class SettingsStore:
             legacy = data.get("auto_scan_enabled")
             if isinstance(legacy, bool):
                 self._auto_scan_mode = "libraries" if legacy else "off"
+        active = data.get("active_provider_id")
+        if isinstance(active, str) and active:
+            self._active_provider_id = active
 
     def _save(self) -> None:
         tmp = self._path.with_suffix(".tmp")
@@ -58,6 +67,7 @@ class SettingsStore:
                 {
                     "recent_files_enabled": self._recent_files_enabled,
                     "auto_scan_mode": self._auto_scan_mode,
+                    "active_provider_id": self._active_provider_id,
                 },
                 indent=2,
             ),
@@ -86,6 +96,19 @@ class SettingsStore:
             self._auto_scan_mode = mode
             self._save()
         return self._auto_scan_mode
+
+    @property
+    def active_provider_id(self) -> str | None:
+        return self._active_provider_id
+
+    def set_active_provider_id(self, provider_id: str | None) -> str | None:
+        # Empty string clears back to auto-pick; any other string is stored as-is
+        # (selection re-validates against installed packs, so no catalog coupling).
+        new = provider_id or None
+        if new != self._active_provider_id:
+            self._active_provider_id = new
+            self._save()
+        return self._active_provider_id
 
     @property
     def auto_scan_enabled(self) -> bool:

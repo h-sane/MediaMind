@@ -61,6 +61,17 @@ class ProviderManager:
     def get_entry(self, provider_id: str) -> CatalogEntry | None:
         return next((e for e in self._catalog if e.id == provider_id), None)
 
+    def default_entry(self, preferred_id: str | None = None) -> CatalogEntry | None:
+        """The entry a scan should use by default: the user's preferred pack
+        (e.g. a fast buffalo_sc) when it's set and actually installed, else the
+        first installed entry in catalog order. Callers that pass an *explicit*
+        provider still go through get_entry — this is only the fallback."""
+        if preferred_id:
+            entry = self.get_entry(preferred_id)
+            if entry is not None and self.is_installed(entry.id):
+                return entry
+        return next((e for e in self._catalog if self.is_installed(e.id)), None)
+
     def root_for(self, entry: CatalogEntry) -> Path:
         """Base directory this entry installs under (see module docstring)."""
         if entry.kind == "insightface_pack":

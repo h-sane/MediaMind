@@ -613,6 +613,7 @@ def get_settings(request: Request) -> SettingsOut:
         recent_files_enabled=settings.recent_files_enabled,
         auto_scan_mode=settings.auto_scan_mode,
         auto_scan_enabled=settings.auto_scan_enabled,
+        active_provider_id=settings.active_provider_id,
     )
 
 
@@ -632,10 +633,13 @@ def update_settings(body: SettingsUpdateIn, request: Request) -> SettingsOut:
     elif body.auto_scan_enabled is not None:
         # Back-compat: a caller still on the pre-V3 boolean field.
         settings.set_auto_scan_enabled(body.auto_scan_enabled)
+    if body.active_provider_id is not None:
+        settings.set_active_provider_id(body.active_provider_id)
     return SettingsOut(
         recent_files_enabled=settings.recent_files_enabled,
         auto_scan_mode=settings.auto_scan_mode,
         auto_scan_enabled=settings.auto_scan_enabled,
+        active_provider_id=settings.active_provider_id,
     )
 
 

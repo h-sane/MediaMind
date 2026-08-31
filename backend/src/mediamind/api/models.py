@@ -170,6 +170,7 @@ class SettingsOut(BaseModel):
     recent_files_enabled: bool
     auto_scan_mode: Literal["off", "libraries", "system"]
     auto_scan_enabled: bool  # computed: True iff auto_scan_mode != "off" — kept for back-compat
+    active_provider_id: str | None  # None → auto-pick first installed pack
 
 
 class SettingsUpdateIn(BaseModel):
@@ -178,6 +179,7 @@ class SettingsUpdateIn(BaseModel):
     recent_files_enabled: bool | None = None
     auto_scan_mode: Literal["off", "libraries", "system"] | None = None
     auto_scan_enabled: bool | None = None
+    active_provider_id: str | None = None  # "" clears to auto-pick; omit to leave unchanged
 
 
 # ---------------------------------------------------------------------------

@@ -913,7 +913,18 @@ def test_fs_settings_recent_files_enabled_by_default(client: TestClient):
         "recent_files_enabled": True,
         "auto_scan_mode": "off",
         "auto_scan_enabled": False,
+        "active_provider_id": None,
     }
+
+
+def test_fs_settings_active_provider_id_round_trips(client: TestClient):
+    res = client.patch("/v1/fs/settings", json={"active_provider_id": "insightface-buffalo-sc"})
+    assert res.status_code == 200
+    assert res.json()["active_provider_id"] == "insightface-buffalo-sc"
+    assert client.get("/v1/fs/settings").json()["active_provider_id"] == "insightface-buffalo-sc"
+
+    # "" clears back to auto-pick.
+    assert client.patch("/v1/fs/settings", json={"active_provider_id": ""}).json()["active_provider_id"] is None
 
 
 def test_fs_settings_disable_recent_files_hides_and_stops_tracking(client: TestClient, tmp_path: Path):
@@ -929,6 +940,7 @@ def test_fs_settings_disable_recent_files_hides_and_stops_tracking(client: TestC
         "recent_files_enabled": False,
         "auto_scan_mode": "off",
         "auto_scan_enabled": False,
+        "active_provider_id": None,
     }
 
     # Existing history is cleared, not just hidden.
@@ -942,6 +954,7 @@ def test_fs_settings_disable_recent_files_hides_and_stops_tracking(client: TestC
         "recent_files_enabled": True,
         "auto_scan_mode": "off",
         "auto_scan_enabled": False,
+        "active_provider_id": None,
     }
     res = client.get("/v1/fs/recent")
     assert res.json()["files"] == []
