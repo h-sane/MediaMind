@@ -1220,12 +1220,22 @@ def test_fs_discovery_suggestions_lists_seeded_rows(client: TestClient, tmp_path
     from mediamind.config import discovery_db_path
     from mediamind.core import discovery
 
+    # Hermetic: list_inbox_suggestions reads the real Path.home() Downloads/
+    # Pictures/Videos, which MEDIAMIND_DATA_DIR doesn't isolate. Stub it so the
+    # test exercises only the whole-drive tally path (and never surfaces the
+    # real user's personal folders).
+    monkeypatch.setattr(discovery, "known_inbox_folders", lambda: [])
+
     folder = tmp_path / "discovered_folder"
     folder.mkdir()
     conn = discovery.connect(discovery_db_path())
     for _ in range(10):
         discovery.record(conn, str(folder))
     conn.close()
+
+    # Tally suggestions are only served in an on-mode; the default is "off"
+    # (opted out — nothing suggested).
+    client.patch("/v1/fs/settings", json={"auto_scan_mode": "system"})
 
     res = client.get("/v1/fs/discovery/suggestions")
     assert res.status_code == 200
@@ -1235,9 +1245,11 @@ def test_fs_discovery_suggestions_lists_seeded_rows(client: TestClient, tmp_path
     assert body[0]["media_count"] == 10
 
 
-def test_fs_discovery_register_adds_library_and_drops_suggestion(client: TestClient, tmp_path: Path):
+def test_fs_discovery_register_adds_library_and_drops_suggestion(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from mediamind.config import discovery_db_path
     from mediamind.core import discovery
+
+    monkeypatch.setattr(discovery, "known_inbox_folders", lambda: [])
 
     folder = tmp_path / "discovered_to_register"
     folder.mkdir()
@@ -1245,6 +1257,11 @@ def test_fs_discovery_register_adds_library_and_drops_suggestion(client: TestCli
     for _ in range(10):
         discovery.record(conn, str(folder))
     conn.close()
+
+    # On-mode so the tally row is actually offered — otherwise the post-register
+    # `suggestions == []` check is a false pass (off-mode returns [] regardless
+    # of the drop logic).
+    client.patch("/v1/fs/settings", json={"auto_scan_mode": "system"})
 
     res = client.post("/v1/fs/discovery/register", json={"folder": str(folder)})
     assert res.status_code == 201
@@ -1257,9 +1274,11 @@ def test_fs_discovery_register_adds_library_and_drops_suggestion(client: TestCli
     assert suggestions == []
 
 
-def test_fs_discovery_dismiss_drops_suggestion(client: TestClient, tmp_path: Path):
+def test_fs_discovery_dismiss_drops_suggestion(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from mediamind.config import discovery_db_path
     from mediamind.core import discovery
+
+    monkeypatch.setattr(discovery, "known_inbox_folders", lambda: [])
 
     folder = tmp_path / "discovered_to_dismiss"
     folder.mkdir()
@@ -1267,6 +1286,10 @@ def test_fs_discovery_dismiss_drops_suggestion(client: TestClient, tmp_path: Pat
     for _ in range(10):
         discovery.record(conn, str(folder))
     conn.close()
+
+    # On-mode so the tally row is actually offered — otherwise the post-dismiss
+    # `suggestions == []` check passes for the wrong reason.
+    client.patch("/v1/fs/settings", json={"auto_scan_mode": "system"})
 
     res = client.post("/v1/fs/discovery/dismiss", json={"folder": str(folder)})
     assert res.status_code == 200
