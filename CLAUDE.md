@@ -59,6 +59,43 @@ for organizing it.
   app). See the `.claude/handoffs/` session history (s73+) and
   `docs/BLOCK5_UI_BLUEPRINT.md`.
 
+## Product identity & UX doctrine (non-negotiable)
+
+MediaMind is a **media-first, feature-rich** file explorer — not a plain file
+explorer with media features bolted on. The Files-clone shell is only the base.
+Three rules bind every UI change:
+
+1. **Media-first by default.** Folder views show **media** (images/video) by
+   default, with a visible toggle to show all files. Never dump PDFs/Word/markdown
+   at the user as the default — that is the single thing that makes this MediaMind.
+2. **Flagship features are first-class and discoverable.** Scan-for-People, the
+   People/Person view, Suggestions, Consolidation, duplicate detection, and
+   watch-a-folder are the *highlights* — they belong on visible command bars,
+   near the top of the sidebar, and in onboarding. They must **never** be buried
+   two or three levels deep (right-click submenus, settings pages) as the only way
+   to reach them. Design the information architecture deliberately: sidebar order,
+   what a page leads to next, the whole flow.
+3. **Cause and effect (visible feedback).** Every backend action MUST produce a
+   visible frontend effect — pending state, progress, success, and error — in the
+   main UI, not a hidden status flyout or a swallowed log line. A backend action
+   with no visible effect is a broken app, regardless of whether the backend
+   "worked."
+
+## How to work on this project
+
+- **A specific complaint is an instance of a class, never the whole bug.** When a
+  problem is pointed out, infer the intent, then proactively sweep the whole
+  affected surface for every sibling instance and fix the class. Do not fix only
+  the named item and declare done — that makes the user the QA. The QA is you.
+- **Verify end-to-end from the user's perspective**, on realistic data, with the
+  result visible on screen — by automation *or* by hand. Never verify on a fixture
+  rigged to skip the failing condition, and never report "done/verified" for a
+  path exercised only through an API or automation backdoor.
+- **Handoffs are proactive and extensive.** Context must survive session
+  boundaries (the user works across many short sessions). After meaningful work,
+  update `.claude/handoffs/` richly enough that the next session continues without
+  re-grilling.
+
 ## Repository map
 
 | Path | Role |
