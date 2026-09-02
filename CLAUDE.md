@@ -45,6 +45,19 @@ for organizing it.
   Explorer-clone pivot. See `docs/USER_GUIDE.md` for the current, accurate
   feature list and `.claude/handoffs/` for the session-by-session history of
   how the Explorer clone was built.
+- **Version 1.x (current frontend — the WinUI overhaul):** the app's real,
+  single intended UI is now the **WinUI Explorer clone** in
+  `winui-frontend/Files/` (the "Block 5" overhaul, ADR-0012 — a fork of the
+  MIT-licensed Files app), with the Python engine **bundled inside it** and all
+  People-flow features surfaced natively (People sidebar, Suggestions,
+  per-person Consolidation, consistency check, Watched Folders). This is **not a
+  separate app or a side experiment** — it is THE app, replacing the Electron
+  frontend above. "Build/release the app" means this WinUI app + bundled engine
+  packaged as a (sideload) MSIX — **never** the Electron NSIS build. The Electron
+  UI (`app/`) is the previous frontend, kept working but superseded. GitHub
+  Releases continue by number (v0.3.x were Electron; v0.4.0+ carry the WinUI
+  app). See the `.claude/handoffs/` session history (s73+) and
+  `docs/BLOCK5_UI_BLUEPRINT.md`.
 
 ## Repository map
 
