@@ -1,7 +1,11 @@
 # Block 5 — UX Correction Plan (media-first surfacing)
 
-**Status:** planned 2026-09-03 (session 88). Not yet implemented. Next session
-starts here.
+**Status:** planned s88; s89 built **Phase A ✅, B (partial: sidebar + Scan button;
+Watch button & Suggestions-pane pending), C (scan action only), D (diagnosed +
+25s client bound + backend timing log; NOT root-caused)**. All build clean, none
+live-verified. Remaining: Suggestions docked pane, duplicates UI, bootstrap widget,
+"Watching N" pill, per-person-action feedback, Phase F live pass + repackage. See
+`.claude/handoffs/2026-09-03_session_89.md`.
 
 ## Why this exists
 
