@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Callable
 
 from mediamind.config import LIBRARY_DATA_DIRNAME, library_index_db_path
+from mediamind.core.reachability import is_root_reachable
 
 SCHEMA_VERSION = 11
 
@@ -479,6 +480,6 @@ def open_library_db(library_root: Path) -> sqlite3.Connection:
             legacy_exists = False
         if legacy_exists:
             _migrate_legacy_index(legacy, dest)
-        elif not library_root.is_dir():
+        elif not is_root_reachable(library_root):
             raise LibraryOffline(str(library_root))
     return open_db(dest)

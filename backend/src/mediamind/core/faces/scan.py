@@ -17,12 +17,13 @@ from typing import Callable
 
 import numpy as np
 
-from mediamind.core.concurrency import TIMED_OUT, hash_timeout_for, run_with_timeout
+from mediamind.core.concurrency import MAX_FILE_TIMEOUT_SECONDS, TIMED_OUT, hash_timeout_for, run_with_timeout
 from mediamind.core.faces.clustering import DEFAULT_EPS, DEFAULT_MIN_SAMPLES, cluster_embeddings
 from mediamind.core.faces.engine import (
     DEFAULT_GIF_FRAMES,
     DEFAULT_MIN_FACE_SIZE,
     DEFAULT_VIDEO_FRAMES,
+    MediaFaces,
     extract_file_faces,
 )
 from mediamind.core.hashing import hash_file
@@ -132,7 +133,10 @@ def make_face_scan_runner(
 
         conn = open_library_db(library_root)
         provider: FaceProvider | None = None
-        hash_limiter = threading.Semaphore(MAX_LEAKED_STALL_THREADS)
+        # Shared across both stages below: hashing (I/O) and face/video
+        # extraction (decode + inference) each leak a thread on timeout, and
+        # both draw from the same process-wide leaked-thread budget.
+        stall_limiter = threading.Semaphore(MAX_LEAKED_STALL_THREADS)
 
         try:
             existing_file_ids = file_ids_with_faces(conn, provider_id)
@@ -152,7 +156,7 @@ def make_face_scan_runner(
                     return run_with_timeout(
                         lambda p=scanned.path: hash_file(p),
                         hash_timeout_for(stat.st_size, floor=DEFAULT_HASH_TIMEOUT_SECONDS),
-                        hash_limiter,
+                        stall_limiter,
                     )
                 except Exception:
                     return None
@@ -271,12 +275,31 @@ def make_face_scan_runner(
                             provider = provider_factory()
                             provider.prepare()
 
-                        mf = extract_file_faces(
-                            scanned, provider,
-                            video_frames=video_frames,
-                            gif_frames=gif_frames,
-                            min_face_size=min_face_size,
+                        # extract_file_faces() decodes the file (cv2.VideoCapture
+                        # for video has no timeout of its own — a corrupted/
+                        # stalled stream can retry internally for a very long
+                        # time) and runs inference, all with no cooperative
+                        # cancellation point. Same guard as hashing above, so
+                        # one bad video can't stall the rest of the scan.
+                        outcome = run_with_timeout(
+                            lambda scanned=scanned: extract_file_faces(
+                                scanned, provider,
+                                video_frames=video_frames,
+                                gif_frames=gif_frames,
+                                min_face_size=min_face_size,
+                            ),
+                            MAX_FILE_TIMEOUT_SECONDS,
+                            stall_limiter,
                         )
+                        if outcome is TIMED_OUT:
+                            logger.warning(
+                                "face scan: skipping %s - timed out after %.0fs extracting faces "
+                                "(likely a corrupted/stalled video read)",
+                                scanned.path, MAX_FILE_TIMEOUT_SECONDS,
+                            )
+                            mf = MediaFaces(file=scanned, decoded_ok=False)
+                        else:
+                            mf = outcome
                         cached_faces: list[CachedFace] = [
                             CachedFace(
                                 frame_no=fr.frame_no,

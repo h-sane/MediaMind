@@ -79,6 +79,39 @@ def test_stalled_hash_is_skipped_not_hung(tmp_path: Path, conn, monkeypatch):
     assert row == 0, "a timed-out hash must not upsert a files row"
 
 
+def test_stalled_video_decode_is_skipped_not_hung(tmp_path: Path, conn, monkeypatch):
+    """Bug reproduction (2026-09-03): a video with a corrupted stream can make
+    cv2.VideoCapture retry internally for a very long time with no timeout of
+    its own. extract_file_faces() must be wrapped the same way hash_file() is
+    above, or one bad video freezes the rest of the scan."""
+    import time
+
+    import mediamind.core.faces.scan as scan_mod
+
+    real_extract = scan_mod.extract_file_faces
+
+    def hanging_extract(scanned, provider, **kwargs):
+        if scanned.path.name == "stalled.mp4":
+            time.sleep(10)  # far longer than the monkeypatched timeout below
+        return real_extract(scanned, provider, **kwargs)
+
+    monkeypatch.setattr(scan_mod, "extract_file_faces", hanging_extract)
+    monkeypatch.setattr(scan_mod, "MAX_FILE_TIMEOUT_SECONDS", 0.2)
+
+    (tmp_path / "stalled.mp4").write_bytes(b"not a real video")
+    Image.new("RGB", (64, 64), (0, 0, 255)).save(tmp_path / "blue.jpg")
+
+    summary = _run(tmp_path)
+
+    # The stalled video is skipped, the rest of the scan still completes in
+    # the same call instead of hanging forever.
+    assert summary["files"] == 2
+    assert summary["faces"] == 1
+    assert summary["unreadable_files"] == 1
+    row = conn.execute("SELECT decoded_ok FROM files WHERE path = ?", ("stalled.mp4",)).fetchone()
+    assert row["decoded_ok"] == 0
+
+
 # ---------------------------------------------------------------------------
 # Basic sanity
 # ---------------------------------------------------------------------------

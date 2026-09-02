@@ -44,6 +44,7 @@ from watchdog.observers import Observer
 from mediamind.config import LIBRARY_DATA_DIRNAME
 from mediamind.core.discovery import fixed_drive_roots
 from mediamind.core.libraries import Library, LibraryRegistry
+from mediamind.core.reachability import is_root_reachable
 from mediamind.core.scanner import MEDIA_KINDS, is_noise_dir, kind_of, scan_folder
 
 logger = logging.getLogger("mediamind.watcher")
@@ -258,6 +259,9 @@ class LibraryWatcher:
     def _schedule_native(self, lib: Library) -> None:
         if self._observer is None:
             return
+        if not is_root_reachable(lib.root):
+            logger.warning("watcher: %s unreachable — falling back to polling", lib.path)
+            return
         try:
             self._observer.schedule(_WatchdogHandler(self, lib), str(lib.root), recursive=True)
             self._native_roots.add(lib.id)
@@ -323,6 +327,8 @@ class LibraryWatcher:
             live_ids.add(lib.id)
             if lib.id in self._native_roots:
                 continue  # natively watched — polling it too would be redundant work
+            if not is_root_reachable(lib.root):
+                continue  # offline network/vault root — don't hammer it every poll
             try:
                 snap = self._snapshot(lib)
             except Exception:

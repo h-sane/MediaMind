@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import logging.handlers
+import queue
 from typing import Callable
 
 from mediamind.config import logs_dir
@@ -28,9 +29,20 @@ def configure_logging(level: int = logging.INFO) -> None:
     file_handler.setFormatter(formatter)
     root.addHandler(file_handler)
 
+    # stderr here is a pipe the desktop host (Electron/WinUI) reads to show
+    # live logs. If that reader ever stops draining it (observed: a WinUI
+    # window losing focus can stall the host's async pipe-read loop), a
+    # direct StreamHandler.emit() blocks in flush() until the pipe has room
+    # again — and since every log call happens synchronously on the caller's
+    # thread, including uvicorn's own access logger on the asyncio event-loop
+    # thread, that one stalled reader freezes the entire server, not just
+    # logging. Routing stderr through a queue + background thread means a
+    # stalled reader only blocks that thread; request handling is unaffected.
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)
-    root.addHandler(stream_handler)
+    log_queue: queue.Queue = queue.Queue(-1)
+    root.addHandler(logging.handlers.QueueHandler(log_queue))
+    logging.handlers.QueueListener(log_queue, stream_handler).start()
 
 
 class WebSocketLogHandler(logging.Handler):

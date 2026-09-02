@@ -36,7 +36,13 @@ def main() -> None:
     port = args.port or _free_port(args.host)
     print(f"MEDIAMIND_PORT={port}", flush=True)
 
-    uvicorn.run(create_app(), host=args.host, port=port, log_level="info")
+    # log_config=None: skip uvicorn's own logging setup, which installs its
+    # own direct-to-stderr handlers on the uvicorn/uvicorn.access loggers,
+    # bypassing configure_logging()'s queue-backed handler above (and its
+    # protection against a stalled log reader freezing the whole server —
+    # see logging_setup.py). Without a handler of their own these loggers
+    # propagate to the root logger instead, which does have one.
+    uvicorn.run(create_app(), host=args.host, port=port, log_level="info", log_config=None)
 
 
 if __name__ == "__main__":
