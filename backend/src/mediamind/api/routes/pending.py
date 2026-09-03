@@ -51,9 +51,11 @@ def list_pending(library_id: str, request: Request):
         rows = conn.execute(
             """
             SELECT pm.id, pm.face_id, pm.person_id, pm.confidence,
-                   p.auto_label, p.name
+                   p.auto_label, p.name, fi.path, fi.kind
             FROM pending_matches pm
             JOIN persons p ON p.id = pm.person_id
+            JOIN faces f ON f.id = pm.face_id
+            JOIN files fi ON fi.id = f.file_id
             WHERE pm.decision IS NULL
             ORDER BY pm.confidence DESC
             """
@@ -71,6 +73,9 @@ def list_pending(library_id: str, request: Request):
             person_id=r["person_id"],
             person_name=r["name"] or r["auto_label"],
             confidence=r["confidence"],
+            path=r["path"],
+            abs_path=str(library_root / r["path"]),
+            kind=r["kind"],
         )
         for r in rows
         if r["id"] not in suppressed

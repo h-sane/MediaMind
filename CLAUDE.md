@@ -95,6 +95,15 @@ Three rules bind every UI change:
   boundaries (the user works across many short sessions). After meaningful work,
   update `.claude/handoffs/` richly enough that the next session continues without
   re-grilling.
+- **Frontend-design skill is mandatory, no exceptions.** Before writing or
+  editing any frontend UI code — WinUI XAML, Electron/React, CSS, any visual
+  surface — invoke the `frontend-design` skill first, even for a small,
+  surgical tweak to an existing view. This is a hard rule (set 2026-09-03
+  after a UI change shipped without it); there is no "too small to bother"
+  exception. When Hussain sends a concrete visual reference (a screenshot),
+  treat it as ground truth to match and use the skill's critique lens to
+  avoid generic AI-default patterns in everything the reference doesn't pin
+  down.
 
 ## Repository map
 

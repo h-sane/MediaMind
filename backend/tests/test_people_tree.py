@@ -42,9 +42,18 @@ def test_top_level_person_homes_at_root():
     assert root.subgroups == []
 
 
-def test_unnamed_persons_excluded():
+def test_unnamed_persons_included():
     root = build_people_tree([_p(1, None, "pop/kpop/twice/x")])
-    assert root.total_persons == 0
+    assert root.total_persons == 1
+    twice = _find(root, "pop/kpop/twice")
+    assert twice is not None
+    assert twice.persons[0].name is None
+
+
+def test_unnamed_person_with_no_primary_folder_homes_at_root():
+    root = build_people_tree([_p(1, None, None)])
+    assert root.total_persons == 1
+    assert root.persons[0].name is None
     assert root.subgroups == []
 
 

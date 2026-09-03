@@ -455,6 +455,9 @@ class PendingMatchOut(BaseModel):
     person_id: int
     person_name: str
     confidence: float
+    path: str          # library-relative (posix) — the candidate's source file
+    abs_path: str       # absolute on-disk path, so PendingReviewPage can browse it library-free
+    kind: str
 
 
 class PendingDecisionItem(BaseModel):

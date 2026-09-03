@@ -7,8 +7,10 @@ Location (ADR-0008). Files never sit under a Group directly (ADR-0007): to reach
 media you drill to a Person, which the existing person-media endpoint serves.
 
 This module is a pure derivation over `PersonSummary` rows — no schema, no DB.
-Unnamed persons never appear here (ADR-0007: they belong to the recurring-unnamed
-surface); named persons with no Primary Location are homed at the root Group.
+Every real person (a genuine face cluster, named or not) appears here; an
+unnamed person has no Primary Location yet and is homed at the root Group
+until named. Persons with no Primary Location — named or not — are likewise
+homed at the root Group.
 """
 
 from __future__ import annotations
@@ -63,8 +65,6 @@ def build_people_tree(persons: list[PersonSummary]) -> GroupNode:
         return node
 
     for p in persons:
-        if not p.name:  # unnamed -> recurring-unnamed surface, not the tree
-            continue
         home = ensure(_home_group_path(p.primary_folder_path))
         home.persons.append(
             PersonNode(
