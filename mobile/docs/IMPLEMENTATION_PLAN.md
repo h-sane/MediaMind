@@ -27,13 +27,15 @@ required.
 Ordered so there's a **demoable app at every checkpoint** (evaluation rounds are
 Saturday evening + Sunday morning).
 
-**Phase 0 — Skeleton (hrs 0–3).** Compose app matching the prototype: nav, four
-tabs, static screens wired to a fake repository. Guarantees a running app on the
-phone from hour 3.
+**Phase 0 — Skeleton (hrs 0–3).** Start from the **Expo (React Native) app that
+Claude Design produced** (gallery-first IA: Photos · Collections · Search, screens
+wired to mock repositories). Get it running on the iQOO 15. Guarantees a running
+app on the phone from hour 3 — the design work is already done.
 
-**Phase 1 — Photo access + index (hrs 3–7).** `MediaStore` enumeration → SQLite
-`photo` rows → Library grid shows the *real* camera roll (media-first). First
-"the phone's own photos" moment.
+**Phase 1 — Photo access + index (hrs 3–7).** Swap the mock `PhotoRepository` for
+a real one: `expo-media-library` enumeration → `expo-sqlite` `photo` rows → the
+**Photos** grid shows the *real* camera roll. First "the phone's own photos"
+moment.
 
 **Phase 2 — On-device faces (hrs 7–15). The core.**
 - ORT Mobile + QNN wired; capability probe + delegate fallback.
@@ -77,6 +79,8 @@ demo on the iQOO 15; ensure Office Kit mirroring works (10% of score).
 
 ## Branch / repo
 
-- Work on `mobile/hackathon-prototype` (this branch). The Android app lives under
-  `mobile/android/` when the build starts; the prototype + docs under
-  `mobile/prototype/` and `mobile/docs/`.
+- Work on `mobile/hackathon-prototype` (this branch). The Expo app (from Claude
+  Design, then wired to the engine) lives under `mobile/app/` when the build
+  starts; docs under `mobile/docs/`. The `mobile/prototype/index.html` from the
+  first pass is a **superseded** single-purpose mockup — kept only as history; the
+  real design is the Google-Photos-shaped Expo app.

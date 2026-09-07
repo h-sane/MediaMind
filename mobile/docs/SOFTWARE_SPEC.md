@@ -26,30 +26,39 @@ plain-language searches, without a single photo ever leaving the phone.
 
 ## 3. Core screens (all in the prototype)
 
+This is a **gallery-first app** (a Google Photos alternative), not a
+single-purpose face tool. The home is the photo grid; face recognition, dedupe,
+and AI search are secondary features placed where Google Photos puts its
+equivalents. Full screen list and placements: `CLAUDE_DESIGN_BRIEF.md` §4.
+
 | Screen | Purpose | Flagship feature it surfaces |
 |---|---|---|
-| **Onboarding** | The privacy thesis + single CTA "Scan my photos" | On-device / NPU badge, "nothing leaves your phone" |
-| **Scanning** | Cause-and-effect: live progress, "0 bytes sent" | On-device inference, privacy |
-| **People** | The home. People clusters; "Needs a name" first, then named | Face grouping (the differentiator) |
-| **Person detail** | One person's photos + Consolidate / Export | Organize-by-person, private export |
-| **Library** | Media-first grid + conversational + voice search | NL/voice search, media-first doctrine |
-| **Clean** | Reclaim-space hero, duplicate groups, keep-best | Duplicate detection, safe delete |
+| **Photos** (home) | Reverse-chron grid of all photos & videos; zoom levels; multi-select | Gallery-first, media-first |
+| **Photo viewer** | Full-screen swipeable photo + actions + "People in this photo" | Face recognition (in context) |
+| **Collections** | Google-Photos-style groupings; hosts People, Utilities, Albums, folders | Where flagship features live |
+| **People / Person detail** | Person grid (unnamed first) → rename / merge / consolidate | Face grouping (the differentiator) |
+| **Search** | Search bar with AI natural-language + voice; People/Places/Things | NL/voice search |
+| **Duplicates (Utilities)** | Reclaim-space, duplicate groups, keep-best | Duplicate detection, safe delete |
 
-Bottom nav order = information architecture: **People, Library, Clean, Search** —
-flagship features are top-level, never buried (MediaMind UX doctrine).
+Bottom nav = **Photos · Collections · Search** (mirrors Google Photos). People and
+duplicates live inside Collections/Search — prominent but not the main event.
+There is **no "Scan my photos" hero**; the app opens into the grid and indexes in
+the background.
 
 ## 4. Key flows
 
-1. **First run:** Onboarding → grant photo access → Scan (live progress) → lands
-   on **People** with clusters ready, most as "Needs a name".
-2. **Name a person:** tap an unnamed cluster → name it → all their photos inherit
-   the name; future scans auto-assign confident matches.
+1. **First run:** minimal permission grant ("Allow access to photos") → lands
+   straight in the **Photos** grid. Face grouping + dedupe run in the background,
+   shown as a subtle "Finding people… on your device" chip (cause-and-effect).
+2. **Name a person:** Collections/Search → People → tap an unnamed cluster → name
+   it → their photos inherit the name; confident matches auto-assign next index.
 3. **Organize a person:** Person detail → **Consolidate** (gather copies into one
    place) or **Export** (share/back up) — copy-based, never destructive.
-4. **Free space:** **Clean** → review duplicate groups (best copy pre-selected) →
-   confirm → space reclaimed. Nothing deleted without confirmation.
-5. **Find a photo:** Library search bar or mic → "Mom at the beach last summer" →
-   on-device LLM/Whisper → results. Fully offline.
+4. **Free space:** Collections → Utilities → **Free up space (Duplicates)** →
+   review groups (best copy pre-selected) → confirm → space reclaimed. Nothing
+   deleted without confirmation.
+5. **Find a photo:** Search bar or mic → "Mom at the beach last summer" →
+   on-device LLM/Whisper → filtered results. Fully offline.
 
 ## 5. Non-negotiable product rules (from MediaMind doctrine)
 
