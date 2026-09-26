@@ -162,8 +162,46 @@ def _make_dedupe_runner(library_root: Path, threshold: int):
     return runner
 
 
+class _DuplicatesStage:
+    """The duplicate stage of a people scan, as seen by the dedupe runner: every step reports as
+    one "duplicates" phase, and it saves under its own scan id, since the faces stage records
+    the job id too and one id for both would clash."""
+
+    def __init__(self, ctx: JobContext) -> None:
+        self._ctx = ctx
+
+    @property
+    def job_id(self) -> str:
+        return f"{self._ctx.job_id}-duplicates"
+
+    def cancelled(self) -> bool:
+        return self._ctx.cancelled()
+
+    def report_progress(self, done: int, total: int, phase: str = "", detail: str | None = None,
+                        stats: dict | None = None) -> None:
+        # Only the comparing step has a meaningful total; listing shows as "starting".
+        self._ctx.report_progress(done, total if phase == "hashing" else 0, "duplicates")
+
+
+def _duplicates_then_faces(dedupe_runner, faces_runner):
+    """One job: find duplicate files, then scan for people. A failed duplicate check is
+    reported in the result and never stops the people scan."""
+
+    def runner(ctx: JobContext) -> dict:
+        try:
+            duplicates = dedupe_runner(_DuplicatesStage(ctx))
+        except Exception as e:  # noqa: BLE001 — the people scan must still run
+            logger.exception("Duplicate stage of a people scan failed")
+            duplicates = {"error": str(e)}
+        if ctx.cancelled():
+            return {}
+        return {**(faces_runner(ctx) or {}), "duplicates": duplicates}
+
+    return runner
+
+
 def build_scan_runner(app_state, lib, scan_type: str, near_threshold: int = DEFAULT_NEAR_THRESHOLD,
-                      provider_id: str | None = None):
+                      provider_id: str | None = None, with_duplicates: bool = False):
     """Build a scan runner for a library, or return None if it can't run.
 
     Shared by the manual scan route and the Phase-8 auto-scan watcher
@@ -184,7 +222,7 @@ def build_scan_runner(app_state, lib, scan_type: str, near_threshold: int = DEFA
             entry = pm.default_entry(app_state.settings.active_provider_id)
         if entry is None or not pm.is_installed(entry.id):
             return None
-        return make_face_scan_runner(
+        faces = make_face_scan_runner(
             Path(lib.path),
             lambda: pm.create(entry.id),
             entry.id,
@@ -192,6 +230,9 @@ def build_scan_runner(app_state, lib, scan_type: str, near_threshold: int = DEFA
             pending_for_named=True,
             teach_after=lambda conn: apply_in_registry(app_state.registry, lib.id, conn, entry.id),
         )
+        if with_duplicates:
+            return _duplicates_then_faces(_make_dedupe_runner(Path(lib.path), near_threshold), faces)
+        return faces
     raise ValueError(f"Unknown scan type '{scan_type}'")
 
 
@@ -221,7 +262,7 @@ def start_scan(library_id: str, body: ScanIn, request: Request):
 
     try:
         runner = build_scan_runner(
-            request.app.state, lib, body.type, body.near_threshold, body.provider_id
+            request.app.state, lib, body.type, body.near_threshold, body.provider_id, body.with_duplicates
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))

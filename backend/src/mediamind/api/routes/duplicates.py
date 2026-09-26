@@ -37,6 +37,7 @@ from mediamind.store.db import open_library_db
 from mediamind.store.duplicates import (
     add_dismissals,
     clear_dismissals,
+    dismiss_group,
     get_trash_set,
     load_scan,
     mark_groups_ignored,
@@ -239,6 +240,21 @@ def confirm_duplicates(library_id: str, request: Request):
         conn.close()
 
     return ConfirmOut(confirmed_groups=len(group_ids), skipped_pending=skipped_pending)
+
+
+@router.post("/libraries/{library_id}/duplicates/groups/{group_id}/dismiss")
+def dismiss_duplicate_group(library_id: str, group_id: int, request: Request):
+    """"Not duplicates" for one group: hidden now, and not shown again after a rescan
+    unless its members change (same signature mechanism as /confirm)."""
+    _, library_root = _get_library_and_root(request, library_id)
+    conn = _open_library_db(library_root)
+    try:
+        found = dismiss_group(conn, group_id)
+    finally:
+        conn.close()
+    if not found:
+        raise HTTPException(status_code=404, detail="Unknown duplicate group")
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

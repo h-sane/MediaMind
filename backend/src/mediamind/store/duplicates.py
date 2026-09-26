@@ -158,6 +158,13 @@ def mark_members_trashed(conn: sqlite3.Connection, member_ids: list[int]) -> Non
         f"UPDATE duplicate_members SET resolution = 'trashed' WHERE id IN ({placeholders})",
         member_ids,
     )
+    # The files are gone from disk: drop them from the index as well (their faces and open
+    # review questions go with them by cascade), so no screen offers a file that is gone.
+    # Face assignments are keyed by content hash, so the kept copy keeps its names.
+    conn.execute(
+        f"DELETE FROM files WHERE path IN (SELECT path FROM duplicate_members WHERE id IN ({placeholders}))",
+        member_ids,
+    )
     conn.commit()
 
 
@@ -180,6 +187,21 @@ def add_dismissals(conn: sqlite3.Connection, rows: list[tuple[str, str, int]]) -
         [(sig, match, count, now) for sig, match, count in rows],
     )
     conn.commit()
+
+
+def dismiss_group(conn: sqlite3.Connection, group_id: int) -> bool:
+    """The user says one group is not duplicates: hide it now and keep it from coming back
+    on a rescan unless its members change. False if the group isn't in the latest scan."""
+    from mediamind.core.dedupe import group_signature
+
+    scan = load_scan(conn)
+    group = next((g for g in scan.groups if g.id == group_id), None) if scan else None
+    if group is None:
+        return False
+    survivors = [m for m in group.files if m.resolution != "trashed"]
+    add_dismissals(conn, [(group_signature([m.content_hash for m in survivors]), group.match, len(survivors))])
+    mark_groups_ignored(conn, [group_id])
+    return True
 
 
 def mark_groups_ignored(conn: sqlite3.Connection, group_ids: list[int]) -> None:
