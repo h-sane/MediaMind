@@ -154,8 +154,12 @@ def _finalize(node: Node, by_id: dict[str, Entry]) -> int:
     return total
 
 
-def load_entries(registry: LibraryRegistry) -> tuple[list[Entry], dict[tuple[str, int], str]]:
-    """Every person from every reachable, face-scanned library as an entry.
+def load_entries(
+    registry: LibraryRegistry, exclude: frozenset[str] | set[str] = frozenset()
+) -> tuple[list[Entry], dict[tuple[str, int], str]]:
+    """Every person from every reachable, face-scanned library as an entry. A person
+    with no faces at all, or whose key is in `exclude` (found unusable), is not a
+    person and is left out.
     Returns the entries plus a (library_id, local_person_id) -> entry id map."""
     lib_data = _load_all_lib_face_data(registry)
     libs = {lib.id: lib for lib in registry.list()}
@@ -167,7 +171,9 @@ def load_entries(registry: LibraryRegistry) -> tuple[list[Entry], dict[tuple[str
 
     grouped: dict[str, list[tuple[str, int]]] = {}
     for lib_id, data in lib_data.items():
-        for pid in data.summaries:
+        for pid, summary in data.summaries.items():
+            if summary.face_count == 0 or person_key(lib_id, pid) in exclude:
+                continue
             gid = link_of.get((lib_id, pid))
             grouped.setdefault(f"g:{gid}" if gid is not None else f"l:{lib_id}:{pid}", []).append((lib_id, pid))
 
@@ -205,7 +211,7 @@ def load_entries(registry: LibraryRegistry) -> tuple[list[Entry], dict[tuple[str
 def load_overview(registry: LibraryRegistry, layout: PeopleLayoutStore):
     """Returns (entries, forest, collections, pins, hidden entries). A person the
     user removed is left out of everything but the last list (the restore list)."""
-    all_entries, entry_of = load_entries(registry)
+    all_entries, entry_of = load_entries(registry, layout.unusable())
     hidden_keys = set(layout.hidden())
     entries = [e for e in all_entries if not hidden_keys.intersection(e.keys)]
     hidden = [e for e in all_entries if hidden_keys.intersection(e.keys)]

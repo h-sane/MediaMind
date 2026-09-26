@@ -432,16 +432,32 @@ def face_thumbnail(
     if info is None:
         raise HTTPException(status_code=404, detail="Unknown face id")
 
+    status, response = render_face_thumb(library_id, library_root, info, size)
+    if response is None:
+        detail = "Thumbnail error: empty crop" if status == "crop_failed" else "Could not decode frame for thumbnail"
+        raise HTTPException(status_code=422, detail=detail)
+    return response
+
+
+def render_face_thumb(library_id: str, library_root: Path, info, size: int):
+    """Crop one face to a JPEG response. Returns (status, response): "ok" with a
+    response, or "missing" (source file gone), "undecodable" (file present but the
+    frame cannot be decoded) or "crop_failed" (bad bbox) with None. Callers that
+    can fall back to another face (the People card thumbnail) key off the status."""
     cache_dir = face_thumb_cache_dir() / library_id
     cache_key = _face_thumb_cache_key(info.path, info.frame_no, info.bbox, size)
     cache_path = cache_dir / f"{cache_key}.jpg"
     if cache_path.exists():
-        return FileResponse(cache_path, media_type="image/jpeg", headers=_THUMB_CACHE_HEADERS)
+        return "ok", FileResponse(cache_path, media_type="image/jpeg", headers=_THUMB_CACHE_HEADERS)
 
     abs_path = library_root / info.path
-    frame = load_frame(abs_path, info.kind, info.frame_no)
+    if not abs_path.exists():
+        return "missing", None
+    # Some older rows label a still image "photo"; the decoder only knows "image".
+    kind = "image" if info.kind == "photo" else info.kind
+    frame = load_frame(abs_path, kind, info.frame_no)
     if frame is None:
-        raise HTTPException(status_code=422, detail="Could not decode frame for thumbnail")
+        return "undecodable", None
 
     try:
         import cv2
@@ -474,8 +490,8 @@ def face_thumbnail(
         if not ok:
             raise ValueError("JPEG encode failed")
         jpeg_bytes = bytes(buf)
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Thumbnail error: {exc}")
+    except Exception:
+        return "crop_failed", None
 
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -485,4 +501,4 @@ def face_thumbnail(
     except OSError:
         pass  # cache is an optimization, not a correctness requirement — serve the thumbnail regardless
 
-    return StreamingResponse(io.BytesIO(jpeg_bytes), media_type="image/jpeg", headers=_THUMB_CACHE_HEADERS)
+    return "ok", StreamingResponse(io.BytesIO(jpeg_bytes), media_type="image/jpeg", headers=_THUMB_CACHE_HEADERS)

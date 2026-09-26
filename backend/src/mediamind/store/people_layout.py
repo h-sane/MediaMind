@@ -37,6 +37,7 @@ class PeopleLayoutStore:
         self._lock = threading.Lock()
         self._pins: list[str] = []
         self._hidden: list[str] = []
+        self._unusable: list[str] = []
         self._collections: list[dict] = []  # {"id", "name", "members": [key, ...]}
         self._load()
 
@@ -50,6 +51,7 @@ class PeopleLayoutStore:
             return
         self._pins = [k for k in data.get("pins", []) if isinstance(k, str)]
         self._hidden = [k for k in data.get("hidden", []) if isinstance(k, str)]
+        self._unusable = [k for k in data.get("unusable", []) if isinstance(k, str)]
         for c in data.get("collections", []):
             if isinstance(c, dict) and isinstance(c.get("id"), str) and isinstance(c.get("name"), str):
                 members = [m for m in c.get("members", []) if isinstance(m, str)]
@@ -57,7 +59,7 @@ class PeopleLayoutStore:
 
     def _save(self) -> None:
         tmp = self._path.with_suffix(".tmp")
-        payload = {"pins": self._pins, "hidden": self._hidden, "collections": self._collections}
+        payload = {"pins": self._pins, "hidden": self._hidden, "unusable": self._unusable, "collections": self._collections}
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         tmp.replace(self._path)
 
@@ -113,6 +115,23 @@ class PeopleLayoutStore:
             gone = set(keys)
             self._hidden = [k for k in self._hidden if k not in gone]
             self._save()
+
+    # -- unusable persons ---------------------------------------------------
+
+    def unusable(self) -> set[str]:
+        with self._lock:
+            return set(self._unusable)
+
+    def mark_unusable(self, key: str) -> None:
+        """A "person" none of whose faces can be cropped is a recognition mistake,
+        not a person: it is left out of the People view for good (and is not
+        offered for restore). A rescan gives real people new ids, so this never
+        hides one."""
+        with self._lock:
+            if key not in self._unusable:
+                self._unusable.append(key)
+                self._pins = [k for k in self._pins if k != key]
+                self._save()
 
     # -- collections --------------------------------------------------------
 

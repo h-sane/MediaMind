@@ -5,8 +5,10 @@ changes only `people_layout.json` in app data — never a file on disk."""
 from __future__ import annotations
 
 import json
+import time
+from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from mediamind.api.models import (
     PeopleCollectionNameIn,
@@ -24,7 +26,8 @@ from mediamind.api.models import (
 from mediamind.core.global_people import open_library_db, resolve_link_suggestion
 from mediamind.core.people_overview import Entry, Node, load_entries, load_overview
 from mediamind.store import global_people as gp_store
-from mediamind.store.persons import latest_faces_scan, merge_persons
+from mediamind.api.routes.persons import render_face_thumb
+from mediamind.store.persons import get_face, latest_faces_scan, merge_persons
 from mediamind.store.people_layout import PeopleLayoutStore
 
 router = APIRouter(tags=["people-view"], prefix="/people-view")
@@ -263,3 +266,94 @@ def _provider_id(registry, library_id: str) -> str:
         return json.loads(scan["params"] or "{}").get("provider_id", "")
     finally:
         conn.close()
+
+
+_THUMB_FACES_TRIED = 8
+_THUMB_TIME_BUDGET_S = 25.0  # a hung video decode must not stall a card forever
+_VERIFY_BATCH_BUDGET_S = 40.0
+
+
+def _probe_person(request: Request, library_id: str, person_id: int, size: int, deadline: float | None = None):
+    """Try a person's largest faces, in turn, until one can be cropped.
+    Returns ("ok", response), ("unusable", None) or ("unknown", None).
+
+    "unusable": the person has no faces, or every face's file is present but cannot
+    be decoded — not a person, a recognition mistake; it is recorded so it leaves the
+    People view for good. "unknown": missing files or a slow decode are not evidence
+    (drive unplugged, file moved), so nothing is recorded."""
+    lib = request.app.state.registry.get(library_id)
+    if lib is None:
+        return "unknown", None
+    root = Path(lib.path)
+    conn = open_library_db(lib)
+    try:
+        face_ids = [
+            r["id"]
+            for r in conn.execute(
+                "SELECT id FROM faces WHERE person_id = ? "
+                "ORDER BY (bbox_x2 - bbox_x1) * (bbox_y2 - bbox_y1) DESC LIMIT ?",
+                (person_id, _THUMB_FACES_TRIED),
+            ).fetchall()
+        ]
+        infos = [i for i in (get_face(conn, fid) for fid in face_ids) if i is not None]
+    finally:
+        conn.close()
+
+    started = time.monotonic()
+    inconclusive = False
+    for info in infos:
+        if time.monotonic() - started > _THUMB_TIME_BUDGET_S or (deadline is not None and time.monotonic() > deadline):
+            inconclusive = True
+            break
+        status, response = render_face_thumb(library_id, root, info, size)
+        if response is not None:
+            return "ok", response
+        if status == "missing":
+            inconclusive = True
+    if inconclusive:
+        return "unknown", None
+
+    _layout(request).mark_unusable(f"p:{library_id}:{person_id}")
+    return "unusable", None
+
+
+@router.get("/persons/{library_id}/{person_id}/thumbnail")
+def person_thumbnail(
+    library_id: str,
+    person_id: int,
+    request: Request,
+    size: int = Query(default=160, ge=48, le=512),
+):
+    """The face to show on a person's card: the largest face that can be cropped.
+    A face that cannot be decoded is skipped for the next, within this one request.
+    410 means the engine found this is not a person (see `_probe_person`); 404 means
+    no face is available right now."""
+    if request.app.state.registry.get(library_id) is None:
+        raise HTTPException(status_code=404, detail="Unknown library")
+    status, response = _probe_person(request, library_id, person_id, size)
+    if response is not None:
+        return response
+    if status == "unusable":
+        raise HTTPException(status_code=410, detail="Not a usable person")
+    raise HTTPException(status_code=404, detail="No face is available right now")
+
+
+@router.post("/verify")
+def verify(body: PeopleKeysIn, request: Request):
+    """Background sweep, in small batches from the People page: run the card
+    thumbnail check for these persons now (which also warms the thumbnail cache)
+    and report the ones found not to be people. Persons not reached inside the batch
+    time budget are simply left for the next sweep."""
+    deadline = time.monotonic() + _VERIFY_BATCH_BUDGET_S
+    unusable: list[str] = []
+    for key in body.keys:
+        if time.monotonic() > deadline:
+            break
+        try:
+            _, library_id, person_id = key.split(":", 2)
+            status, _ = _probe_person(request, library_id, int(person_id), 160, deadline)
+        except (ValueError, OSError):
+            continue
+        if status == "unusable":
+            unusable.append(key)
+    return {"unusable": unusable}

@@ -127,3 +127,82 @@ def test_merge_links_an_unnamed_person_from_another_library_into_the_named_one(c
     assert len(merged) == 1 and merged[0]["name"] == "Nayeon" and len(merged[0]["members"]) == 2
 
     assert client.post("/v1/people-view/merge", json={"source_keys": target["keys"], "target_keys": target["keys"]}).status_code == 422
+
+
+def _seed_two_faces(library_root: Path, bad_first: bool) -> None:
+    """One person whose largest face lives in an undecodable file and whose smaller
+    face is in a real image (or, with bad_first=False, both files undecodable)."""
+    import cv2
+
+    ok, buf = cv2.imencode(".jpg", np.full((64, 64, 3), 200, dtype=np.uint8))
+    (library_root / "good.jpg").write_bytes(bytes(buf) if bad_first else b"not an image")
+    (library_root / "bad.jpg").write_bytes(b"not an image")
+    conn = open_library_db(library_data_dir(library_root).parent)
+    ids = [upsert_file(conn, n, "photo", 100, 0.0, f"h_{n}", True) for n in ("bad.jpg", "good.jpg")]
+    conn.commit()
+    boxes = [(0, 0, 60, 60), (0, 0, 30, 30)]
+    ff = [
+        FileFaces(
+            file_id=fid,
+            content_hash=f"h{i}",
+            decoded_ok=True,
+            faces=[CachedFace(frame_no=0, bbox=box, embedding=np.array([1.0, 0.0, 0.0], dtype=np.float32))],
+        )
+        for i, (fid, box) in enumerate(zip(ids, boxes))
+    ]
+    persist_face_scan(
+        conn, scan_id="s1", provider_id=PROVIDER, file_faces=ff, labels=np.array([0, 0], dtype=int),
+        owners=[0, 1], started_at=time.time() - 1, finished_at=time.time(),
+        params={"provider_id": PROVIDER}, summary={"files": 2, "faces": 2, "people": 1},
+    )
+    conn.close()
+
+
+def _register(client, path: Path) -> str:
+    res = client.post("/v1/libraries", json={"path": str(path)})
+    assert res.status_code == 201
+    return res.json()["id"]
+
+
+def test_card_thumbnail_skips_an_undecodable_face_and_uses_the_next(client, tmp_path):
+    root = tmp_path / "lib"
+    root.mkdir()
+    _seed_two_faces(root, bad_first=True)
+    lib = _register(client, root)
+    pid = client.get("/v1/people-view/overview").json()["entries"][0]["members"][0]["local_person_id"]
+
+    res = client.get(f"/v1/people-view/persons/{lib}/{pid}/thumbnail")
+    assert res.status_code == 200 and res.headers["content-type"] == "image/jpeg"
+    assert len(client.get("/v1/people-view/overview").json()["entries"]) == 1
+
+
+def test_person_with_no_croppable_face_is_dropped_from_the_view(client, tmp_path):
+    root = tmp_path / "lib"
+    root.mkdir()
+    _seed_two_faces(root, bad_first=False)
+    lib = _register(client, root)
+    pid = client.get("/v1/people-view/overview").json()["entries"][0]["members"][0]["local_person_id"]
+
+    assert client.get(f"/v1/people-view/persons/{lib}/{pid}/thumbnail").status_code == 410
+    assert client.get("/v1/people-view/overview").json()["entries"] == []
+    assert client.get("/v1/people-view/overview").json()["hidden"] == []
+
+
+def test_missing_source_file_is_not_evidence_the_person_is_fake(client, tmp_path):
+    lib = _library(client, tmp_path / "lib", "Nayeon")  # a.jpg was never written to disk
+    pid = client.get("/v1/people-view/overview").json()["entries"][0]["members"][0]["local_person_id"]
+
+    assert client.get(f"/v1/people-view/persons/{lib}/{pid}/thumbnail").status_code == 404
+    assert len(client.get("/v1/people-view/overview").json()["entries"]) == 1
+
+
+def test_verify_sweep_reports_and_drops_persons_with_no_croppable_face(client, tmp_path):
+    root = tmp_path / "lib"
+    root.mkdir()
+    _seed_two_faces(root, bad_first=False)
+    lib = _register(client, root)
+    key = client.get("/v1/people-view/overview").json()["entries"][0]["keys"][0]
+
+    res = client.post("/v1/people-view/verify", json={"keys": [key, "p:nope:1", "garbage"]})
+    assert res.status_code == 200 and res.json() == {"unusable": [key]}
+    assert client.get("/v1/people-view/overview").json()["entries"] == []
