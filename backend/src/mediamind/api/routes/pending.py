@@ -7,6 +7,9 @@ The user reviews each suggestion and either confirms (face gets assigned to
 the person), reassigns it to a different person, or rejects (face keeps
 whatever identity it already had — see `gate_face_match`'s docstring).
 
+Repeats are folded (`store.pending_repeats`): the same person's face in several frames of
+one video, or in copies of one file, is listed once, and a decision on it applies to all.
+
 Routes:
   GET  /v1/libraries/{id}/pending               -> list[PendingMatchOut]
   POST /v1/libraries/{id}/pending/decisions     -> {updated: int}
@@ -23,6 +26,7 @@ from mediamind.core.libraries import LibraryRegistry
 from mediamind.store import face_assignments
 from mediamind.store.bindings import placement_confirmed_pending_ids
 from mediamind.store.db import open_library_db
+from mediamind.store.pending_repeats import open_folded
 
 router = APIRouter(tags=["pending"])
 
@@ -63,6 +67,8 @@ def list_pending(library_id: str, request: Request):
         # ADR-0010: a file inside a person's bound folder is confirmed by
         # placement, so drop any pending match for that folder's own person.
         suppressed = placement_confirmed_pending_ids(conn)
+        folded = open_folded(conn)
+        face_of = {r["id"]: r["face_id"] for r in rows}
     finally:
         conn.close()
 
@@ -76,9 +82,10 @@ def list_pending(library_id: str, request: Request):
             path=r["path"],
             abs_path=str(library_root / r["path"]),
             kind=r["kind"],
+            folded_face_ids=[face_of[i] for i in folded[r["id"]] if i in face_of],
         )
         for r in rows
-        if r["id"] not in suppressed
+        if r["id"] not in suppressed and r["id"] in folded
     ]
 
 
@@ -99,7 +106,13 @@ def decide_pending(library_id: str, body: PendingDecisionsIn, request: Request):
     conn = _open_db(library_root)
     try:
         updated = 0
-        for item in body.decisions:
+        folded = open_folded(conn)
+        expanded = [
+            item.model_copy(update={"pending_id": pid})
+            for item in body.decisions
+            for pid in [item.pending_id, *folded.get(item.pending_id, [])]
+        ]
+        for item in expanded:
             if item.decision not in ("confirmed", "rejected"):
                 raise HTTPException(
                     status_code=422,

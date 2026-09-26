@@ -591,3 +591,54 @@ def test_organize_execute_person_scoped_plan_hash_drift_still_guarded(client, tm
         },
     )
     assert res.status_code == 409
+
+
+def test_pending_folds_repeat_frames_of_the_same_face(client, tmp_path):
+    """The same person's face in several frames of one file is one question; a different
+    face in that file suggested for the same person stays its own question."""
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    _make_library(lib_dir)
+    _seed_persons_db(lib_dir)
+    lib_id = _add_library(client, lib_dir)
+
+    conn = open_library_db(library_data_dir(lib_dir).parent)
+    pid = conn.execute("SELECT id FROM persons WHERE provider_id = ? ORDER BY id LIMIT 1", (PROVIDER,)).fetchone()["id"]
+    rename_person(conn, pid, "Eve")
+    first = conn.execute("SELECT id, file_id FROM faces WHERE person_id = ?", (pid,)).fetchone()
+
+    def add_face(frame_no: int, emb: list[float]) -> int:
+        cur = conn.execute(
+            "INSERT INTO faces (file_id, provider_id, frame_no, embedding) VALUES (?, ?, ?, ?)",
+            (first["file_id"], PROVIDER, frame_no, np.array(emb, dtype=np.float32).tobytes()),
+        )
+        return cur.lastrowid
+
+    same_later_frame = add_face(30, [0.99, 0.1, 0.0])
+    someone_else = add_face(60, [0.0, 1.0, 0.0])
+    ids = {}
+    for face_id, conf in ((first["id"], 0.9), (same_later_frame, 0.8), (someone_else, 0.7)):
+        ids[face_id] = conn.execute(
+            "INSERT INTO pending_matches (face_id, person_id, confidence) VALUES (?, ?, ?)", (face_id, pid, conf),
+        ).lastrowid
+    conn.commit()
+    conn.close()
+
+    listed = client.get(f"/v1/libraries/{lib_id}/pending").json()
+    assert [(m["face_id"], m["folded_face_ids"]) for m in listed] == [
+        (first["id"], [same_later_frame]),
+        (someone_else, []),
+    ]
+
+    res = client.post(
+        f"/v1/libraries/{lib_id}/pending/decisions",
+        json={"decisions": [{"pending_id": ids[first["id"]], "decision": "confirmed"}]},
+    )
+    assert res.json()["updated"] == 2
+
+    conn = open_library_db(library_data_dir(lib_dir).parent)
+    decision = {r["id"]: r["decision"] for r in conn.execute("SELECT id, decision FROM pending_matches")}
+    conn.close()
+    assert decision[ids[same_later_frame]] == "confirmed"
+    assert decision[ids[someone_else]] is None
+    assert [m["face_id"] for m in client.get(f"/v1/libraries/{lib_id}/pending").json()] == [someone_else]

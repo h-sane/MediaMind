@@ -36,6 +36,8 @@ class ScanIn(BaseModel):
     type: str = "dedupe"
     near_threshold: int = 5
     provider_id: str | None = None  # faces scans only
+    # faces scans only: find duplicate files first, in the same job (result["duplicates"])
+    with_duplicates: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +481,8 @@ class PendingMatchOut(BaseModel):
     path: str          # library-relative (posix) — the candidate's source file
     abs_path: str       # absolute on-disk path, so PendingReviewPage can browse it library-free
     kind: str
+    # The same person's face in other frames / copies of this file; decided together with this one.
+    folded_face_ids: list[int] = []
 
 
 class PendingDecisionItem(BaseModel):
