@@ -20,7 +20,7 @@ from typing import Callable
 from mediamind.config import LIBRARY_DATA_DIRNAME, library_index_db_path
 from mediamind.core.reachability import is_root_reachable
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # Two connections racing to create/migrate the SAME brand-new database file
 # (e.g. the always-on ingest worker and an HTTP request, opening within
@@ -369,6 +369,32 @@ def _v11_migration(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _v12_migration(conn: sqlite3.Connection) -> None:
+    """Schema v12: files a scan could not process (kept, with the reason, so the
+    user can see and label them by hand) and those hand labels. Both key on the
+    library-relative path because a file that never finished hashing has no
+    `files` row."""
+    conn.executescript("""
+CREATE TABLE IF NOT EXISTS unprocessed_files (
+    path TEXT PRIMARY KEY,           -- library-relative
+    kind TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    reason TEXT NOT NULL,            -- read_timeout | decode_timeout | read_error | decode_failed
+    message TEXT NOT NULL,           -- one plain sentence for the user
+    attempts INTEGER NOT NULL DEFAULT 1,
+    last_scan_id TEXT,
+    failed_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS manual_tags (
+    path TEXT NOT NULL,              -- library-relative
+    person_id INTEGER NOT NULL,
+    tagged_at REAL NOT NULL,
+    PRIMARY KEY (path, person_id)
+);
+""")
+    conn.commit()
+
+
 # v2 is a string; v3+ are callables (ALTER TABLE requires special handling).
 _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (2, _V2_ADDITIONS),
@@ -381,6 +407,7 @@ _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (9, _v9_migration),
     (10, _v10_migration),
     (11, _v11_migration),
+    (12, _v12_migration),
 ]
 
 

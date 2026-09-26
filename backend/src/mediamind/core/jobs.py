@@ -46,6 +46,8 @@ class Job:
     phase: str = ""
     done: int = 0
     total: int = 0
+    detail: str = ""  # what is being worked on right now (a file name), for the live progress display
+    stats: dict = field(default_factory=dict)  # running counters for the live progress display
     error: str = ""
     result: dict | None = None
     created_at: float = field(default_factory=time.time)
@@ -79,11 +81,17 @@ class JobContext:
     def cancelled(self) -> bool:
         return self._cancel.is_set()
 
-    def report_progress(self, done: int, total: int, phase: str = "") -> None:
+    def report_progress(
+        self, done: int, total: int, phase: str = "", detail: str | None = None, stats: dict | None = None
+    ) -> None:
         self._job.done = done
         self._job.total = total
         if phase:
             self._job.phase = phase
+        if detail is not None:
+            self._job.detail = detail
+        if stats is not None:
+            self._job.stats = dict(stats)
         now = time.monotonic()
         if now - self._last_emit >= self._INTERVAL:
             self._last_emit = now

@@ -29,7 +29,7 @@ class _StubCtx:
     def cancelled(self) -> bool:
         return False
 
-    def report_progress(self, done: int, total: int, phase: str = "") -> None:
+    def report_progress(self, done: int, total: int, phase: str = "", detail=None, stats=None) -> None:
         pass
 
 
@@ -65,6 +65,7 @@ def test_stalled_hash_is_skipped_not_hung(tmp_path: Path, conn, monkeypatch):
 
     monkeypatch.setattr(scan_mod, "hash_file", hanging_hash_file)
     monkeypatch.setattr(scan_mod, "DEFAULT_HASH_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(scan_mod, "SECOND_CHANCE_TIMEOUT_SECONDS", 0.2)  # the patient retry stalls too
 
     Image.new("RGB", (64, 64), (255, 0, 0)).save(tmp_path / "stalled.jpg")
     Image.new("RGB", (64, 64), (0, 0, 255)).save(tmp_path / "blue.jpg")
@@ -77,6 +78,38 @@ def test_stalled_hash_is_skipped_not_hung(tmp_path: Path, conn, monkeypatch):
     assert summary["faces"] == 1
     row = conn.execute("SELECT COUNT(*) FROM files WHERE path = ?", ("stalled.jpg",)).fetchone()[0]
     assert row == 0, "a timed-out hash must not upsert a files row"
+    # It is not silently dropped: it is kept, with the reason, for the user to see.
+    kept = conn.execute("SELECT path, reason, attempts FROM unprocessed_files").fetchall()
+    assert [(r["path"], r["reason"], r["attempts"]) for r in kept] == [("stalled.jpg", "read_timeout", 1)]
+
+
+def test_a_file_that_only_stalled_once_is_recovered_by_the_second_chance(tmp_path: Path, conn, monkeypatch):
+    """The busy first pass can time a healthy-but-slow file out; the patient retry
+    (read alone, longer budget) picks it up, so it is scanned and not listed."""
+    import time
+
+    import mediamind.core.faces.scan as scan_mod
+
+    real_hash_file = scan_mod.hash_file
+    calls = {"stalled.jpg": 0}
+
+    def flaky_hash_file(path: Path) -> str:
+        if path.name in calls:
+            calls[path.name] += 1
+            if calls[path.name] == 1:
+                time.sleep(3)  # longer than the first-pass timeout below
+        return real_hash_file(path)
+
+    monkeypatch.setattr(scan_mod, "hash_file", flaky_hash_file)
+    monkeypatch.setattr(scan_mod, "DEFAULT_HASH_TIMEOUT_SECONDS", 0.2)
+
+    Image.new("RGB", (64, 64), (255, 0, 0)).save(tmp_path / "stalled.jpg")
+    Image.new("RGB", (64, 64), (0, 0, 255)).save(tmp_path / "blue.jpg")
+
+    summary = _run(tmp_path)
+
+    assert summary["faces"] == 2 and summary["unreadable_files"] == 0
+    assert conn.execute("SELECT COUNT(*) FROM unprocessed_files").fetchone()[0] == 0
 
 
 def test_stalled_video_decode_is_skipped_not_hung(tmp_path: Path, conn, monkeypatch):
@@ -97,6 +130,7 @@ def test_stalled_video_decode_is_skipped_not_hung(tmp_path: Path, conn, monkeypa
 
     monkeypatch.setattr(scan_mod, "extract_file_faces", hanging_extract)
     monkeypatch.setattr(scan_mod, "MAX_FILE_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(scan_mod, "SECOND_CHANCE_TIMEOUT_SECONDS", 0.2)
 
     (tmp_path / "stalled.mp4").write_bytes(b"not a real video")
     Image.new("RGB", (64, 64), (0, 0, 255)).save(tmp_path / "blue.jpg")
@@ -203,7 +237,7 @@ def test_slow_video_deferred_to_second_pass_with_interim_persist(tmp_path: Path,
     phases: list[str] = []
 
     class _RecordingCtx(_StubCtx):
-        def report_progress(self, done: int, total: int, phase: str = "") -> None:
+        def report_progress(self, done: int, total: int, phase: str = "", detail=None, stats=None) -> None:
             if phase:
                 phases.append(phase)
 
@@ -237,3 +271,41 @@ def test_stale_faces_pruned_after_external_delete(tmp_path: Path, conn):
     assert conn.execute("SELECT COUNT(*) FROM faces WHERE file_id = ?", (red_id,)).fetchone()[0] == 0
     blue_id = conn.execute("SELECT id FROM files WHERE path = ?", ("blue.jpg",)).fetchone()["id"]
     assert conn.execute("SELECT COUNT(*) FROM faces WHERE file_id = ?", (blue_id,)).fetchone()[0] == 1
+
+
+def test_big_videos_are_fingerprinted_from_slices_not_read_whole(tmp_path: Path, conn, monkeypatch):
+    """Reading every byte of an hour of video to name it is what timed big videos out
+    on a slow drive. A big video gets a sampled fingerprint; images keep the full hash."""
+    import mediamind.core.faces.scan as scan_mod
+    from mediamind.core.hashing import SAMPLED_PREFIX, hash_file, sampled_hash
+
+    (tmp_path / "long.mp4").write_bytes(bytes(range(256)) * 4096)  # 1 MiB, not a real video
+    Image.new("RGB", (64, 64), (255, 0, 0)).save(tmp_path / "a.jpg")
+    monkeypatch.setattr(scan_mod, "SAMPLED_MIN_BYTES", 1024)
+    seen: list[str] = []
+    real = scan_mod.hash_file
+    monkeypatch.setattr(scan_mod, "hash_file", lambda p: (seen.append(p.name), real(p))[1])
+
+    _run(tmp_path)
+
+    assert seen == ["a.jpg"], "only the image was read whole"
+    hashes = dict(conn.execute("SELECT path, content_hash FROM files").fetchall())
+    assert hashes["long.mp4"].startswith(SAMPLED_PREFIX) and not hashes["a.jpg"].startswith(SAMPLED_PREFIX)
+    assert hashes["long.mp4"] == sampled_hash(tmp_path / "long.mp4", 1 << 20)
+    assert hashes["a.jpg"] == hash_file(tmp_path / "a.jpg")
+
+
+def test_duplicate_finder_never_trusts_a_sampled_fingerprint(tmp_path: Path, conn):
+    from mediamind.core.ingest import lookup_file_cache
+    from mediamind.core.scanner import ScannedFile
+    from mediamind.store.persons import upsert_file
+
+    f = tmp_path / "v.mp4"
+    f.write_bytes(b"x" * 100)
+    st = f.stat()
+    upsert_file(conn, "v.mp4", "video", st.st_size, st.st_mtime, "s1:abc", True)
+    conn.commit()
+    scanned = ScannedFile(path=f, kind="video", size=st.st_size, mtime=st.st_mtime)
+
+    assert lookup_file_cache(conn, tmp_path, scanned) is None
+    assert lookup_file_cache(conn, tmp_path, scanned, accept_sampled=True).content_hash == "s1:abc"

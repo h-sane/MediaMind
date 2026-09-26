@@ -30,7 +30,7 @@ from pathlib import Path
 import numpy as np
 
 from mediamind.core.faces.engine import extract_file_faces
-from mediamind.core.hashing import hash_file
+from mediamind.core.hashing import hash_file, is_sampled
 from mediamind.core.scanner import KIND_GIF, KIND_IMAGE, KIND_VIDEO, ScannedFile, kind_of
 from mediamind.core.thumbnails import media_thumbnail_jpeg
 from mediamind.providers.base import FaceProvider
@@ -93,7 +93,9 @@ def _hex_to_imagehash(hex_str: str):
         return None
 
 
-def lookup_file_cache(conn: sqlite3.Connection, library_root: Path, scanned: ScannedFile) -> _HashCache | None:
+def lookup_file_cache(
+    conn: sqlite3.Connection, library_root: Path, scanned: ScannedFile, *, accept_sampled: bool = False
+) -> _HashCache | None:
     """DB-read-only cache check: unchanged size+mtime and a real stored
     content_hash (and, for images, a stored phash) means the file's bytes
     haven't changed since it was last hashed — safe to reuse without
@@ -116,6 +118,9 @@ def lookup_file_cache(conn: sqlite3.Connection, library_root: Path, scanned: Sca
         and row["size"] == scanned.size
         and row["mtime"] == scanned.mtime
         and row["content_hash"]
+        # A sampled fingerprint (big videos, face scan only) is not proof of identical
+        # bytes, so callers that treat equal hashes as exact duplicates must not get it.
+        and (accept_sampled or not is_sampled(row["content_hash"]))
         and (scanned.kind != KIND_IMAGE or row["phash"] is not None)
     ):
         return _HashCache(file_id=row["id"], content_hash=row["content_hash"], phash=row["phash"], was_cached=True)

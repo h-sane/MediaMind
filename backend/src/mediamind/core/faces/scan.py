@@ -26,7 +26,7 @@ from mediamind.core.faces.engine import (
     MediaFaces,
     extract_file_faces,
 )
-from mediamind.core.hashing import hash_file
+from mediamind.core.hashing import SAMPLED_MIN_BYTES, hash_file, sampled_hash
 from mediamind.core.ingest import lookup_file_cache, store_file_cache
 from mediamind.core.jobs import JobContext
 from mediamind.core.scanner import KIND_VIDEO, ScannedFile, scan_folder
@@ -35,6 +35,7 @@ from mediamind.store.db import open_library_db
 from mediamind.store.embeddings import CachedFace, get_cached_faces, put_cached_faces
 from mediamind.store.persons import FileFaces, file_ids_with_faces, persist_face_scan, upsert_file
 from mediamind.store.rejected_faces import is_rejected, regions_for
+from mediamind.store.unprocessed import replace_unprocessed
 
 logger = logging.getLogger("mediamind.faces.scan")
 
@@ -47,6 +48,20 @@ logger = logging.getLogger("mediamind.faces.scan")
 # MAX_FILE_TIMEOUT_SECONDS so a single stalled read can't freeze the scan.
 DEFAULT_HASH_TIMEOUT_SECONDS = 30.0
 MAX_LEAKED_STALL_THREADS = 64
+
+# A file that timed out in the busy first pass (many reads competing for one slow
+# drive) gets one more, patient attempt at the end: read alone, with this per-file
+# budget, inside an overall budget so a wedged drive cannot hold the scan for hours.
+SECOND_CHANCE_TIMEOUT_SECONDS = 600.0
+SECOND_CHANCE_TOTAL_BUDGET_SECONDS = 5400.0
+
+# Plain-language reasons shown to the user next to a file that was not scanned.
+_REASONS = {
+    "read_timeout": "The drive did not deliver this file in time.",
+    "decode_timeout": "Opening this video and sampling frames took too long.",
+    "read_error": "This file could not be read.",
+    "decode_failed": "This file could not be decoded as an image or video.",
+}
 
 # Hashing is I/O-bound (hash_file releases the GIL during reads), so
 # oversubscribing cores pays off — mirrors dedupe.py's find_duplicates()
@@ -107,13 +122,13 @@ def make_face_scan_runner(
         def on_walk(n: int) -> None:
             if ctx.cancelled():
                 return
-            ctx.report_progress(n, 0, "scanning")
+            ctx.report_progress(n, 0, "scanning", detail=f"{n} files found so far")
             _throttled_log("Face scan: %d files found so far…", n)
 
         def on_stat(done: int, total_walked: int) -> None:
             if ctx.cancelled():
                 return
-            ctx.report_progress(done, total_walked, "reading")
+            ctx.report_progress(done, total_walked, "reading", detail=f"{done} of {total_walked} files listed")
             _throttled_log("Face scan: read details for %d/%d files…", done, total_walked)
 
         scanned_files = list(
@@ -146,16 +161,32 @@ def make_face_scan_runner(
             file_faces_list: list[FileFaces] = []
             no_face_files = 0
             unreadable_files = 0
+            # Live counters and the current file, shown to the user as the scan runs.
+            stats = {"files": total, "cached": 0, "hashed": 0, "detected": 0, "faces": 0, "no_face": 0,
+                     "timed_out": 0, "unreadable": 0, "recovered": 0}
+            # Every file this run could not process, by its index in file_ids:
+            # (file, reason code). Kept, never dropped — see store/unprocessed.py.
+            failures: dict[int, tuple[ScannedFile, str]] = {}
+
+            def progress(done: int, total_: int, phase: str, detail: str | None = None) -> None:
+                ctx.report_progress(done, total_, phase, detail=detail, stats=stats)
+
+            def _fingerprint(scanned: ScannedFile) -> str:
+                """Whole-file hash, except big videos: reading every byte of an hour of
+                video from a slow drive just to name it is what timed them out (the
+                face detection later only samples a few frames anyway)."""
+                if scanned.kind == KIND_VIDEO and scanned.size >= SAMPLED_MIN_BYTES:
+                    return sampled_hash(scanned.path, scanned.size)
+                return hash_file(scanned.path)
 
             def _hash_one(scanned: ScannedFile) -> object | None:
                 """Just the I/O-bound read+hash — no DB access, so this is
                 safe to run from a worker thread. Returns TIMED_OUT, a
                 content-hash string, or None (stat/hash failure)."""
                 try:
-                    stat = scanned.path.stat()
                     return run_with_timeout(
-                        lambda p=scanned.path: hash_file(p),
-                        hash_timeout_for(stat.st_size, floor=DEFAULT_HASH_TIMEOUT_SECONDS),
+                        lambda: _fingerprint(scanned),
+                        hash_timeout_for(scanned.size, floor=DEFAULT_HASH_TIMEOUT_SECONDS),
                         stall_limiter,
                     )
                 except Exception:
@@ -184,11 +215,12 @@ def make_face_scan_runner(
                 cached_by_idx: dict[int, object] = {}
                 to_hash: list[int] = []
                 for i, scanned in enumerate(batch):
-                    cached = lookup_file_cache(conn, library_root, scanned)
+                    cached = lookup_file_cache(conn, library_root, scanned, accept_sampled=True)
                     if cached is not None:
                         cached_by_idx[i] = cached
                     else:
                         to_hash.append(i)
+                stats["cached"] += len(cached_by_idx)
 
                 hash_results: dict[int, object] = {}
                 if to_hash:
@@ -198,13 +230,15 @@ def make_face_scan_runner(
                         for fut in as_completed(futures):
                             hash_results[futures[fut]] = fut.result()
                             done += 1
-                            ctx.report_progress(base + len(cached_by_idx) + done, total, "hashing")
+                            stats["hashed"] += 1
+                            progress(base + len(cached_by_idx) + done, total, "hashing",
+                                     batch[futures[fut]].path.name)
                             if ctx.cancelled():
                                 for pending in futures:
                                     pending.cancel()
                                 return False
                 elif cached_by_idx:
-                    ctx.report_progress(base + len(cached_by_idx), total, "hashing")
+                    progress(base + len(cached_by_idx), total, "hashing")
 
                 for i, scanned in enumerate(batch):
                     if i in cached_by_idx:
@@ -220,10 +254,13 @@ def make_face_scan_runner(
                             scanned.path,
                             hash_timeout_for(scanned.size, floor=DEFAULT_HASH_TIMEOUT_SECONDS),
                         )
+                        stats["timed_out"] += 1
+                        failures[base + i] = (scanned, "read_timeout")
                         file_ids.append(None)
                         content_hashes.append(None)
                         continue
                     if outcome is None:
+                        failures[base + i] = (scanned, "read_error")
                         file_ids.append(None)
                         content_hashes.append(None)
                         continue
@@ -233,107 +270,146 @@ def make_face_scan_runner(
                         file_ids.append(fid)
                         content_hashes.append(content_hash)
                     except Exception:
+                        failures[base + i] = (scanned, "read_error")
                         file_ids.append(None)
                         content_hashes.append(None)
                 return True
+
+            def detect_one(i: int, scanned: ScannedFile, extract_timeout: float) -> FileFaces:
+                """Faces for the file at index `i` (cache first). Updates the
+                counters and the failure list; the caller stores the result."""
+                nonlocal provider, no_face_files, unreadable_files
+                fid = file_ids[i]
+                content_hash = content_hashes[i]
+                rel = scanned.path.relative_to(library_root).as_posix()
+
+                if fid is None or content_hash is None:
+                    unreadable_files += 1
+                    stats["unreadable"] += 1
+                    return FileFaces(file_id=fid or -1, content_hash="", decoded_ok=False, faces=[])
+
+                cached = get_cached_faces(conn, content_hash, provider_id)
+                if cached is not None:
+                    regions = regions_for(conn, content_hash, provider_id)
+                    kept = [cf for cf in cached if not is_rejected(regions, cf.bbox)]
+                    if not kept:
+                        no_face_files += 1
+                        stats["no_face"] += 1
+                    stats["faces"] += len(kept)
+                    return FileFaces(file_id=fid, content_hash=content_hash, decoded_ok=True, faces=kept)
+
+                # cache miss: run provider
+                if provider is None:
+                    provider = provider_factory()
+                    provider.prepare()
+
+                # extract_file_faces() decodes the file (cv2.VideoCapture
+                # for video has no timeout of its own — a corrupted/
+                # stalled stream can retry internally for a very long
+                # time) and runs inference, all with no cooperative
+                # cancellation point. Same guard as hashing above, so
+                # one bad video can't stall the rest of the scan.
+                outcome = run_with_timeout(
+                    lambda scanned=scanned: extract_file_faces(
+                        scanned, provider,
+                        video_frames=video_frames,
+                        gif_frames=gif_frames,
+                        min_face_size=min_face_size,
+                    ),
+                    extract_timeout,
+                    stall_limiter,
+                )
+                if outcome is TIMED_OUT:
+                    logger.warning(
+                        "face scan: skipping %s - timed out after %.0fs extracting faces "
+                        "(likely a corrupted/stalled video read)",
+                        scanned.path, extract_timeout,
+                    )
+                    stats["timed_out"] += 1
+                    failures[i] = (scanned, "decode_timeout")
+                    mf = MediaFaces(file=scanned, decoded_ok=False)
+                else:
+                    mf = outcome
+                    if not mf.decoded_ok:
+                        failures[i] = (scanned, "decode_failed")
+                cached_faces: list[CachedFace] = [
+                    CachedFace(frame_no=fr.frame_no, bbox=fr.bbox, embedding=fr.embedding)
+                    for fr in mf.faces
+                ]
+                # Only cache successful decodes — failures should be retried on the next scan.
+                if mf.decoded_ok:
+                    put_cached_faces(conn, content_hash, provider_id, cached_faces)
+                    stats["detected"] += 1
+                # update decoded_ok in the files row
+                try:
+                    # size/mtime as listed (a fresh stat is another round trip on a network drive)
+                    upsert_file(conn, rel, scanned.kind, scanned.size, scanned.mtime, content_hash, mf.decoded_ok)
+                except Exception:
+                    pass
+                conn.commit()
+
+                regions = regions_for(conn, content_hash, provider_id)
+                kept = [cf for cf in cached_faces if not is_rejected(regions, cf.bbox)]
+                stats["faces"] += len(kept)
+                if not mf.decoded_ok:
+                    unreadable_files += 1
+                    stats["unreadable"] += 1
+                elif not kept:
+                    no_face_files += 1
+                    stats["no_face"] += 1
+                return FileFaces(file_id=fid, content_hash=content_hash, decoded_ok=mf.decoded_ok, faces=kept)
 
             def detect_batch(batch: list[ScannedFile], start_offset: int) -> bool:
                 """Detect faces (cache-first) for one batch, appending to
                 file_faces_list. `start_offset` locates the batch's entries in
                 file_ids/content_hashes. Returns False if cancelled partway through."""
-                nonlocal provider, no_face_files, unreadable_files
                 for local_i, scanned in enumerate(batch):
                     if ctx.cancelled():
                         return False
-                    i = start_offset + local_i
-                    fid = file_ids[i]
-                    content_hash = content_hashes[i]
-                    rel = scanned.path.relative_to(library_root).as_posix()
-
-                    if fid is None or content_hash is None:
-                        unreadable_files += 1
-                        file_faces_list.append(
-                            FileFaces(file_id=fid or -1, content_hash="",
-                                      decoded_ok=False, faces=[])
-                        )
-                        ctx.report_progress(len(file_faces_list), total, "detecting")
-                        continue
-
-                    cached = get_cached_faces(conn, content_hash, provider_id)
-                    if cached is not None:
-                        regions = regions_for(conn, content_hash, provider_id)
-                        kept = [cf for cf in cached if not is_rejected(regions, cf.bbox)]
-                        file_faces_list.append(
-                            FileFaces(file_id=fid, content_hash=content_hash,
-                                      decoded_ok=True, faces=kept)
-                        )
-                        if not kept:
-                            no_face_files += 1
-                    else:
-                        # cache miss: run provider
-                        if provider is None:
-                            provider = provider_factory()
-                            provider.prepare()
-
-                        # extract_file_faces() decodes the file (cv2.VideoCapture
-                        # for video has no timeout of its own — a corrupted/
-                        # stalled stream can retry internally for a very long
-                        # time) and runs inference, all with no cooperative
-                        # cancellation point. Same guard as hashing above, so
-                        # one bad video can't stall the rest of the scan.
-                        outcome = run_with_timeout(
-                            lambda scanned=scanned: extract_file_faces(
-                                scanned, provider,
-                                video_frames=video_frames,
-                                gif_frames=gif_frames,
-                                min_face_size=min_face_size,
-                            ),
-                            MAX_FILE_TIMEOUT_SECONDS,
-                            stall_limiter,
-                        )
-                        if outcome is TIMED_OUT:
-                            logger.warning(
-                                "face scan: skipping %s - timed out after %.0fs extracting faces "
-                                "(likely a corrupted/stalled video read)",
-                                scanned.path, MAX_FILE_TIMEOUT_SECONDS,
-                            )
-                            mf = MediaFaces(file=scanned, decoded_ok=False)
-                        else:
-                            mf = outcome
-                        cached_faces: list[CachedFace] = [
-                            CachedFace(
-                                frame_no=fr.frame_no,
-                                bbox=fr.bbox,
-                                embedding=fr.embedding,
-                            )
-                            for fr in mf.faces
-                        ]
-                        # Only cache successful decodes — failures should be retried on the next scan.
-                        if mf.decoded_ok:
-                            put_cached_faces(conn, content_hash, provider_id, cached_faces)
-                        # update decoded_ok in the files row
-                        try:
-                            stat = scanned.path.stat()
-                            upsert_file(conn, rel, scanned.kind,
-                                        stat.st_size, stat.st_mtime,
-                                        content_hash, mf.decoded_ok)
-                        except Exception:
-                            pass
-                        conn.commit()
-
-                        regions = regions_for(conn, content_hash, provider_id)
-                        kept = [cf for cf in cached_faces if not is_rejected(regions, cf.bbox)]
-                        file_faces_list.append(
-                            FileFaces(file_id=fid, content_hash=content_hash,
-                                      decoded_ok=mf.decoded_ok, faces=kept)
-                        )
-                        if not mf.decoded_ok:
-                            unreadable_files += 1
-                        elif not kept:
-                            no_face_files += 1
-
-                    ctx.report_progress(len(file_faces_list), total, "detecting")
+                    progress(len(file_faces_list), total, "detecting", scanned.path.name)
+                    file_faces_list.append(detect_one(start_offset + local_i, scanned, MAX_FILE_TIMEOUT_SECONDS))
+                    progress(len(file_faces_list), total, "detecting", scanned.path.name)
                 return True
+
+            def second_chance() -> bool:
+                """One patient, one-at-a-time retry of the files that only timed
+                out (drive too slow while many reads competed). Returns False if
+                cancelled."""
+                retry = [(i, sc) for i, (sc, code) in sorted(failures.items())
+                         if code in ("read_timeout", "decode_timeout")]
+                started = time.monotonic()
+                for n, (i, scanned) in enumerate(retry):
+                    if ctx.cancelled():
+                        return False
+                    if time.monotonic() - started > SECOND_CHANCE_TOTAL_BUDGET_SECONDS:
+                        logger.warning("face scan: second-chance time budget used up; %d files stay unprocessed",
+                                       len(retry) - n)
+                        break
+                    progress(n, len(retry), "retrying", scanned.path.name)
+                    if file_ids[i] is None or content_hashes[i] is None:
+                        outcome = run_with_timeout(
+                            lambda: _fingerprint(scanned), SECOND_CHANCE_TIMEOUT_SECONDS, stall_limiter
+                        )
+                        if outcome is TIMED_OUT or outcome is None:
+                            continue  # still unreadable — stays in the unprocessed list
+                        try:
+                            file_ids[i] = store_file_cache(conn, library_root, scanned, outcome, None)  # type: ignore[arg-type]
+                            content_hashes[i] = outcome  # type: ignore[assignment]
+                        except Exception:
+                            continue
+                    del failures[i]
+                    nonlocal_unreadable_undo()
+                    file_faces_list[i] = detect_one(i, scanned, SECOND_CHANCE_TIMEOUT_SECONDS)
+                    if i not in failures:
+                        stats["recovered"] += 1
+                return True
+
+            def nonlocal_unreadable_undo() -> None:
+                """A retried file was counted unreadable by its first attempt;
+                detect_one() counts it again only if it fails again."""
+                nonlocal unreadable_files
+                unreadable_files -= 1
+                stats["unreadable"] -= 1
 
             def cluster_and_persist(files_done: int) -> dict:
                 """Cluster whatever's in file_faces_list so far and persist it.
@@ -405,8 +481,25 @@ def make_face_scan_runner(
                 if not detect_batch(slow_files, len(fast_files)):
                     return {}
 
+            if not second_chance():
+                return {}
+
             if ctx.cancelled():
                 return {}
+
+            # Keep every file that could not be processed, with the reason, so the
+            # user can see it in the folder view and label it by hand.
+            try:
+                replace_unprocessed(
+                    conn,
+                    [
+                        (sc.path.relative_to(library_root).as_posix(), sc.kind, sc.size, code, _REASONS[code])
+                        for sc, code in failures.values()
+                    ],
+                    ctx.job_id,
+                )
+            except Exception:
+                logger.exception("face scan: could not record the unprocessed files")
 
             # Prune stale faces for paths no longer on disk (external moves/
             # deletes) — done once, after both passes, using every file seen

@@ -19,3 +19,30 @@ def hash_file(path: Path) -> str:
         while chunk := fh.read(_CHUNK):
             h.update(chunk)
     return h.hexdigest()
+
+
+# Fingerprinting a multi-GB video byte by byte means downloading all of it from a
+# slow or remote drive before a single frame is looked at (the 90 s cap then fails
+# it). A sampled fingerprint reads a few slices instead. It identifies a video for
+# the face cache; it is NOT proof two files are identical (see SAMPLED_PREFIX).
+SAMPLED_MIN_BYTES = 64 * 1024 * 1024
+SAMPLED_PREFIX = "s1:"
+_SLICE = 1 << 20
+_SLICE_POSITIONS = (0.0, 0.25, 0.5, 0.75)
+
+
+def sampled_hash(path: Path, size: int) -> str:
+    """BLAKE2b over the file size plus five 1 MiB slices (start, quarter points,
+    end). Prefixed so nothing mistakes it for a whole-file hash."""
+    h = hashlib.blake2b(digest_size=32)
+    h.update(size.to_bytes(8, "little"))
+    offsets = [int(size * f) for f in _SLICE_POSITIONS] + [max(0, size - _SLICE)]
+    with open(path, "rb") as fh:
+        for off in offsets:
+            fh.seek(off)
+            h.update(fh.read(_SLICE))
+    return SAMPLED_PREFIX + h.hexdigest()
+
+
+def is_sampled(content_hash: str | None) -> bool:
+    return bool(content_hash) and content_hash.startswith(SAMPLED_PREFIX)
