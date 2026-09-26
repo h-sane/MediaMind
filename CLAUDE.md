@@ -105,6 +105,22 @@ Three rules bind every UI change:
   avoid generic AI-default patterns in everything the reference doesn't pin
   down.
 
+- **Own the front end completely (non-negotiable, set 2026-09-26).** Hussain
+  focuses on backend/functionality and delegates *all* UI craft to Claude; a UI
+  that ships clipped, cramped or half-checked is a failure, however correct the
+  code. For every UI change: (1) design against real constraints first — the
+  container's fixed/first-item sizing (WinUI `GridView` sizes every cell from the
+  first one), narrow widths, truncation, and every state (unnamed, duplicate,
+  error, hover, empty, loading, long names); (2) after building, launch the
+  running app and **measure** it — UI Automation bounding rectangles (control
+  inside its card, nothing clipped or overlapping, dialogs open and fit the
+  window; privacy-safe, numbers only) and/or screenshots *inside the `test`
+  folder only*; (3) exercise each new control (open dialogs, cancel out) and read
+  the log monitor; (4) the final report states exactly what was verified and how,
+  and anything not checked. Never say "ready" for UI you have not looked at.
+  Re-check after every follow-up edit. Do not wait to be told about size, fit,
+  spacing, truncation or state coverage.
+
 ## Repository map
 
 | Path | Role |
