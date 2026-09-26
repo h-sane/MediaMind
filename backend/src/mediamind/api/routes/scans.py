@@ -47,6 +47,8 @@ def _snapshot(job) -> JobSnapshot:
         result=job.result,
         created_at=job.created_at,
         finished_at=job.finished_at,
+        detail=job.detail,
+        stats=job.stats,
     )
 
 

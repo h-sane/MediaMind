@@ -80,7 +80,7 @@ def test_stalled_file_stat_is_skipped_not_hung(media_library: Path, monkeypatch)
 
     monkeypatch.setattr(os, "stat", slow_stat)
 
-    found = list(scan_folder(media_library, stat_timeout_seconds=0.2))
+    found = list(scan_folder(media_library, stat_timeout_seconds=0.2, use_listing_metadata=False))
     names = {f.path.name for f in found}
     assert "red3.jpg" not in names
     assert len(found) == 8  # everything else still returned promptly
@@ -131,3 +131,22 @@ def test_stalled_directory_listing_is_skipped_not_hung(media_library: Path, monk
     names = {f.path.name for f in found}
     assert "red3.jpg" not in names  # inside the stalled directory
     assert len(found) == 8  # everything outside it still returned promptly
+
+
+def test_size_and_mtime_come_from_the_directory_listing_not_a_request_per_file(media_library: Path, monkeypatch):
+    """On a network/WebDAV mount the per-file stat cost ~1.3 s each (23 min for
+    1063 files) although the listing already carries size and mtime."""
+    import os
+
+    real_stat = os.stat
+    inside = os.fspath(media_library.resolve())
+
+    def guarded_stat(path, *args, **kwargs):
+        if os.fspath(path).startswith(inside) and os.fspath(path) != inside:
+            raise AssertionError(f"per-file os.stat called for {path}")
+        return real_stat(path, *args, **kwargs)
+
+    reference = {f.path: (f.size, f.mtime) for f in scan_folder(media_library)}
+    monkeypatch.setattr(os, "stat", guarded_stat)
+    found = list(scan_folder(media_library))
+    assert {f.path: (f.size, f.mtime) for f in found} == reference and len(found) == 9

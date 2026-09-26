@@ -206,3 +206,28 @@ def test_verify_sweep_reports_and_drops_persons_with_no_croppable_face(client, t
     res = client.post("/v1/people-view/verify", json={"keys": [key, "p:nope:1", "garbage"]})
     assert res.status_code == 200 and res.json() == {"unusable": [key]}
     assert client.get("/v1/people-view/overview").json()["entries"] == []
+
+
+def test_unprocessed_files_are_listed_and_can_be_tagged_to_a_person(client, tmp_path):
+    from mediamind.store.unprocessed import replace_unprocessed
+
+    lib = _library(client, tmp_path / "lib", "Nayeon")
+    root = tmp_path / "lib"
+    conn = open_library_db(root)
+    replace_unprocessed(conn, [("sub/long.mp4", "video", 5_000_000_000, "read_timeout", "The drive did not deliver this file in time.")], "s9")
+    pid = conn.execute("SELECT id FROM persons LIMIT 1").fetchone()["id"]
+    conn.close()
+
+    rows = client.get(f"/v1/libraries/{lib}/unprocessed").json()
+    assert [(r["path"], r["reason"], r["person_ids"]) for r in rows] == [("sub/long.mp4", "read_timeout", [])]
+    assert client.get(f"/v1/libraries/{lib}/unprocessed", params={"under": "sub"}).json()[0]["path"] == "sub/long.mp4"
+    assert client.get(f"/v1/libraries/{lib}/unprocessed", params={"under": "other"}).json() == []
+
+    assert client.post(f"/v1/libraries/{lib}/unprocessed/tag", json={"path": "sub/long.mp4", "person_id": pid}).status_code == 200
+    assert client.get(f"/v1/libraries/{lib}/unprocessed").json()[0]["person_ids"] == [pid]
+    media = client.get(f"/v1/libraries/{lib}/persons/{pid}/media").json()
+    assert [m["path"] for m in media if m["via_manual"]] == ["sub/long.mp4"]
+
+    assert client.post(f"/v1/libraries/{lib}/unprocessed/tag", json={"path": "x.mp4", "person_id": 9999}).status_code == 404
+    client.post(f"/v1/libraries/{lib}/unprocessed/untag", json={"path": "sub/long.mp4", "person_id": pid})
+    assert client.get(f"/v1/libraries/{lib}/unprocessed").json()[0]["person_ids"] == []

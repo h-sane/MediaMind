@@ -28,6 +28,8 @@ class JobSnapshot(BaseModel):
     created_at: float
     finished_at: float | None
     triggered_by: str = "user"  # "user" | "watcher" (Phase 8 auto-scan)
+    detail: str = ""  # what is being worked on right now
+    stats: dict[str, int] = {}  # running counters for the live progress display
 
 
 class ScanIn(BaseModel):
@@ -385,6 +387,25 @@ class PersonMediaItemOut(BaseModel):
     face_id: int | None = None
     bbox: tuple[float, float, float, float] | None = None
     via_placement: bool = False
+    # Labelled with this person by hand (a file the scan could not process).
+    via_manual: bool = False
+
+
+class UnprocessedOut(BaseModel):
+    path: str          # library-relative (posix)
+    abs_path: str
+    kind: str
+    size: int
+    reason: str        # read_timeout | decode_timeout | read_error | decode_failed
+    message: str       # one plain sentence for the user
+    attempts: int
+    failed_at: float
+    person_ids: list[int]  # hand labels (library-local person ids)
+
+
+class UnprocessedTagIn(BaseModel):
+    path: str
+    person_id: int
 
 
 # ---------------------------------------------------------------------------

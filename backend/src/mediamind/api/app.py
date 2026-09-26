@@ -226,6 +226,7 @@ def create_app(
     from mediamind.api.routes import duplicate_flags
     from mediamind.api.routes import global_people
     from mediamind.api.routes import people_view
+    from mediamind.api.routes import unprocessed
 
     app.include_router(libraries.router, prefix="/v1")
     app.include_router(files.router, prefix="/v1")
@@ -244,5 +245,6 @@ def create_app(
     app.include_router(duplicate_flags.router, prefix="/v1")
     app.include_router(global_people.router, prefix="/v1")
     app.include_router(people_view.router, prefix="/v1")
+    app.include_router(unprocessed.router, prefix="/v1")
 
     return app

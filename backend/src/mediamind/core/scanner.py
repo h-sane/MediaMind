@@ -130,6 +130,7 @@ def scan_folder(
     walk_timeout_seconds: float = DEFAULT_WALK_TIMEOUT_SECONDS,
     stat_timeout_seconds: float = DEFAULT_STAT_TIMEOUT_SECONDS,
     should_cancel: Callable[[], bool] | None = None,
+    use_listing_metadata: bool = True,
 ) -> Iterator[ScannedFile]:
     """Yield every file under `root`, classified, in stable sorted order.
 
@@ -172,6 +173,11 @@ def scan_folder(
     """
     root = root.expanduser().resolve()
     collected: list[Path] = []
+    # Size/mtime that arrived with the directory listing itself (on Windows a
+    # DirEntry already carries them, no extra request). Only files missing here
+    # fall back to the guarded per-file stat below — on a network/WebDAV mount
+    # that per-file request cost ~1.3 s each (23 min for 1063 files).
+    listed: dict[Path, tuple[int, float]] = {}
     found = 0
     limiter = threading.Semaphore(MAX_LEAKED_STALL_THREADS)
 
@@ -179,13 +185,24 @@ def scan_folder(
         if on_walk is not None and found % 200 == 0:
             on_walk(found)
 
+    def _collect(entry: os.DirEntry) -> None:
+        nonlocal found
+        path = Path(entry.path)
+        collected.append(path)
+        try:
+            if use_listing_metadata and entry.is_file(follow_symlinks=False):  # symlinks/dirs take the guarded path below
+                st = entry.stat(follow_symlinks=False)
+                listed[path] = (st.st_size, st.st_mtime)
+        except OSError:
+            pass
+        found += 1
+        _emit_progress()
+
     if not recursive:
         for entry in _list_dir(root, walk_timeout_seconds, limiter):
             if entry.name in exclude_dirs or is_noise_dir(entry.name):
                 continue
-            collected.append(Path(entry.path))
-            found += 1
-            _emit_progress()
+            _collect(entry)
     else:
         stack = [root]
         while stack:
@@ -209,9 +226,7 @@ def scan_folder(
                         continue  # symlink/junction to a directory — pruned, never recursed
                     subdirs.append(Path(entry.path))
                 else:
-                    collected.append(Path(entry.path))
-                    found += 1
-                    _emit_progress()
+                    _collect(entry)
             stack.extend(subdirs)
 
     if should_cancel is not None and should_cancel():
@@ -224,6 +239,13 @@ def scan_folder(
     for i, path in enumerate(sorted(collected), 1):
         if should_cancel is not None and should_cancel():
             return
+
+        if path in listed:
+            if on_stat is not None:
+                on_stat(i, total)
+            size, mtime = listed[path]
+            yield ScannedFile(path=path, kind=kind_of(path), size=size, mtime=mtime)
+            continue
 
         def _read(path: Path = path) -> tuple[int, float] | None:
             if not path.is_file():

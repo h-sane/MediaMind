@@ -418,7 +418,7 @@ class _StubCtx:
     def cancelled(self) -> bool:
         return False
 
-    def report_progress(self, done: int, total: int, phase: str = "") -> None:
+    def report_progress(self, done: int, total: int, phase: str = "", detail=None, stats=None) -> None:
         pass
 
 

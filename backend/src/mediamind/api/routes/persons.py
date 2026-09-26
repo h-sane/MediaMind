@@ -47,6 +47,7 @@ from mediamind.store.persons import (
     latest_faces_scan,
 )
 from mediamind.store.rejected_faces import reject_face
+from mediamind.store.unprocessed import manual_tagged_paths
 
 router = APIRouter(tags=["persons"])
 
@@ -333,6 +334,7 @@ def list_person_media(library_id: str, person_id: int, request: Request):
     try:
         items = person_media(conn, person_id)
         placement = person_placement_media(conn, person_id)
+        manual = manual_tagged_paths(conn, person_id)
     finally:
         conn.close()
     return [
@@ -354,6 +356,15 @@ def list_person_media(library_id: str, person_id: int, request: Request):
             via_placement=True,
         )
         for pf in placement
+    ] + [
+        PersonMediaItemOut(
+            file_id=file_id if file_id is not None else -1,
+            path=path,
+            abs_path=str(library_root / path),
+            kind=kind,
+            via_manual=True,
+        )
+        for path, kind, file_id in manual
     ]
 
 
