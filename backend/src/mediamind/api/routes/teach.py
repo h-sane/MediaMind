@@ -15,6 +15,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 
 from mediamind.api.models import (
     TeachApplyOut,
@@ -189,3 +190,56 @@ def apply(library_id: str, request: Request):
         return teach.apply_in_registry(request.app.state.registry, library_id, conn, _provider(conn))
     finally:
         conn.close()
+
+
+@router.get("/libraries/{library_id}/teach/faces/{face_id}/frame")
+def face_frame(
+    library_id: str,
+    face_id: int,
+    request: Request,
+    size: int = Query(default=1600, ge=256, le=4096),
+):
+    """The whole photo (or the sampled video frame) a face came from, with that face
+    outlined — the yes/no review needs the real picture, not a small crop. Disk-cached
+    beside the face crops, keyed like them, so it still shows while the drive is offline."""
+    from mediamind.api.routes.persons import _face_thumb_cache_key, _THUMB_CACHE_HEADERS
+    from mediamind.config import face_thumb_cache_dir
+    from mediamind.core.faces.engine import load_frame
+    from mediamind.store.persons import get_face
+
+    root = _library_root(request, library_id)
+    conn = open_library_db(root)
+    try:
+        info = get_face(conn, face_id)
+    finally:
+        conn.close()
+    if info is None:
+        raise HTTPException(status_code=404, detail="Unknown face id")
+
+    cache_path = face_thumb_cache_dir() / library_id / (
+        "frame-" + _face_thumb_cache_key(info.path, info.frame_no, info.bbox, size) + ".jpg")
+    if not cache_path.exists():
+        abs_path = root / info.path
+        if not abs_path.exists():
+            raise HTTPException(status_code=409, detail="The file isn't reachable right now. Is its drive connected?")
+        frame = load_frame(abs_path, "image" if info.kind == "photo" else info.kind, info.frame_no)
+        if frame is None:
+            raise HTTPException(status_code=422, detail="This file couldn't be decoded.")
+        import cv2
+
+        h, w = frame.shape[:2]
+        scale = min(1.0, size / max(h, w))
+        if scale < 1.0:
+            frame = cv2.resize(frame, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+        x1, y1, x2, y2 = (int(v * scale) for v in info.bbox)
+        thick = max(2, int(max(frame.shape[:2]) / 300))
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 0), thick + 2)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (80, 220, 255), thick)
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        if not ok:
+            raise HTTPException(status_code=422, detail="This file couldn't be decoded.")
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cache_path.with_suffix(".tmp")
+        tmp.write_bytes(buf.tobytes())
+        tmp.replace(cache_path)
+    return FileResponse(cache_path, media_type="image/jpeg", headers=_THUMB_CACHE_HEADERS)

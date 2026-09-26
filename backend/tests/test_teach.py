@@ -57,3 +57,29 @@ def test_teach_sorts_pools_and_sends_lookalikes_to_review(tmp_path):
 
     teach.remove_examples(c1, ex_a[:1])
     assert len(teach.library_examples(c1, P)) == 5
+
+
+def test_frame_endpoint_returns_whole_picture_with_face(tmp_path, monkeypatch):
+    import cv2
+    from fastapi.testclient import TestClient
+
+    from mediamind.api.app import create_app
+
+    monkeypatch.setenv("MEDIAMIND_DATA_DIR", str(tmp_path / "appdata"))
+    lib = tmp_path / "lib"; lib.mkdir()
+    cv2.imwrite(str(lib / "a.jpg"), np.full((300, 400, 3), 128, np.uint8))
+    with TestClient(create_app()) as client:
+        lib_id = client.post("/v1/libraries", json={"path": str(lib)}).json()["id"]
+        conn = open_library_db(lib)
+        fid = conn.execute(
+            "INSERT INTO files (path, kind, size, mtime, content_hash, decoded_ok) VALUES ('a.jpg', 'image', 1, 0, 'h', 1)").lastrowid
+        face = conn.execute(
+            "INSERT INTO faces (file_id, provider_id, bbox_x1, bbox_y1, bbox_x2, bbox_y2, embedding)"
+            " VALUES (?, ?, 50, 50, 150, 150, ?)", (fid, P, np.zeros(4, np.float32).tobytes())).lastrowid
+        conn.commit(); conn.close()
+
+        res = client.get(f"/v1/libraries/{lib_id}/teach/faces/{face}/frame?size=512")
+        assert res.status_code == 200 and res.headers["content-type"] == "image/jpeg"
+        img = cv2.imdecode(np.frombuffer(res.content, np.uint8), cv2.IMREAD_COLOR)
+        assert img.shape[:2] == (300, 400)            # whole frame, not a crop (already under 512)
+        assert client.get(f"/v1/libraries/{lib_id}/teach/faces/999/frame").status_code == 404
