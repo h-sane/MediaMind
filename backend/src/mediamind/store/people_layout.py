@@ -36,6 +36,7 @@ class PeopleLayoutStore:
         self._path = store_path or people_layout_path()
         self._lock = threading.Lock()
         self._pins: list[str] = []
+        self._hidden: list[str] = []
         self._collections: list[dict] = []  # {"id", "name", "members": [key, ...]}
         self._load()
 
@@ -48,6 +49,7 @@ class PeopleLayoutStore:
             # A corrupt store must never block the app; pins can be re-added.
             return
         self._pins = [k for k in data.get("pins", []) if isinstance(k, str)]
+        self._hidden = [k for k in data.get("hidden", []) if isinstance(k, str)]
         for c in data.get("collections", []):
             if isinstance(c, dict) and isinstance(c.get("id"), str) and isinstance(c.get("name"), str):
                 members = [m for m in c.get("members", []) if isinstance(m, str)]
@@ -55,7 +57,7 @@ class PeopleLayoutStore:
 
     def _save(self) -> None:
         tmp = self._path.with_suffix(".tmp")
-        payload = {"pins": self._pins, "collections": self._collections}
+        payload = {"pins": self._pins, "hidden": self._hidden, "collections": self._collections}
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         tmp.replace(self._path)
 
@@ -87,6 +89,29 @@ class PeopleLayoutStore:
             known = set(self._pins)
             head = [k for k in dict.fromkeys(ordered) if k in known]
             self._pins = head + [k for k in self._pins if k not in set(head)]
+            self._save()
+
+    # -- hidden people ------------------------------------------------------
+
+    def hidden(self) -> list[str]:
+        with self._lock:
+            return list(self._hidden)
+
+    def hide(self, keys: list[str]) -> None:
+        """Ignore these people everywhere in the People view (and drop their pin
+        and collection place); their photos and scan data are untouched."""
+        with self._lock:
+            gone = set(keys)
+            self._hidden.extend(k for k in dict.fromkeys(keys) if k not in self._hidden)
+            self._pins = [k for k in self._pins if k not in gone]
+            for c in self._collections:
+                c["members"] = [m for m in c["members"] if m not in gone]
+            self._save()
+
+    def unhide(self, keys: list[str]) -> None:
+        with self._lock:
+            gone = set(keys)
+            self._hidden = [k for k in self._hidden if k not in gone]
             self._save()
 
     # -- collections --------------------------------------------------------

@@ -95,3 +95,35 @@ def test_sibling_libraries_group_under_shared_parent_and_collections_move_people
 def test_unknown_collection_is_404_and_blank_name_is_422(client):
     assert client.post("/v1/people-view/collections/nope/members", json={"keys": ["p:a:1"]}).status_code == 404
     assert client.post("/v1/people-view/collections", json={"name": "  "}).status_code == 422
+
+
+def test_hidden_person_leaves_the_overview_and_can_be_restored(client, tmp_path):
+    _library(client, tmp_path / "a", "Nayeon")
+    _library(client, tmp_path / "b", "Wonyoung")
+    nayeon = next(e for e in client.get("/v1/people-view/overview").json()["entries"] if e["name"] == "Nayeon")
+
+    client.post("/v1/people-view/pins", json={"key": nayeon["keys"][0]})
+    assert client.post("/v1/people-view/hide", json={"keys": nayeon["keys"]}).status_code == 200
+    body = client.get("/v1/people-view/overview").json()
+    assert [e["name"] for e in body["entries"]] == ["Wonyoung"]
+    assert [e["name"] for e in body["hidden"]] == ["Nayeon"]
+    assert body["pins"] == []
+
+    client.post("/v1/people-view/unhide", json={"keys": nayeon["keys"]})
+    body = client.get("/v1/people-view/overview").json()
+    assert {e["name"] for e in body["entries"]} == {"Nayeon", "Wonyoung"} and body["hidden"] == []
+
+
+def test_merge_links_an_unnamed_person_from_another_library_into_the_named_one(client, tmp_path):
+    _library(client, tmp_path / "a", "Nayeon")
+    _library(client, tmp_path / "b", None)
+    entries = client.get("/v1/people-view/overview").json()["entries"]
+    target = next(e for e in entries if e["name"] == "Nayeon")
+    source = next(e for e in entries if e["name"] is None)
+
+    res = client.post("/v1/people-view/merge", json={"source_keys": source["keys"], "target_keys": target["keys"]})
+    assert res.status_code == 200
+    merged = client.get("/v1/people-view/overview").json()["entries"]
+    assert len(merged) == 1 and merged[0]["name"] == "Nayeon" and len(merged[0]["members"]) == 2
+
+    assert client.post("/v1/people-view/merge", json={"source_keys": target["keys"], "target_keys": target["keys"]}).status_code == 422

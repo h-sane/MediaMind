@@ -4,6 +4,8 @@ changes only `people_layout.json` in app data — never a file on disk."""
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, HTTPException, Request
 
 from mediamind.api.models import (
@@ -12,13 +14,17 @@ from mediamind.api.models import (
     PeopleDuplicateOut,
     PeopleEntryOut,
     PeopleKeysIn,
+    PeopleMergeIn,
     PeopleMemberOut,
     PeopleNodeOut,
     PeopleOverviewOut,
     PeoplePinIn,
     PeoplePinOut,
 )
-from mediamind.core.people_overview import Entry, Node, load_overview
+from mediamind.core.global_people import open_library_db, resolve_link_suggestion
+from mediamind.core.people_overview import Entry, Node, load_entries, load_overview
+from mediamind.store import global_people as gp_store
+from mediamind.store.persons import latest_faces_scan, merge_persons
 from mediamind.store.people_layout import PeopleLayoutStore
 
 router = APIRouter(tags=["people-view"], prefix="/people-view")
@@ -115,12 +121,13 @@ def _resolve_pins(pin_keys: list[str], entries: list[Entry], forest: list[Node])
 
 @router.get("/overview", response_model=PeopleOverviewOut)
 def overview(request: Request):
-    entries, forest, collections, pin_keys = load_overview(request.app.state.registry, _layout(request))
+    entries, forest, collections, pin_keys, hidden = load_overview(request.app.state.registry, _layout(request))
     return PeopleOverviewOut(
         entries=[_entry_out(e) for e in entries],
         tree=[_node_out(n) for n in forest],
         collections=[PeopleCollectionOut(**c) for c in collections],
         pins=_resolve_pins(pin_keys, entries, forest),
+        hidden=[_entry_out(e) for e in hidden],
     )
 
 
@@ -179,3 +186,80 @@ def remove_collection_members(body: PeopleKeysIn, request: Request):
     """Returns these people/folders to their automatic place."""
     _layout(request).remove_members(body.keys)
     return {"ok": True}
+
+
+@router.post("/hide")
+def hide(body: PeopleKeysIn, request: Request):
+    """"Remove this person": ignored in the People view from now on, including
+    after rescans (keyed by person id). Nothing on disk or in scan data changes."""
+    _layout(request).hide(body.keys)
+    return {"ok": True}
+
+
+@router.post("/unhide")
+def unhide(body: PeopleKeysIn, request: Request):
+    _layout(request).unhide(body.keys)
+    return {"ok": True}
+
+
+def _parse_person_key(key: str) -> tuple[str, int]:
+    _, library_id, person_id = key.split(":", 2)
+    return library_id, int(person_id)
+
+
+@router.post("/merge")
+def merge(body: PeopleMergeIn, request: Request):
+    """Merge one identity into another. Members in the same library are merged
+    outright (faces move, centroid recomputed); a member from a library the
+    target has no person in is linked into the target's global identity."""
+    registry = request.app.state.registry
+    try:
+        sources = [_parse_person_key(k) for k in body.source_keys if k.startswith("p:")]
+        targets = [_parse_person_key(k) for k in body.target_keys if k.startswith("p:")]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Malformed person key") from exc
+    if not sources or not targets or set(sources) & set(targets):
+        raise HTTPException(status_code=422, detail="Nothing to merge")
+
+    target_in_lib = {lib_id: pid for lib_id, pid in targets}
+    for lib_id, pid in sources:
+        if lib_id not in target_in_lib:
+            continue
+        lib = registry.get(lib_id)
+        if lib is None:
+            raise HTTPException(status_code=404, detail="Unknown library")
+        conn = open_library_db(lib)
+        try:
+            if not merge_persons(conn, pid, target_in_lib[lib_id]):
+                raise HTTPException(status_code=422, detail="Cannot merge these two people")
+        finally:
+            conn.close()
+
+    cross = [(lib_id, pid) for lib_id, pid in sources if lib_id not in target_in_lib]
+    if cross:
+        t_lib, t_pid = targets[0]
+        gp_conn = gp_store.open_global_db()
+        try:
+            if gp_store.global_for_local(gp_conn, t_lib, t_pid) is None:
+                entry = next((e for e in load_entries(registry)[0] if f"p:{t_lib}:{t_pid}" in e.keys), None)
+                gid = gp_store.create_global_person(gp_conn, (entry.name if entry else None) or "Person")
+                gp_store.link(gp_conn, gid, t_lib, t_pid, _provider_id(registry, t_lib))
+            for lib_id, pid in cross:
+                resolve_link_suggestion(gp_conn, t_lib, t_pid, lib_id, pid, _provider_id(registry, lib_id))
+        finally:
+            gp_conn.close()
+    return {"ok": True}
+
+
+def _provider_id(registry, library_id: str) -> str:
+    lib = registry.get(library_id)
+    if lib is None:
+        raise HTTPException(status_code=404, detail="Unknown library")
+    conn = open_library_db(lib)
+    try:
+        scan = latest_faces_scan(conn)
+        if scan is None:
+            raise HTTPException(status_code=422, detail="Library has no face scan")
+        return json.loads(scan["params"] or "{}").get("provider_id", "")
+    finally:
+        conn.close()

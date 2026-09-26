@@ -203,7 +203,12 @@ def load_entries(registry: LibraryRegistry) -> tuple[list[Entry], dict[tuple[str
 
 
 def load_overview(registry: LibraryRegistry, layout: PeopleLayoutStore):
-    entries, entry_of = load_entries(registry)
+    """Returns (entries, forest, collections, pins, hidden entries). A person the
+    user removed is left out of everything but the last list (the restore list)."""
+    all_entries, entry_of = load_entries(registry)
+    hidden_keys = set(layout.hidden())
+    entries = [e for e in all_entries if not hidden_keys.intersection(e.keys)]
+    hidden = [e for e in all_entries if hidden_keys.intersection(e.keys)]
     by_id = {e.id: e for e in entries}
 
     gp_conn = gp_store.open_global_db()
@@ -214,7 +219,7 @@ def load_overview(registry: LibraryRegistry, layout: PeopleLayoutStore):
     for s in suggestions:
         a = entry_of.get((s["library_id_a"], s["local_person_id_a"]))
         b = entry_of.get((s["library_id_b"], s["local_person_id_b"]))
-        if a and b and a != b:
+        if a in by_id and b in by_id and a != b:
             by_id[a].duplicates.append((b, s["similarity"]))
             by_id[b].duplicates.append((a, s["similarity"]))
 
@@ -224,4 +229,4 @@ def load_overview(registry: LibraryRegistry, layout: PeopleLayoutStore):
         e.pinned = bool(pin_set.intersection(e.keys))
     collections = layout.collections()
     forest = build_forest(entries, collections, pin_set)
-    return entries, forest, collections, pin_list
+    return entries, forest, collections, pin_list, hidden

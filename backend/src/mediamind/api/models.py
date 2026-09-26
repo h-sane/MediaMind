@@ -829,6 +829,12 @@ class PeopleOverviewOut(BaseModel):
     tree: list[PeopleNodeOut]
     collections: list[PeopleCollectionOut]
     pins: list[PeoplePinOut]
+    hidden: list[PeopleEntryOut] = []
+
+
+class PeopleMergeIn(BaseModel):
+    source_keys: list[str]
+    target_keys: list[str]
 
 
 class PeoplePinIn(BaseModel):
