@@ -758,3 +758,86 @@ class FolderFacesOut(BaseModel):
     library_id: str | None
     persons: list[FolderPersonOut]
     total_persons: int
+
+
+# ---------------------------------------------------------------------------
+# People view (docs/PEOPLE_VIEW_V2_DESIGN.md): cross-library overview, pins,
+# collections.
+# ---------------------------------------------------------------------------
+
+
+class PeopleMemberOut(BaseModel):
+    library_id: str
+    library_name: str
+    local_person_id: int
+    sample_face_ids: list[int]
+
+
+class PeopleDuplicateOut(BaseModel):
+    entry_id: str
+    similarity: float
+
+
+class PeopleEntryOut(BaseModel):
+    """One identity. `keys` are the stable pin/collection keys of every library
+    person folded into it; `folder_path` is the absolute folder containing its
+    home; `duplicates` lists other entries that may be the same person."""
+
+    id: str
+    name: str | None
+    auto_label: str
+    face_count: int
+    media_count: int
+    members: list[PeopleMemberOut]
+    keys: list[str]
+    folder_path: str
+    pinned: bool
+    collection_id: str | None
+    duplicates: list[PeopleDuplicateOut]
+
+
+class PeopleNodeOut(BaseModel):
+    kind: Literal["group", "collection"]
+    id: str
+    path: str
+    name: str
+    person_ids: list[str]
+    subgroups: list["PeopleNodeOut"]
+    total_persons: int
+    pinned: bool
+
+
+class PeoplePinOut(BaseModel):
+    """A pin resolved against current data. `available` is false when its
+    target is offline or gone — shown dimmed, never silently dropped."""
+
+    key: str
+    kind: Literal["person", "folder", "collection"]
+    ref_id: str | None
+    label: str | None
+    available: bool
+
+
+class PeopleCollectionOut(BaseModel):
+    id: str
+    name: str
+    members: list[str]
+
+
+class PeopleOverviewOut(BaseModel):
+    entries: list[PeopleEntryOut]
+    tree: list[PeopleNodeOut]
+    collections: list[PeopleCollectionOut]
+    pins: list[PeoplePinOut]
+
+
+class PeoplePinIn(BaseModel):
+    key: str
+
+
+class PeopleKeysIn(BaseModel):
+    keys: list[str]
+
+
+class PeopleCollectionNameIn(BaseModel):
+    name: str

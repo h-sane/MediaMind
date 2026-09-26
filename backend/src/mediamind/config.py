@@ -125,6 +125,13 @@ def recent_files_path() -> Path:
     return app_data_dir() / "recent_files.json"
 
 
+def people_layout_path() -> Path:
+    """JSON store of the People view's pins and user-made collections. App-level
+    (not per-library) because both span libraries; holds only pointers, never
+    user media. Same reasoning as `browse_index_db_path`."""
+    return app_data_dir() / "people_layout.json"
+
+
 def settings_path() -> Path:
     """JSON store of the Explorer shell's user-facing app settings (e.g.
     whether Recent files is tracked at all). Lives in the app data dir, same
