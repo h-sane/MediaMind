@@ -175,6 +175,7 @@ def build_scan_runner(app_state, lib, scan_type: str, near_threshold: int = DEFA
         return _make_dedupe_runner(Path(lib.path), near_threshold)
     if scan_type == "faces":
         from mediamind.core.faces.scan import make_face_scan_runner
+        from mediamind.core.faces.teach import apply_in_registry
 
         pm = app_state.providers
         if provider_id:
@@ -189,6 +190,7 @@ def build_scan_runner(app_state, lib, scan_type: str, near_threshold: int = DEFA
             entry.id,
             eps=entry.cluster_eps,
             pending_for_named=True,
+            teach_after=lambda conn: apply_in_registry(app_state.registry, lib.id, conn, entry.id),
         )
     raise ValueError(f"Unknown scan type '{scan_type}'")
 

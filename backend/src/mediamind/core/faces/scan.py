@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -95,8 +96,10 @@ def make_face_scan_runner(
     video_frames: int = DEFAULT_VIDEO_FRAMES,
     gif_frames: int = DEFAULT_GIF_FRAMES,
     min_face_size: int = DEFAULT_MIN_FACE_SIZE,
+    teach_after: Callable[[sqlite3.Connection], dict] | None = None,
 ) -> Callable[[JobContext], dict]:
-    """Return a face-scan runner for JobManager."""
+    """Return a face-scan runner for JobManager. `teach_after` re-sorts the
+    fresh faces against the user's named examples (core/faces/teach.py)."""
 
     def runner(ctx: JobContext) -> dict:
         started_at = time.time()
@@ -545,6 +548,12 @@ def make_face_scan_runner(
             ctx.report_progress(0, 0, "clustering")
             ctx.report_progress(0, 0, "saving")
             final_summary = cluster_and_persist(total)
+            if teach_after is not None:
+                ctx.report_progress(0, 0, "sorting")
+                try:
+                    final_summary["teaching"] = teach_after(conn)
+                except Exception:
+                    logger.exception("Face scan: sorting by named examples failed")
 
         finally:
             conn.close()

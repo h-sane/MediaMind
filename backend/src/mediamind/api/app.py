@@ -78,12 +78,31 @@ async def _lifespan(app: FastAPI):
     pm = app.state.providers
     _default_entry = pm.default_entry(app.state.settings.active_provider_id)
 
+    def _sort_by_named_examples(library_id: str, _paths: list[str]) -> None:
+        # Watched folders (e.g. Downloads): newly ingested faces are matched
+        # against the people the user named in any library.
+        from mediamind.core.faces.teach import apply_in_registry
+        from mediamind.store.db import open_library_db
+
+        lib = app.state.registry.get(library_id)
+        if lib is None or _default_entry is None:
+            return
+        try:
+            conn = open_library_db(lib.root)
+            try:
+                apply_in_registry(app.state.registry, library_id, conn, _default_entry.id)
+            finally:
+                conn.close()
+        except Exception:
+            logging.getLogger(__name__).exception("ingest: sorting by named examples failed")
+
     app.state.ingest_worker = IngestWorker(
         app.state.registry,
         app.state.job_manager,
         provider_factory=(lambda: pm.create(_default_entry.id)) if _default_entry else None,
         provider_id=_default_entry.id if _default_entry else None,
         enabled=lambda: app.state.settings.auto_scan_enabled,
+        on_batch_done=_sort_by_named_examples,
     )
     app.state.ingest_worker.start()
 
@@ -227,6 +246,7 @@ def create_app(
     from mediamind.api.routes import global_people
     from mediamind.api.routes import people_view
     from mediamind.api.routes import unprocessed
+    from mediamind.api.routes import teach
 
     app.include_router(libraries.router, prefix="/v1")
     app.include_router(files.router, prefix="/v1")
@@ -246,5 +266,6 @@ def create_app(
     app.include_router(global_people.router, prefix="/v1")
     app.include_router(people_view.router, prefix="/v1")
     app.include_router(unprocessed.router, prefix="/v1")
+    app.include_router(teach.router, prefix="/v1")
 
     return app

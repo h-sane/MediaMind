@@ -868,3 +868,56 @@ class PeopleKeysIn(BaseModel):
 
 class PeopleCollectionNameIn(BaseModel):
     name: str
+
+
+# --- Teach who's who (core/faces/teach.py) ---
+
+class TeachFaceOut(BaseModel):
+    face_id: int
+    file_id: int
+    path: str                 # library-relative (posix)
+    abs_path: str
+    kind: str
+    frame_no: int
+    width: float              # face box width in pixels (bigger = clearer)
+    person_id: int | None
+    person_name: str | None
+    is_example: bool
+    background: bool          # small or not among the frame's two main faces
+
+
+class TeachFacesOut(BaseModel):
+    total: int
+    faces: list[TeachFaceOut]
+
+
+class TeachPersonOut(BaseModel):
+    person_id: int | None     # None: named only in another library so far
+    name: str
+    examples_here: int
+    examples_elsewhere: int
+    files: int
+
+
+class TeachExamplesIn(BaseModel):
+    face_ids: list[int]
+    person_id: int | None = None
+    name: str | None = None
+
+
+class TeachExamplesRemoveIn(BaseModel):
+    face_ids: list[int]
+
+
+class TeachApplyPersonOut(BaseModel):
+    person_id: int
+    name: str
+    files: int
+    examples: int
+
+
+class TeachApplyOut(BaseModel):
+    people: list[TeachApplyPersonOut]
+    attached: int
+    pending: int
+    detached: int
