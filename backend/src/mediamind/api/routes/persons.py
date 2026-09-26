@@ -46,6 +46,7 @@ from mediamind.store.persons import (
     set_primary_folder,
     latest_faces_scan,
 )
+from mediamind.store.pending_repeats import open_folded
 from mediamind.store.rejected_faces import reject_face
 from mediamind.store.unprocessed import manual_tagged_paths
 
@@ -102,9 +103,9 @@ def list_persons(library_id: str, request: Request):
             (provider_id,),
         ).fetchone()[0]
 
-        pending_count = conn.execute(
-            "SELECT COUNT(*) FROM pending_matches WHERE decision IS NULL",
-        ).fetchone()[0] - len(placement_confirmed_pending_ids(conn))
+        # The questions review actually asks (answered, repeated and waiting ones excluded).
+        suppressed = placement_confirmed_pending_ids(conn)
+        pending_count = sum(1 for i in open_folded(conn) if i not in suppressed)
 
         multi_person_count = conn.execute(
             """

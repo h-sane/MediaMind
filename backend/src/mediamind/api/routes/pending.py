@@ -23,7 +23,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from mediamind.api.models import PendingDecisionsIn, PendingMatchOut
 from mediamind.core.libraries import LibraryRegistry
-from mediamind.store import face_assignments
+from mediamind.store import face_assignments, rejected_matches
 from mediamind.store.bindings import placement_confirmed_pending_ids
 from mediamind.store.db import open_library_db
 from mediamind.store.pending_repeats import open_folded
@@ -146,6 +146,12 @@ def decide_pending(library_id: str, body: PendingDecisionsIn, request: Request):
                     face_assignments.record_assignment(
                         conn, row["content_hash"], row["provider_id"], bbox, target_person_id, source="user",
                     )
+            elif row["content_hash"]:
+                # Kept by content, not by faces.id, so the No survives a rescan.
+                rejected_matches.record(
+                    conn, row["content_hash"], row["provider_id"],
+                    (row["bbox_x1"], row["bbox_y1"], row["bbox_x2"], row["bbox_y2"]), row["person_id"],
+                )
 
             conn.execute(
                 "UPDATE pending_matches SET decision = ? WHERE id = ?",

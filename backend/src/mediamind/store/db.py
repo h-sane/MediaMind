@@ -20,7 +20,7 @@ from typing import Callable
 from mediamind.config import LIBRARY_DATA_DIRNAME, library_index_db_path
 from mediamind.core.reachability import is_root_reachable
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 # Two connections racing to create/migrate the SAME brand-new database file
 # (e.g. the always-on ingest worker and an HTTP request, opening within
@@ -395,6 +395,25 @@ CREATE TABLE IF NOT EXISTS manual_tags (
     conn.commit()
 
 
+def _v13_migration(conn: sqlite3.Connection) -> None:
+    """Schema v13: a "No" in review ("this face is not this person") that survives rescans.
+    pending_matches holds the decision against a faces.id, and every rescan recreates the
+    faces rows, so the No was forgotten and the question came back. Keyed like
+    face_assignments (content hash + provider + bbox, matched by IoU)."""
+    conn.executescript("""
+CREATE TABLE IF NOT EXISTS rejected_matches (
+    id INTEGER PRIMARY KEY,
+    content_hash TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    bbox_x1 REAL NOT NULL, bbox_y1 REAL NOT NULL, bbox_x2 REAL NOT NULL, bbox_y2 REAL NOT NULL,
+    person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rejected_matches_key ON rejected_matches(content_hash, provider_id);
+""")
+    conn.commit()
+
+
 # v2 is a string; v3+ are callables (ALTER TABLE requires special handling).
 _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (2, _V2_ADDITIONS),
@@ -408,6 +427,7 @@ _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (10, _v10_migration),
     (11, _v11_migration),
     (12, _v12_migration),
+    (13, _v13_migration),
 ]
 
 

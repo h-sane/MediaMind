@@ -593,9 +593,9 @@ def test_organize_execute_person_scoped_plan_hash_drift_still_guarded(client, tm
     assert res.status_code == 409
 
 
-def test_pending_folds_repeat_frames_of_the_same_face(client, tmp_path):
-    """The same person's face in several frames of one file is one question; a different
-    face in that file suggested for the same person stays its own question."""
+def _file_with_three_questions(client, tmp_path):
+    """One file suggested as Eve three times: a face, the same face in a later frame, and a
+    different-looking face. Returns (lib_dir, lib_id, face ids, pending ids by face)."""
     lib_dir = tmp_path / "lib"
     lib_dir.mkdir()
     _make_library(lib_dir)
@@ -606,39 +606,64 @@ def test_pending_folds_repeat_frames_of_the_same_face(client, tmp_path):
     pid = conn.execute("SELECT id FROM persons WHERE provider_id = ? ORDER BY id LIMIT 1", (PROVIDER,)).fetchone()["id"]
     rename_person(conn, pid, "Eve")
     first = conn.execute("SELECT id, file_id FROM faces WHERE person_id = ?", (pid,)).fetchone()
+    conn.execute("UPDATE faces SET person_id = NULL WHERE id = ?", (first["id"],))
 
-    def add_face(frame_no: int, emb: list[float]) -> int:
-        cur = conn.execute(
-            "INSERT INTO faces (file_id, provider_id, frame_no, embedding) VALUES (?, ?, ?, ?)",
-            (first["file_id"], PROVIDER, frame_no, np.array(emb, dtype=np.float32).tobytes()),
-        )
-        return cur.lastrowid
+    def add_face(frame_no: int, emb: list[float], box: float) -> int:
+        return conn.execute(
+            "INSERT INTO faces (file_id, provider_id, frame_no, bbox_x1, bbox_y1, bbox_x2, bbox_y2, embedding) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (first["file_id"], PROVIDER, frame_no, box, box, box + 20, box + 20, np.array(emb, dtype=np.float32).tobytes()),
+        ).lastrowid
 
-    same_later_frame = add_face(30, [0.99, 0.1, 0.0])
-    someone_else = add_face(60, [0.0, 1.0, 0.0])
+    faces = {"first": first["id"], "same": add_face(30, [0.99, 0.1, 0.0], 100), "other": add_face(60, [0.0, 1.0, 0.0], 300)}
     ids = {}
-    for face_id, conf in ((first["id"], 0.9), (same_later_frame, 0.8), (someone_else, 0.7)):
-        ids[face_id] = conn.execute(
-            "INSERT INTO pending_matches (face_id, person_id, confidence) VALUES (?, ?, ?)", (face_id, pid, conf),
+    for key, conf in (("first", 0.9), ("same", 0.8), ("other", 0.7)):
+        ids[key] = conn.execute(
+            "INSERT INTO pending_matches (face_id, person_id, confidence) VALUES (?, ?, ?)", (faces[key], pid, conf),
         ).lastrowid
     conn.commit()
     conn.close()
+    return lib_dir, lib_id, faces, ids, pid
+
+
+def test_one_question_per_file_and_a_yes_settles_the_file(client, tmp_path):
+    lib_dir, lib_id, faces, ids, _ = _file_with_three_questions(client, tmp_path)
 
     listed = client.get(f"/v1/libraries/{lib_id}/pending").json()
-    assert [(m["face_id"], m["folded_face_ids"]) for m in listed] == [
-        (first["id"], [same_later_frame]),
-        (someone_else, []),
-    ]
+    assert [(m["face_id"], m["folded_face_ids"]) for m in listed] == [(faces["first"], [faces["same"]])]
 
-    res = client.post(
-        f"/v1/libraries/{lib_id}/pending/decisions",
-        json={"decisions": [{"pending_id": ids[first["id"]], "decision": "confirmed"}]},
-    )
-    assert res.json()["updated"] == 2
+    res = client.post(f"/v1/libraries/{lib_id}/pending/decisions",
+                      json={"decisions": [{"pending_id": ids["first"], "decision": "confirmed"}]})
+    assert res.json()["updated"] == 2  # the shown face and the same face in the later frame
 
     conn = open_library_db(library_data_dir(lib_dir).parent)
     decision = {r["id"]: r["decision"] for r in conn.execute("SELECT id, decision FROM pending_matches")}
     conn.close()
-    assert decision[ids[same_later_frame]] == "confirmed"
-    assert decision[ids[someone_else]] is None
-    assert [m["face_id"] for m in client.get(f"/v1/libraries/{lib_id}/pending").json()] == [someone_else]
+    assert decision[ids["same"]] == "confirmed"
+    assert decision[ids["other"]] is None  # not taught as Eve: it doesn't look like her
+    # ...but the file is settled for Eve, so it is not asked again.
+    assert client.get(f"/v1/libraries/{lib_id}/pending").json() == []
+
+
+def test_a_no_moves_on_and_survives_a_rescan(client, tmp_path):
+    lib_dir, lib_id, faces, ids, pid = _file_with_three_questions(client, tmp_path)
+
+    client.post(f"/v1/libraries/{lib_id}/pending/decisions",
+                json={"decisions": [{"pending_id": ids["first"], "decision": "rejected"}]})
+    # The different-looking face in the same file may still be Eve: now it is asked.
+    assert [m["face_id"] for m in client.get(f"/v1/libraries/{lib_id}/pending").json()] == [faces["other"]]
+
+    # A rescan recreates faces rows (new ids) and the sort asks about them again.
+    conn = open_library_db(library_data_dir(lib_dir).parent)
+    old = conn.execute("SELECT * FROM faces WHERE id = ?", (faces["same"],)).fetchone()
+    conn.execute("DELETE FROM faces WHERE id IN (?, ?)", (faces["first"], faces["same"]))
+    new_face = conn.execute(
+        "INSERT INTO faces (file_id, provider_id, frame_no, bbox_x1, bbox_y1, bbox_x2, bbox_y2, embedding) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (old["file_id"], PROVIDER, 30, old["bbox_x1"], old["bbox_y1"], old["bbox_x2"], old["bbox_y2"], old["embedding"]),
+    ).lastrowid
+    conn.execute("INSERT INTO pending_matches (face_id, person_id, confidence) VALUES (?, ?, ?)", (new_face, pid, 0.95))
+    conn.commit()
+    conn.close()
+
+    assert [m["face_id"] for m in client.get(f"/v1/libraries/{lib_id}/pending").json()] == [faces["other"]]

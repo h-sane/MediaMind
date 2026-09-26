@@ -24,7 +24,7 @@ from typing import Callable, Iterable
 import numpy as np
 
 from mediamind.core.faces import classify as clf
-from mediamind.store import face_assignments
+from mediamind.store import face_assignments, rejected_matches
 from mediamind.store.persons import next_auto_label
 
 
@@ -207,6 +207,7 @@ def apply_teaching(
 
     rejected = {(r["face_id"], r["person_id"]) for r in conn.execute(
         "SELECT face_id, person_id FROM pending_matches WHERE decision = 'rejected'")}
+    said_no = rejected_matches.load(conn, provider_id)  # the same Nos, surviving rescans
     conn.execute(
         "DELETE FROM pending_matches WHERE decision IS NULL AND face_id IN (SELECT id FROM faces WHERE provider_id = ?)",
         (provider_id,))
@@ -222,7 +223,9 @@ def apply_teaching(
     for r, v in zip(todo, verdicts):
         bbox = (r["bbox_x1"], r["bbox_y1"], r["bbox_x2"], r["bbox_y2"])
         target = person_for(v.person) if v.decision in (clf.AUTO, clf.PENDING) else None
-        if v.decision == clf.AUTO and (r["id"], target) not in rejected:
+        refused = (r["id"], target) in rejected or (
+            target is not None and rejected_matches.is_rejected(said_no, r["content_hash"], bbox, target))
+        if v.decision == clf.AUTO and not refused:
             if r["person_id"] != target:
                 conn.execute("UPDATE faces SET person_id = ? WHERE id = ?", (target, r["id"]))
                 attached += 1
@@ -237,7 +240,7 @@ def apply_teaching(
                        AND person_id = ? AND source = 'cluster'""",
                     (r["content_hash"], provider_id, r["person_id"]))
             detached += 1
-        if v.decision == clf.PENDING and (r["id"], target) not in rejected:
+        if v.decision == clf.PENDING and not refused:
             conn.execute(
                 "INSERT INTO pending_matches (face_id, person_id, confidence, decision) VALUES (?, ?, ?, NULL)",
                 (r["id"], target, v.score))
