@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Callable
 
 from mediamind.core.concurrency import TIMED_OUT, hash_timeout_for, run_with_timeout
-from mediamind.core.hashing import hash_file
+from mediamind.core.hashing import hash_bytes, hash_file
 from mediamind.core.ingest import _hex_to_imagehash, lookup_file_cache, store_file_cache
 from mediamind.core.scanner import KIND_IMAGE, ScannedFile
 
@@ -116,6 +116,32 @@ def _image_dimensions(path: Path) -> tuple[int, int]:
             return im.size
     except Exception:
         return (0, 0)
+
+
+# A picture up to this size is read once into memory and hashed, measured and fingerprinted
+# from there: on a network or encrypted drive every separate open is a round-trip, and the
+# old path read each new picture twice in full (hash, then the perceptual hash) and opened
+# it a third time for its size.
+_IN_MEMORY_MAX_BYTES = 64 * 1024 * 1024
+
+
+def _image_facts(data: bytes):
+    """(width, height, perceptual hash) of a picture in memory; (0, 0, None) if undecodable."""
+    try:
+        import io
+
+        import imagehash
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as im:
+            size = im.size
+            return size[0], size[1], imagehash.phash(im)
+    except Exception:
+        return 0, 0, None
+
+
+def _phash_bits(phash) -> int:
+    return int(str(phash), 16)
 
 
 def _perceptual_hash(path: Path):
@@ -211,12 +237,18 @@ def find_duplicates(
 
     def _process(f: ScannedFile, needs_hash: bool, cached) -> tuple:
         if cached is not None:
-            width, height = _image_dimensions(f.path) if f.kind == KIND_IMAGE else (0, 0)
+            # No I/O at all: a cached file's size in pixels is only read if it turns out to
+            # have copies (below), instead of opening every picture on every rescan.
             phash = _hex_to_imagehash(cached.phash) if cached.phash else None
-            return cached.content_hash, width, height, phash, None
-        content_hash = hash_file(f.path) if needs_hash else None
-        width, height = _image_dimensions(f.path) if f.kind == KIND_IMAGE else (0, 0)
-        phash = _perceptual_hash(f.path) if f.kind == KIND_IMAGE else None
+            return cached.content_hash, 0, 0, phash, None
+        if f.kind == KIND_IMAGE and f.size <= _IN_MEMORY_MAX_BYTES:
+            data = f.path.read_bytes()
+            content_hash = hash_bytes(data) if needs_hash else None
+            width, height, phash = _image_facts(data)
+        else:
+            content_hash = hash_file(f.path) if needs_hash else None
+            width, height = _image_dimensions(f.path) if f.kind == KIND_IMAGE else (0, 0)
+            phash = _perceptual_hash(f.path) if f.kind == KIND_IMAGE else None
         to_store = None
         if caching and content_hash is not None:
             to_store = (content_hash, str(phash) if phash is not None else None)
@@ -306,15 +338,20 @@ def find_duplicates(
         for j in idxs[1:]:
             uf.union(idxs[0], j)
 
-    # Near: pHash hamming distance within threshold (images only).
-    # O(n^2) over hashed images — fine at V1's few-thousand-file target;
-    # revisit with BK-tree/ANN if libraries grow (Future Scope).
+    # Near: pHash hamming distance within threshold (images only). Still every pair, but each
+    # picture is compared with all later ones at once (XOR + popcount in numpy): pair by pair in
+    # Python this was ~200M comparisons for a 20,000-picture folder.
+    # ponytail: O(n^2) vectorised; a BK-tree if folders reach hundreds of thousands of pictures.
     hashed = [(i, h) for i, h in enumerate(phashes) if h is not None]
-    for a in range(len(hashed)):
-        i, hi = hashed[a]
-        for b in range(a + 1, len(hashed)):
-            j, hj = hashed[b]
-            if hi - hj <= near_threshold:
+    if len(hashed) > 1:
+        import numpy as np
+
+        idx = [i for i, _ in hashed]
+        bits = np.array([_phash_bits(h) for _, h in hashed], dtype=np.uint64)
+        for a in range(len(hashed) - 1):
+            close = np.nonzero(np.bitwise_count(bits[a + 1:] ^ bits[a]) <= near_threshold)[0]
+            for b in close:
+                i, j = idx[a], idx[a + 1 + int(b)]
                 if entries[i].content_hash != entries[j].content_hash:
                     near_edge[i] = near_edge[j] = True
                 uf.union(i, j)
@@ -338,6 +375,12 @@ def find_duplicates(
             else:
                 e.identity = e.content_hash
         group_files = [entries[i] for i in idxs]
+        # Size in pixels decides which copy to keep; read now, only for pictures that have copies.
+        for e in group_files:
+            if e.kind == KIND_IMAGE and not e.width:
+                dims = run_with_timeout(lambda p=e.path: _image_dimensions(p), file_timeout_seconds, limiter)
+                if dims is not TIMED_OUT:
+                    e.width, e.height = dims
         _pick_best(group_files)
         match = "near" if any(near_edge[i] for i in idxs) else "exact"
         group_files.sort(key=lambda f: (not f.is_best, str(f.path)))

@@ -13,6 +13,11 @@ from pathlib import Path
 _CHUNK = 1 << 20  # 1 MiB
 
 
+def hash_bytes(data: bytes) -> str:
+    """The same hash as hash_file, for a file already read into memory."""
+    return hashlib.blake2b(data, digest_size=32).hexdigest()
+
+
 def hash_file(path: Path) -> str:
     h = hashlib.blake2b(digest_size=32)
     with open(path, "rb") as fh:
