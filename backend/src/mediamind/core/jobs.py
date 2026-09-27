@@ -260,7 +260,8 @@ class JobManager:
         try:
             result = runner(ctx)
             if cancel_event.is_set():
-                job.result = None
+                # What a cancel did (e.g. "put back 12 files") is kept when the runner says.
+                job.result = result or None
                 job.finished_at = time.time()
                 job.state = "cancelled"
             else:

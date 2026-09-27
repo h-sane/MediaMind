@@ -405,23 +405,60 @@ def execute_moves(
 ) -> dict:
     """Move the files (copy-then-delete, manifest), then fix the index: a file that stayed inside
     its library keeps its row (and faces) at the new path; one that left drops the row, and the
-    library it arrived in indexes it itself. Recorded as one undoable move."""
+    library it arrived in indexes it itself. Recorded as one undoable move.
+
+    Cancelled part-way, it puts back what it already moved (the same copy-then-delete, with its
+    own manifest), removes the folders it created if they are empty again, and leaves the index
+    as it was: a cancel never leaves a half-done move behind. A file that can't go back (its old
+    place taken, the drive gone) stays where it arrived, indexed there, and is reported."""
     ops = [FileOp(source=m.file.abs_path, dest_folder=Path(m.dest), mode="move") for m in moves]
+    created: list[str] = []  # every folder this makes, parents first, to remove again on a cancel
+    for d in sorted({m.dest for m in moves}):
+        missing = []
+        p = Path(d)
+        while not p.exists() and p.parent != p:
+            missing.append(str(p))
+            p = p.parent
+        created += [x for x in reversed(missing) if x not in created]
     for m in moves:
         Path(m.dest).mkdir(parents=True, exist_ok=True)
     manifest_path = global_moves_dir() / "manifests" / f"{time.strftime('%Y%m%d-%H%M%S')}_{label}.csv"
     report = safety_execute(ops, manifest_path=manifest_path, on_progress=on_progress, should_cancel=should_cancel)
 
     by_source = {os.path.normcase(str(m.file.abs_path)): m for m in moves}
+    arrived = {os.path.normcase(e.source): e.destination for e in report.entries if e.action == "moved"}
+    cancelled = should_cancel is not None and should_cancel()
+    arrived_count = len(arrived)
+    rolled_back = 0
+    rollback_errors: list[str] = []
+    if cancelled and arrived:
+        back_ops = [FileOp(source=Path(dest), dest_folder=Path(src).parent, mode="move") for src, dest in
+                    ((by_source[k].file.abs_path, d) for k, d in arrived.items() if k in by_source)]
+        back = safety_execute(back_ops, manifest_path=manifest_path.with_name(manifest_path.stem + "_cancelled.csv"))
+        returned = {os.path.normcase(e.source): e.destination for e in back.entries if e.action == "moved"}
+        rollback_errors = [e.error for e in back.entries if e.action == "error"][:5]
+        for k, dest in list(arrived.items()):
+            home = returned.get(os.path.normcase(dest))
+            if home is None:
+                continue
+            rolled_back += 1
+            if os.path.normcase(home) == k:
+                del arrived[k]  # back exactly where it was: its index row never changed
+            else:
+                arrived[k] = home  # back in its folder under another name (its old one was taken)
+        for d in reversed(created):
+            try:
+                Path(d).rmdir()  # only succeeds when empty again
+            except OSError:
+                pass
+
     updates: dict[str, list[tuple[str | None, int]]] = {}
-    moved = 0
-    for e in report.entries:
-        m = by_source.get(os.path.normcase(e.source))
-        if m is None or e.action != "moved":
+    for k, dest in arrived.items():
+        m = by_source.get(k)
+        if m is None:
             continue
-        moved += 1
         try:
-            rel = Path(e.destination).resolve().relative_to(m.file.library_root.resolve()).as_posix()
+            rel = Path(dest).resolve().relative_to(m.file.library_root.resolve()).as_posix()
         except ValueError:
             rel = None
         updates.setdefault(m.file.library_id, []).append((rel, m.file.file_id))
@@ -441,10 +478,15 @@ def execute_moves(
         finally:
             conn.close()
 
-    gp_store.record_move_action(
-        gp_conn, 0, dest_folder=", ".join(sorted({m.dest for m in moves})), file_count=len(moves),
-        dry_run=False, manifest_path=str(manifest_path), ok_count=report.handled, error_count=len(report.errors))
-    return {"planned": len(moves), "moved": moved, "errors": [e.error for e in report.entries if e.action == "error"][:5]}
+    moved = arrived_count - rolled_back
+    if moved:
+        gp_store.record_move_action(
+            gp_conn, 0, dest_folder=", ".join(sorted({m.dest for m in moves})), file_count=len(moves),
+            dry_run=False, manifest_path=str(manifest_path), ok_count=moved, error_count=len(report.errors))
+    return {
+        "planned": len(moves), "moved": moved, "cancelled": cancelled, "rolled_back": rolled_back,
+        "errors": ([e.error for e in report.entries if e.action == "error"] + rollback_errors)[:5],
+    }
 
 
 # --- watched folders ------------------------------------------------------------------------

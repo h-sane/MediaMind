@@ -160,3 +160,39 @@ def test_move_skips_copies_answered_groups_and_ignored_faces(tmp_path, monkeypat
         conn.close()
         sort = _wait(client, a_id, client.post(f"/v1/libraries/{a_id}/teach/apply-job").json()["id"])
         assert sort["state"] == "succeeded" and "people" in sort["result"], sort
+
+
+def test_cancelled_move_puts_everything_back(tmp_path, monkeypatch):
+    """Hussain, 2026-09-27: cancel must undo what was done, safely. A move cancelled after two
+    of four files puts both back, removes the folder it created, and leaves the index as it was."""
+    monkeypatch.setenv("MEDIAMIND_DATA_DIR", str(tmp_path / "appdata"))
+    from mediamind.core import placement
+    from mediamind.core.libraries import LibraryRegistry
+    from mediamind.store import global_people as gp_store
+
+    lib = tmp_path / "AESPA"
+    lib.mkdir()
+    registry = LibraryRegistry()
+    lib_id = registry.add(lib).id
+    conn = open_library_db(lib)
+    ids = [_file(conn, lib, f"{i}.jpg") for i in range(4)]
+    conn.commit()
+    before = sorted(tuple(r) for r in conn.execute("SELECT id, path FROM files"))
+    conn.close()
+
+    dest = lib / "NEW" / "KARINA"
+    moves = [placement.Placement(placement.NamedFile(lib_id, lib, fid, f"{i}.jpg", {"karina": "Karina"}), str(dest))
+             for i, fid in enumerate(ids)]
+    progress = []
+    gp = gp_store.open_global_db()
+    result = placement.execute_moves(gp, registry, moves, label="test", on_progress=lambda d, t: progress.append(d),
+                                     should_cancel=lambda: len(progress) >= 2)
+    gp.close()
+
+    assert result["cancelled"] and result["rolled_back"] == 2 and result["moved"] == 0, result
+    assert sorted(p.name for p in lib.glob("*.jpg")) == ["0.jpg", "1.jpg", "2.jpg", "3.jpg"]
+    assert all((lib / f"{i}.jpg").read_bytes() == f"{i}.jpg".encode() for i in range(4))
+    assert not (lib / "NEW").exists()                                   # the folders it made are gone
+    conn = open_library_db(lib)
+    assert sorted(tuple(r) for r in conn.execute("SELECT id, path FROM files")) == before
+    conn.close()
