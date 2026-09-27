@@ -677,6 +677,20 @@ def test_ignoring_a_face_settles_the_file_for_that_person(client, tmp_path):
     assert client.get(f"/v1/libraries/{lib_id}/pending").json() == []
 
 
+def test_ignoring_a_face_ignores_it_in_every_frame_of_the_file(client, tmp_path):
+    lib_dir, lib_id, faces, ids, pid = _file_with_three_questions(client, tmp_path)
+
+    res = client.post(f"/v1/libraries/{lib_id}/faces/{faces['first']}/reject").json()
+    assert res["face_ids"] == [faces["first"], faces["same"]]
+    conn = open_library_db(library_data_dir(lib_dir).parent)
+    left = {r["id"] for r in conn.execute("SELECT id FROM faces WHERE file_id = (SELECT file_id FROM faces WHERE id = ?)",
+                                          (faces["other"],))}
+    regions = conn.execute("SELECT COUNT(*) FROM rejected_face_regions").fetchone()[0]
+    conn.close()
+    assert faces["other"] in left and faces["same"] not in left  # a different-looking face stays
+    assert regions == 2  # both frames stay ignored after a rescan
+
+
 def test_forget_missing_drops_deleted_files_and_their_questions(client, tmp_path):
     lib_dir, lib_id, faces, ids, pid = _file_with_three_questions(client, tmp_path)
     conn = open_library_db(library_data_dir(lib_dir).parent)

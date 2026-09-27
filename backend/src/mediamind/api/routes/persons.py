@@ -388,8 +388,9 @@ def reassign_face_endpoint(library_id: str, face_id: int, body: FaceReassignIn, 
 @router.post("/libraries/{library_id}/faces/{face_id}/reject")
 def reject_face_endpoint(library_id: str, face_id: int, request: Request):
     """Flag a specific detection as "not a face" (background/object false
-    positive) — removes it immediately and keeps it from resurfacing on
-    future rescans of the same image."""
+    positive) — removes it, and the same face in the file's other frames,
+    immediately and keeps them from resurfacing on future rescans of the same
+    file. Returns every removed face id."""
     _, library_root = _get_library_and_root(request, library_id)
     conn = _open_library_db(library_root)
     try:
@@ -398,7 +399,7 @@ def reject_face_endpoint(library_id: str, face_id: int, request: Request):
         conn.close()
     if result is None:
         raise HTTPException(status_code=404, detail="Unknown face id")
-    return {"ok": True}
+    return {"ok": True, "face_ids": list(result.face_ids)}
 
 
 _THUMB_CACHE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
