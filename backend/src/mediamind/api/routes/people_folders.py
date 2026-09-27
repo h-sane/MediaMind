@@ -40,9 +40,10 @@ class MoveIn(BaseModel):
 
 class PlaceIn(BaseModel):
     file_id: int
-    choice: Literal["person", "new", "stay"]
+    choice: Literal["person", "new", "existing", "stay"]
     person: str | None = None       # name, for "person"
     folder_name: str | None = None  # for "new"
+    folder_path: str | None = None  # for "existing": a folder that is already there
     remember: bool = True           # also for every picture of exactly these people
 
 
@@ -107,13 +108,17 @@ def set_primary_location(library_id: str, person_id: int, body: PrimaryLocationI
     return {"ok": True, "primary_location": path}
 
 
-def _question_out(q: placement.GroupQuestion) -> dict:
+def _question_out(q: placement.GroupQuestion, folders_under: dict[str, list[str]]) -> dict:
     f = q.file
+    parent = str(q.new_folder_parent)
+    if parent not in folders_under:
+        folders_under[parent] = placement.existing_group_folders(q.new_folder_parent)
     return {
-        "library_id": f.library_id, "file_id": f.file_id, "path": f.path, "abs_path": str(f.abs_path),
+        "library_id": f.library_id, "file_id": f.file_id, "path": f.path, "abs_path": str(f.abs_path), "kind": f.kind,
         "people": sorted(f.names.values(), key=str.casefold),
         "folders": [{"name": f.names[k], "path": p} for k, p in sorted(q.primaries.items())],
-        "new_folder_parent": str(q.new_folder_parent),
+        "new_folder_parent": parent,
+        "existing_folders": folders_under[parent],
     }
 
 
@@ -196,7 +201,8 @@ def group_pictures(library_id: str, request: Request):
     conn = open_library_db(Path(lib.path))
     gp = gp_store.open_global_db()
     try:
-        return [_question_out(q) for q in placement.library_questions(gp, conn, library_id, Path(lib.path))]
+        folders_under: dict[str, list[str]] = {}  # listed once per parent, not once per picture
+        return [_question_out(q, folders_under) for q in placement.library_questions(gp, conn, library_id, Path(lib.path))]
     finally:
         gp.close()
         conn.close()
@@ -227,6 +233,10 @@ def place_group_picture(library_id: str, body: PlaceIn, request: Request):
             if not body.folder_name or not body.folder_name.strip():
                 raise HTTPException(status_code=422, detail="Type a name for the new folder.")
             dest = str(q.new_folder_parent / safe_folder_name(body.folder_name))
+        elif body.choice == "existing":
+            if not body.folder_path or not Path(body.folder_path).is_dir():
+                raise HTTPException(status_code=422, detail="That folder isn't there any more.")
+            dest = str(Path(body.folder_path).resolve())
         else:
             dest = None
 

@@ -127,6 +127,30 @@ def set_group_rule(gp_conn: sqlite3.Connection, names: list[str], dest: str | No
     gp_conn.commit()
 
 
+def existing_group_folders(parent: Path, depth: int = 2, limit: int = 300) -> list[str]:
+    """Folders that already exist under `parent` (two levels down), so a group picture can go
+    into one made earlier (AESPA\\OT4) instead of only a new one. Hidden and system folders
+    (".mediamind", "$RECYCLE.BIN") are left out."""
+    out: list[str] = []
+    level = [str(parent)]
+    for _ in range(depth):
+        below: list[str] = []
+        for folder in level:
+            try:
+                with os.scandir(folder) as it:
+                    for e in it:
+                        if e.name.startswith((".", "$")) or not e.is_dir(follow_symlinks=False):
+                            continue
+                        below.append(e.path)
+            except OSError:
+                continue
+        out.extend(below)
+        if len(out) >= limit:
+            break
+        level = below
+    return sorted(out[:limit], key=str.casefold)
+
+
 def default_group_parent(primaries: list[str], file_abs: Path) -> Path:
     """Where a new group folder goes: beside the people's own folders (AESPA\\KARINA and
     AESPA\\WINTER give AESPA), else next to the picture."""
@@ -150,6 +174,7 @@ class NamedFile:
     names: dict[str, str]  # name key -> display name
     size: int = 0
     content_hash: str | None = None
+    kind: str = "image"
 
     @property
     def abs_path(self) -> Path:
@@ -160,7 +185,7 @@ def _named_files(conn: sqlite3.Connection, library_id: str, root: Path, file_ids
     # A person the user said No to (or whose face they ignored) in this file doesn't count in
     # it, even if other frames of them were attached by themselves, unless the user also named
     # them in it. The same rule the review uses to settle a file for a person.
-    sql = """SELECT fi.id, fi.path, fi.size, fi.content_hash, p.name FROM files fi
+    sql = """SELECT fi.id, fi.path, fi.size, fi.content_hash, fi.kind, p.name FROM files fi
              JOIN faces f ON f.file_id = fi.id JOIN persons p ON p.id = f.person_id
              WHERE p.name IS NOT NULL
                AND NOT (EXISTS (SELECT 1 FROM rejected_matches rm
@@ -176,7 +201,7 @@ def _named_files(conn: sqlite3.Connection, library_id: str, root: Path, file_ids
         params = tuple(file_ids)
     by_file: dict[int, NamedFile] = {}
     for r in conn.execute(sql, params):
-        nf = by_file.setdefault(r["id"], NamedFile(library_id, root, r["id"], r["path"], {}, r["size"] or 0, r["content_hash"]))
+        nf = by_file.setdefault(r["id"], NamedFile(library_id, root, r["id"], r["path"], {}, r["size"] or 0, r["content_hash"], r["kind"]))
         nf.names.setdefault(name_key(r["name"]), " ".join(r["name"].split()))
     return list(by_file.values())
 

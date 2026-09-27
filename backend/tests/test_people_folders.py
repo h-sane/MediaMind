@@ -1,6 +1,7 @@
 """People folders: counts, primary folder by name, moving, group pictures, auto-filing."""
 
 import time
+from pathlib import Path
 
 import numpy as np
 from fastapi.testclient import TestClient
@@ -136,9 +137,18 @@ def test_move_skips_copies_answered_groups_and_ignored_faces(tmp_path, monkeypat
         assert (p["moves"], p["already_there"], p["groups_waiting"]) == (2, 1, 1)   # solo + video; group waits
         assert p == client.get(f"/v1/libraries/{a_id}/teach/people/{karina}/move-plan").json()
 
-        res = client.post(f"/v1/libraries/{a_id}/teach/groups/place",
-                          json={"file_id": group, "choice": "stay", "remember": False})
+        # Folders already there (an OT4 made earlier) are offered, not only a new one.
+        (aespa / "OT4").mkdir()
+        (aespa / ".mediamind").mkdir(exist_ok=True)
+        q = client.get(f"/v1/libraries/{a_id}/teach/groups").json()[0]
+        names = [Path(f).name for f in q["existing_folders"]]
+        assert "OT4" in names and "KARINA" in names and ".mediamind" not in names, names
+        assert client.post(f"/v1/libraries/{a_id}/teach/groups/place", json={
+            "file_id": group, "choice": "existing", "folder_path": str(aespa / "nope"), "remember": False}).status_code == 422
+        res = client.post(f"/v1/libraries/{a_id}/teach/groups/place", json={
+            "file_id": group, "choice": "existing", "folder_path": str(aespa / "OT4"), "remember": False})
         assert res.status_code == 200, res.text
+        assert res.json()["moved"] == 1 and (aespa / "OT4" / "group.jpg").exists()
         assert client.get(f"/v1/libraries/{a_id}/teach/people/{winter}/move-plan").json()["groups_waiting"] == 0
         assert client.get(f"/v1/libraries/{a_id}/teach/groups").json() == []
 
