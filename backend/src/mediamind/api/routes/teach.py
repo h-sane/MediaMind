@@ -5,6 +5,7 @@
   POST /v1/libraries/{id}/teach/examples    {face_ids, person_id | name}
   POST /v1/libraries/{id}/teach/examples/remove   {face_ids}
   POST /v1/libraries/{id}/teach/apply       re-sort against every library's examples
+  POST /v1/libraries/{id}/files/forget-missing   drop index rows of files gone from disk
 
 See core/faces/teach.py.
 """
@@ -243,3 +244,17 @@ def face_frame(
         tmp.write_bytes(buf.tobytes())
         tmp.replace(cache_path)
     return FileResponse(cache_path, media_type="image/jpeg", headers=_THUMB_CACHE_HEADERS)
+
+
+@router.post("/libraries/{library_id}/files/forget-missing")
+def forget_missing_files(library_id: str, request: Request) -> dict:
+    """Drop index rows (and their faces and review questions) of files that are gone from
+    disk, so no screen offers a deleted file. Never touches a file; see store/missing_files.py."""
+    from mediamind.store.missing_files import forget_missing
+
+    root = _library_root(request, library_id)
+    conn = open_library_db(root)
+    try:
+        return {"removed": forget_missing(conn, root)}
+    finally:
+        conn.close()

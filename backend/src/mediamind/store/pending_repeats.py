@@ -4,14 +4,16 @@ Every open pending match is checked against the user's durable answers first. It
   - that face already has a user answer (face_assignments, source 'user');
   - the same file content was already confirmed for that person (a Yes on one face of a video
     settles the video for that person; its other frames add nothing the user needs to answer);
-  - the user said No to that face for that person (rejected_matches, which survives rescans).
-Answers are keyed by content hash + bbox, so all of this survives rescans and rebuilds.
+  - the user said No (or ignored a face) for that person anywhere in the same file content
+    (rejected_matches, which survives rescans). Asking the next frame after a No read as the
+    same question again (2026-09-27); a second real face of that person in the file is the
+    rarer loss.
+Answers are keyed by content hash (+ bbox), so all of this survives rescans and rebuilds.
 
 The rest are bucketed by file content and suggested person, and one question per bucket is
 shown: the most confident. Faces in the bucket that look like the same individual (cosine >=
-SAME_FACE_SIM to it) are folded into it and decided with it. The others wait: a Yes settles the
-file for that person (rule 2), a No lets the next one be asked, since a video can hold two
-people who were both suggested as the same name.
+SAME_FACE_SIM to it) are folded into it and decided with it. Any answer to it settles the
+bucket.
 
 SAME_FACE_SIM comes from the kpop library (2026-09-27): 99.9% of pairs of different named
 people score <= 0.44, so 0.45 folds frames of one person without folding lookalikes.
@@ -24,7 +26,6 @@ from collections import defaultdict
 
 import numpy as np
 
-from mediamind.store import rejected_matches
 from mediamind.store.face_assignments import ASSIGNMENT_IOU_THRESHOLD
 from mediamind.store.rejected_faces import _iou
 
@@ -76,7 +77,7 @@ def _answered(conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> set[int]:
         "SELECT content_hash, bbox_x1, bbox_y1, bbox_x2, bbox_y2, person_id FROM face_assignments WHERE source = 'user'"
     ):
         user[a["content_hash"]].append(((a["bbox_x1"], a["bbox_y1"], a["bbox_x2"], a["bbox_y2"]), a["person_id"]))
-    said_no = {p: rejected_matches.load(conn, p) for p in {r["provider_id"] for r in rows}}
+    said_no = {(a["content_hash"], a["person_id"]) for a in conn.execute("SELECT content_hash, person_id FROM rejected_matches")}
 
     done: set[int] = set()
     for r in rows:
@@ -86,7 +87,7 @@ def _answered(conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> set[int]:
         answers = user.get(ch, [])
         if (any(pid == r["person_id"] for _, pid in answers)
                 or any(_iou(b, bbox) >= ASSIGNMENT_IOU_THRESHOLD for b, _ in answers)
-                or rejected_matches.is_rejected(said_no[r["provider_id"]], ch, bbox, r["person_id"])):
+                or (ch, r["person_id"]) in said_no):
             done.add(r["id"])
     return done
 

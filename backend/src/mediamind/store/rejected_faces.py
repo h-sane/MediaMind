@@ -74,6 +74,15 @@ def reject_face(conn: sqlite3.Connection, face_id: int) -> RejectedFaceResult | 
 
     content_hash = row["content_hash"]
     if content_hash:
+        # Ignoring a face that review asked about also answers that question for the whole
+        # file: the next frame of the same video is not asked for the same person.
+        from mediamind.store import rejected_matches  # imports this module
+
+        bbox = (row["bbox_x1"], row["bbox_y1"], row["bbox_x2"], row["bbox_y2"])
+        for p in conn.execute(
+            "SELECT DISTINCT person_id FROM pending_matches WHERE face_id = ? AND decision IS NULL", (face_id,)
+        ).fetchall():
+            rejected_matches.record(conn, content_hash, row["provider_id"], bbox, p["person_id"])
         conn.execute(
             """
             INSERT INTO rejected_face_regions

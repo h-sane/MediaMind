@@ -645,13 +645,13 @@ def test_one_question_per_file_and_a_yes_settles_the_file(client, tmp_path):
     assert client.get(f"/v1/libraries/{lib_id}/pending").json() == []
 
 
-def test_a_no_moves_on_and_survives_a_rescan(client, tmp_path):
+def test_a_no_settles_the_file_and_survives_a_rescan(client, tmp_path):
     lib_dir, lib_id, faces, ids, pid = _file_with_three_questions(client, tmp_path)
 
     client.post(f"/v1/libraries/{lib_id}/pending/decisions",
                 json={"decisions": [{"pending_id": ids["first"], "decision": "rejected"}]})
-    # The different-looking face in the same file may still be Eve: now it is asked.
-    assert [m["face_id"] for m in client.get(f"/v1/libraries/{lib_id}/pending").json()] == [faces["other"]]
+    # One answer per file and person: the other frames of the same video are not asked.
+    assert client.get(f"/v1/libraries/{lib_id}/pending").json() == []
 
     # A rescan recreates faces rows (new ids) and the sort asks about them again.
     conn = open_library_db(library_data_dir(lib_dir).parent)
@@ -666,4 +666,43 @@ def test_a_no_moves_on_and_survives_a_rescan(client, tmp_path):
     conn.commit()
     conn.close()
 
-    assert [m["face_id"] for m in client.get(f"/v1/libraries/{lib_id}/pending").json()] == [faces["other"]]
+    assert client.get(f"/v1/libraries/{lib_id}/pending").json() == []
+
+
+def test_ignoring_a_face_settles_the_file_for_that_person(client, tmp_path):
+    lib_dir, lib_id, faces, ids, pid = _file_with_three_questions(client, tmp_path)
+
+    assert client.post(f"/v1/libraries/{lib_id}/faces/{faces['first']}/reject").status_code == 200
+    # The different-looking face in the same file is not asked for Eve next.
+    assert client.get(f"/v1/libraries/{lib_id}/pending").json() == []
+
+
+def test_forget_missing_drops_deleted_files_and_their_questions(client, tmp_path):
+    lib_dir, lib_id, faces, ids, pid = _file_with_three_questions(client, tmp_path)
+    conn = open_library_db(library_data_dir(lib_dir).parent)
+    total = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+    path = conn.execute("SELECT fi.path FROM faces f JOIN files fi ON fi.id = f.file_id WHERE f.id = ?", (faces["first"],)).fetchone()[0]
+    conn.close()
+    (lib_dir / path).unlink()
+
+    assert client.post(f"/v1/libraries/{lib_id}/files/forget-missing").json() == {"removed": 1}
+    assert client.get(f"/v1/libraries/{lib_id}/pending").json() == []
+    conn = open_library_db(library_data_dir(lib_dir).parent)
+    assert conn.execute("SELECT COUNT(*) FROM files").fetchone()[0] == total - 1
+    conn.close()
+    # Idempotent, and every other file is still indexed.
+    assert client.post(f"/v1/libraries/{lib_id}/files/forget-missing").json() == {"removed": 0}
+
+
+def test_forget_missing_keeps_the_index_of_an_unreachable_library(tmp_path):
+    from mediamind.store.missing_files import forget_missing
+
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    _make_library(lib_dir)
+    _seed_persons_db(lib_dir)
+    conn = open_library_db(library_data_dir(lib_dir).parent)
+    total = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+    assert forget_missing(conn, tmp_path / "unplugged-drive") == 0
+    assert conn.execute("SELECT COUNT(*) FROM files").fetchone()[0] == total
+    conn.close()
