@@ -175,3 +175,19 @@ def global_moves_dir() -> Path:
     d = app_data_dir() / "global_moves"
     (d / "manifests").mkdir(parents=True, exist_ok=True)
     return d
+
+
+def replace_file(tmp: Path, dest: Path) -> None:
+    """`tmp.replace(dest)` that survives Windows briefly refusing it: another process (antivirus,
+    the search indexer, a backup tool) holding the just-written file open makes the rename fail
+    with PermissionError for a few milliseconds. Tries for about a second, then raises."""
+    import time
+
+    for attempt in range(20):
+        try:
+            tmp.replace(dest)
+            return
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.05)

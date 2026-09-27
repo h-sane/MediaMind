@@ -31,6 +31,7 @@ logger = logging.getLogger("mediamind.jobs")
 # separate, stricter set rather than folded into the same-type check below.
 EXCLUSIVE_JOB_TYPES = {
     "dedupe-execute",
+    "people-move",
     "organize-execute",
     "faces-merge-execute",
     "faces-materialize-execute",

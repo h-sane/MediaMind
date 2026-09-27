@@ -20,7 +20,7 @@ import threading
 import uuid
 from pathlib import Path
 
-from mediamind.config import people_layout_path
+from mediamind.config import people_layout_path, replace_file
 
 
 def person_key(library_id: str, local_person_id: int) -> str:
@@ -61,7 +61,7 @@ class PeopleLayoutStore:
         tmp = self._path.with_suffix(".tmp")
         payload = {"pins": self._pins, "hidden": self._hidden, "unusable": self._unusable, "collections": self._collections}
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        tmp.replace(self._path)
+        replace_file(tmp, self._path)
 
     # -- pins ---------------------------------------------------------------
 

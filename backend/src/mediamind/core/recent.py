@@ -15,7 +15,7 @@ import json
 import time
 from pathlib import Path
 
-from mediamind.config import recent_files_path
+from mediamind.config import recent_files_path, replace_file
 
 # Real Explorer's Home page shows a modest, glanceable number of recents —
 # unbounded growth would make the store (and the UI list) unwieldy for no
@@ -47,7 +47,7 @@ class RecentFilesStore:
     def _save(self) -> None:
         tmp = self._path.with_suffix(".tmp")
         tmp.write_text(json.dumps({"entries": self._entries}, indent=2), encoding="utf-8")
-        tmp.replace(self._path)
+        replace_file(tmp, self._path)
 
     def list_raw(self) -> list[tuple[str, float]]:
         """Stored (path, opened_at) pairs, most-recently-opened first,

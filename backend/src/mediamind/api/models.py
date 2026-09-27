@@ -903,6 +903,7 @@ class TeachPersonOut(BaseModel):
     files: int
     guest: bool = False       # only in a few pictures here (or none): not one of this folder's people
     membership: str | None = None  # the user's choice, 'member' | 'guest'; None: decided by file count
+    primary_location: str | None = None  # this person's physical folder (by name, any library)
 
 
 class TeachMembershipIn(BaseModel):

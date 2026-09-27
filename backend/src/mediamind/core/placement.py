@@ -1,0 +1,365 @@
+"""People folders: file counts, a primary folder per person, moving a person's files there,
+group pictures, and auto-filing new pictures from opted-in watched folders.
+
+A person is a *name*, everywhere: the same rule teaching uses to pool examples. The primary
+folder is kept on the global person(s) of that name (store/global_people.py) as an absolute
+path, so it can be in another library or drive. A picture with two or more named people can
+only go one place; that choice is a group rule keyed by the set of names (`group_rules`), or
+the picture waits for the user. Moves go through core/safety.execute (copy-then-delete, a
+manifest), are recorded for undo, and keep the index row when the file stays in its library.
+See docs/PEOPLE_FOLDERS_AUTOFILE_PLAN.md.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import sqlite3
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+from mediamind.config import global_moves_dir
+from mediamind.core.faces.teach import name_key
+from mediamind.core.organize_plan import safe_folder_name
+from mediamind.core.safety import FileOp, execute as safety_execute
+from mediamind.store import global_people as gp_store
+from mediamind.store.db import open_library_db
+
+logger = logging.getLogger(__name__)
+
+MEDIA_KINDS = ("image", "video")
+
+
+# --- counts ---------------------------------------------------------------------------------
+
+def file_stats(conn: sqlite3.Connection, under: str | None = None) -> dict:
+    """Pictures and videos in this library (or under one of its folders): sorted (someone in it
+    is named), unsorted (it has faces, nobody named yet) and no faces (none were found)."""
+    prefix = under.strip("/").replace("\\", "/") + "/" if under and under.strip("/") else None
+    rows = conn.execute(
+        """
+        SELECT fi.path,
+               EXISTS(SELECT 1 FROM faces f JOIN persons p ON p.id = f.person_id
+                      WHERE f.file_id = fi.id AND p.name IS NOT NULL) AS named,
+               EXISTS(SELECT 1 FROM faces f WHERE f.file_id = fi.id) AS has_faces
+        FROM files fi WHERE fi.kind IN ('image', 'video')
+        """
+    ).fetchall()
+    total = sorted_ = unsorted = 0
+    for r in rows:
+        if prefix and not r["path"].replace("\\", "/").startswith(prefix):
+            continue
+        total += 1
+        if r["named"]:
+            sorted_ += 1
+        elif r["has_faces"]:
+            unsorted += 1
+    return {"total": total, "sorted": sorted_, "unsorted": unsorted, "no_faces": total - sorted_ - unsorted}
+
+
+# --- primary folders (by name) --------------------------------------------------------------
+
+def primary_folders(gp_conn: sqlite3.Connection) -> dict[str, str]:
+    """name key -> primary folder, for every name that has one."""
+    out: dict[str, str] = {}
+    for g in gp_store.list_global_persons(gp_conn):
+        if g.primary_location:
+            out.setdefault(name_key(g.name), g.primary_location)
+    return out
+
+
+def set_primary_folder(gp_conn: sqlite3.Connection, library_id: str, local_person_id: int, name: str,
+                       provider_id: str, path: str | None) -> str | None:
+    """Set (or clear) the primary folder of everyone called `name`. `path` must be an existing
+    folder; it is stored resolved. Links this library's person to the global person of that name,
+    creating it if needed."""
+    if path is not None:
+        p = Path(path).expanduser()
+        if not p.is_dir():
+            raise ValueError("Pick a folder that exists.")
+        path = str(p.resolve())
+    key = name_key(name)
+    same = [g for g in gp_store.list_global_persons(gp_conn) if name_key(g.name) == key]
+    gid = gp_store.global_for_local(gp_conn, library_id, local_person_id)
+    if gid is None:
+        gid = same[0].id if same else gp_store.create_global_person(gp_conn, " ".join(name.split()))
+        gp_store.link(gp_conn, gid, library_id, local_person_id, provider_id)
+    for g in {gid, *(g.id for g in same)}:
+        gp_store.set_primary_location(gp_conn, g, path)
+    return path
+
+
+# --- group rules ----------------------------------------------------------------------------
+
+def group_key(names: set[str]) -> str:
+    return "|".join(sorted(names))
+
+
+@dataclass(frozen=True)
+class GroupRule:
+    dest: str | None  # None: leave these pictures where they are
+
+
+def group_rules(gp_conn: sqlite3.Connection) -> dict[str, GroupRule]:
+    return {r["key"]: GroupRule(r["dest"]) for r in gp_conn.execute("SELECT key, dest FROM group_rules")}
+
+
+def set_group_rule(gp_conn: sqlite3.Connection, names: list[str], dest: str | None) -> None:
+    gp_conn.execute(
+        "INSERT INTO group_rules (key, names, dest, created_at) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET dest = excluded.dest, names = excluded.names",
+        (group_key({name_key(n) for n in names}), ", ".join(sorted(names, key=str.casefold)), dest, time.time()))
+    gp_conn.commit()
+
+
+def default_group_parent(primaries: list[str], file_abs: Path) -> Path:
+    """Where a new group folder goes: beside the people's own folders (AESPA\\KARINA and
+    AESPA\\WINTER give AESPA), else next to the picture."""
+    parents = [str(Path(p).parent) for p in primaries]
+    if parents:
+        try:
+            return Path(os.path.commonpath(parents))
+        except ValueError:  # different drives
+            return Path(parents[0])
+    return file_abs.parent
+
+
+# --- who is in which file -------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class NamedFile:
+    library_id: str
+    library_root: Path
+    file_id: int
+    path: str            # library-relative
+    names: dict[str, str]  # name key -> display name
+
+    @property
+    def abs_path(self) -> Path:
+        return self.library_root / self.path
+
+
+def _named_files(conn: sqlite3.Connection, library_id: str, root: Path, file_ids: list[int] | None = None) -> list[NamedFile]:
+    sql = """SELECT fi.id, fi.path, p.name FROM files fi
+             JOIN faces f ON f.file_id = fi.id JOIN persons p ON p.id = f.person_id
+             WHERE p.name IS NOT NULL"""
+    params: tuple = ()
+    if file_ids is not None:
+        if not file_ids:
+            return []
+        sql += " AND fi.id IN (%s)" % ",".join("?" * len(file_ids))
+        params = tuple(file_ids)
+    by_file: dict[int, NamedFile] = {}
+    for r in conn.execute(sql, params):
+        nf = by_file.setdefault(r["id"], NamedFile(library_id, root, r["id"], r["path"], {}))
+        nf.names.setdefault(name_key(r["name"]), " ".join(r["name"].split()))
+    return list(by_file.values())
+
+
+def _under(path: Path, folder: str | None) -> bool:
+    if not folder:
+        return False
+    try:
+        return path.resolve().is_relative_to(Path(folder).resolve())
+    except (OSError, ValueError):
+        return False
+
+
+@dataclass(frozen=True)
+class Placement:
+    file: NamedFile
+    dest: str
+
+
+@dataclass(frozen=True)
+class GroupQuestion:
+    file: NamedFile
+    primaries: dict[str, str]  # name key -> primary folder, for the people who have one
+    new_folder_parent: Path
+
+
+def classify(files: list[NamedFile], primaries: dict[str, str], rules: dict[str, GroupRule],
+             *, only_name: str | None = None) -> tuple[list[Placement], list[GroupQuestion]]:
+    """Where each file goes. One named person: their primary folder. Two or more: the group's
+    rule, else a question — asked only when someone in it has a primary folder. Files already
+    in their destination (or in any of their people's folders, for a question) are left out."""
+    moves: list[Placement] = []
+    questions: list[GroupQuestion] = []
+    for f in files:
+        if only_name is not None and only_name not in f.names:
+            continue
+        if len(f.names) == 1:
+            dest = primaries.get(next(iter(f.names)))
+            if dest and not _under(f.abs_path, dest):
+                moves.append(Placement(f, dest))
+            continue
+        rule = rules.get(group_key(set(f.names)))
+        if rule is not None:
+            if rule.dest and not _under(f.abs_path, rule.dest):
+                moves.append(Placement(f, rule.dest))
+            continue
+        mine = {k: primaries[k] for k in f.names if k in primaries}
+        if mine and not any(_under(f.abs_path, d) for d in mine.values()):
+            questions.append(GroupQuestion(f, mine, default_group_parent(list(mine.values()), f.abs_path)))
+    return moves, questions
+
+
+def _library_files(registry, name: str | None = None) -> list[NamedFile]:
+    """Named files across every reachable library (only those with `name`, when given)."""
+    key = name_key(name) if name else None
+
+    def load(lib) -> list[NamedFile]:
+        try:
+            conn = open_library_db(Path(lib.path))
+        except Exception:  # offline drive, locked vault: skipped, never blocks
+            return []
+        try:
+            if key is not None:
+                names = [r["name"] for r in conn.execute("SELECT DISTINCT name FROM persons WHERE name IS NOT NULL")]
+                if not any(name_key(n) == key for n in names):
+                    return []
+            return _named_files(conn, lib.id, Path(lib.path))
+        except sqlite3.Error:
+            return []
+        finally:
+            conn.close()
+
+    libs = registry.list()
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return [f for files in pool.map(load, libs) for f in files]
+
+
+def _dedupe_nested(files: list[NamedFile]) -> list[NamedFile]:
+    """A folder registered inside another (AESPA inside KPOP) indexes the same file twice;
+    keep one row per real path, the one from the deepest library."""
+    best: dict[str, NamedFile] = {}
+    for f in files:
+        k = os.path.normcase(str(f.abs_path))
+        if k not in best or len(str(f.library_root)) > len(str(best[k].library_root)):
+            best[k] = f
+    return list(best.values())
+
+
+def person_plan(gp_conn: sqlite3.Connection, registry, name: str) -> tuple[list[Placement], list[GroupQuestion]]:
+    files = _dedupe_nested(_library_files(registry, name))
+    return classify(files, primary_folders(gp_conn), group_rules(gp_conn), only_name=name_key(name))
+
+
+def library_questions(gp_conn: sqlite3.Connection, conn: sqlite3.Connection, library_id: str, root: Path) -> list[GroupQuestion]:
+    _, questions = classify(_named_files(conn, library_id, root), primary_folders(gp_conn), group_rules(gp_conn))
+    return questions
+
+
+# --- moving ---------------------------------------------------------------------------------
+
+def plan_hash(moves: list[Placement]) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    for lib, fid, dest in sorted((m.file.library_id, m.file.file_id, m.dest) for m in moves):
+        h.update(f"{lib}\0{fid}\0{dest}\n".encode("utf-8"))
+    return h.hexdigest()
+
+
+def execute_moves(
+    gp_conn: sqlite3.Connection,
+    registry,
+    moves: list[Placement],
+    *,
+    label: str,
+    on_progress: Callable[[int, int], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> dict:
+    """Move the files (copy-then-delete, manifest), then fix the index: a file that stayed inside
+    its library keeps its row (and faces) at the new path; one that left drops the row, and the
+    library it arrived in indexes it itself. Recorded as one undoable move."""
+    ops = [FileOp(source=m.file.abs_path, dest_folder=Path(m.dest), mode="move") for m in moves]
+    for m in moves:
+        Path(m.dest).mkdir(parents=True, exist_ok=True)
+    manifest_path = global_moves_dir() / "manifests" / f"{time.strftime('%Y%m%d-%H%M%S')}_{label}.csv"
+    report = safety_execute(ops, manifest_path=manifest_path, on_progress=on_progress, should_cancel=should_cancel)
+
+    by_source = {os.path.normcase(str(m.file.abs_path)): m for m in moves}
+    updates: dict[str, list[tuple[str | None, int]]] = {}
+    moved = 0
+    for e in report.entries:
+        m = by_source.get(os.path.normcase(e.source))
+        if m is None or e.action != "moved":
+            continue
+        moved += 1
+        try:
+            rel = Path(e.destination).resolve().relative_to(m.file.library_root.resolve()).as_posix()
+        except ValueError:
+            rel = None
+        updates.setdefault(m.file.library_id, []).append((rel, m.file.file_id))
+    roots = {m.file.library_id: m.file.library_root for m in moves}
+    for library_id, rows in updates.items():
+        try:
+            conn = open_library_db(roots[library_id])
+        except Exception:
+            continue
+        try:
+            for rel, fid in rows:
+                if rel is None:
+                    conn.execute("DELETE FROM files WHERE id = ?", (fid,))
+                else:
+                    conn.execute("UPDATE files SET path = ? WHERE id = ?", (rel, fid))
+            conn.commit()
+        finally:
+            conn.close()
+
+    gp_store.record_move_action(
+        gp_conn, 0, dest_folder=", ".join(sorted({m.dest for m in moves})), file_count=len(moves),
+        dry_run=False, manifest_path=str(manifest_path), ok_count=report.handled, error_count=len(report.errors))
+    return {"planned": len(moves), "moved": moved, "errors": [e.error for e in report.entries if e.action == "error"][:5]}
+
+
+# --- watched folders ------------------------------------------------------------------------
+
+def auto_file_enabled(gp_conn: sqlite3.Connection, library_id: str) -> bool:
+    return gp_conn.execute("SELECT 1 FROM auto_file_libraries WHERE library_id = ?", (library_id,)).fetchone() is not None
+
+
+def set_auto_file(gp_conn: sqlite3.Connection, library_id: str, on: bool) -> None:
+    if on:
+        gp_conn.execute("INSERT OR IGNORE INTO auto_file_libraries (library_id) VALUES (?)", (library_id,))
+    else:
+        gp_conn.execute("DELETE FROM auto_file_libraries WHERE library_id = ?", (library_id,))
+    gp_conn.commit()
+
+
+def auto_file_moves(gp_conn: sqlite3.Connection, conn: sqlite3.Connection, library_id: str, root: Path,
+                    paths: list[str]) -> list[Placement]:
+    """What to file from a batch of new or changed paths in a watched folder. Only faces the sort
+    attached with confidence carry a name here (pending ones don't), and group pictures without a
+    rule wait for the user."""
+    rels = []
+    for p in paths:
+        try:
+            rels.append(Path(p).resolve().relative_to(root.resolve()).as_posix())
+        except (OSError, ValueError):
+            continue
+    if not rels:
+        return []
+    ids = [r["id"] for r in conn.execute(
+        "SELECT id FROM files WHERE path IN (%s)" % ",".join("?" * len(rels)), tuple(rels))]
+    moves, _ = classify(_named_files(conn, library_id, root, ids), primary_folders(gp_conn), group_rules(gp_conn))
+    return moves
+
+
+if __name__ == "__main__":
+    root = Path("C:/lib")
+    f = lambda i, *names: NamedFile("L", root, i, f"x/{i}.jpg", {name_key(n): n for n in names})
+    prim = {"karina": "C:/lib/KARINA", "winter": "C:/lib/WINTER"}
+    moves, qs = classify([f(1, "Karina"), f(2, "Karina", "Winter"), f(3, "Yuna"), f(4, "Winter", "Yuna")], prim, {})
+    assert [(m.file.file_id, m.dest) for m in moves] == [(1, "C:/lib/KARINA")]   # Yuna has no folder
+    assert [q.file.file_id for q in qs] == [2, 4]                                 # group pictures ask
+    assert qs[0].new_folder_parent == Path("C:/lib")
+    moves, qs = classify([f(2, "Karina", "Winter")], prim, {group_key({"karina", "winter"}): GroupRule("C:/lib/OT2")})
+    assert [(m.file.file_id, m.dest) for m in moves] == [(2, "C:/lib/OT2")] and not qs
+    _, qs = classify([f(2, "Karina", "Winter")], prim, {group_key({"karina", "winter"}): GroupRule(None)})
+    assert not qs                                                                # "leave it here" is remembered
+    print("placement self-check ok")

@@ -149,6 +149,14 @@ def teach_people(library_id: str, request: Request):
     finally:
         conn.close()
     elsewhere, display = teach.pool_foreign_examples(_other_library_openers(request, library_id), provider_id)
+    from mediamind.core.placement import primary_folders
+    from mediamind.store import global_people as gp_store
+
+    gp = gp_store.open_global_db()
+    try:
+        folders = primary_folders(gp)
+    finally:
+        gp.close()
 
     top = max((p["n"] for p in persons), default=0)
     out, seen = [], set()
@@ -160,7 +168,7 @@ def teach_people(library_id: str, request: Request):
             examples_here=here.get(p["id"], 0),
             examples_elsewhere=len(elsewhere.get(key, [])) if key else 0, files=p["n"],
             guest=p["membership"] == "guest" or (p["membership"] is None and p["n"] * GUEST_SHARE < top),
-            membership=p["membership"],
+            membership=p["membership"], primary_location=folders.get(key) if key else None,
         ))
     for key, embs in elsewhere.items():
         if key not in seen:

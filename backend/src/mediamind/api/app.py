@@ -78,9 +78,10 @@ async def _lifespan(app: FastAPI):
     pm = app.state.providers
     _default_entry = pm.default_entry(app.state.settings.active_provider_id)
 
-    def _sort_by_named_examples(library_id: str, _paths: list[str]) -> None:
+    def _sort_by_named_examples(library_id: str, paths: list[str]) -> None:
         # Watched folders (e.g. Downloads): newly ingested faces are matched
-        # against the people the user named in any library.
+        # against the people the user named in any library, and, where the user
+        # opted the folder in, filed into those people's folders.
         from mediamind.core.faces.teach import apply_in_registry
         from mediamind.store.db import open_library_db
 
@@ -91,10 +92,36 @@ async def _lifespan(app: FastAPI):
             conn = open_library_db(lib.root)
             try:
                 apply_in_registry(app.state.registry, library_id, conn, _default_entry.id)
+                _auto_file(lib, conn, paths)
             finally:
                 conn.close()
         except Exception:
             logging.getLogger(__name__).exception("ingest: sorting by named examples failed")
+
+    def _auto_file(lib, conn, paths: list[str]) -> None:
+        from mediamind.core import placement
+        from mediamind.store import global_people as gp_store
+
+        gp = gp_store.open_global_db()
+        try:
+            if not placement.auto_file_enabled(gp, lib.id):
+                return
+            moves = placement.auto_file_moves(gp, conn, lib.id, lib.root, paths)
+        finally:
+            gp.close()
+        if not moves:
+            return
+
+        def runner(ctx) -> dict:
+            g = gp_store.open_global_db()
+            try:
+                return placement.execute_moves(g, app.state.registry, moves, label="auto-file",
+                                               on_progress=lambda d, t: ctx.report_progress(d, t, "moving"))
+            finally:
+                g.close()
+
+        # A job, so the app shows it (Status centre) like any other move.
+        app.state.job_manager.start(lib.id, "auto-file", runner, triggered_by="watcher")
 
     app.state.ingest_worker = IngestWorker(
         app.state.registry,
@@ -247,6 +274,7 @@ def create_app(
     from mediamind.api.routes import people_view
     from mediamind.api.routes import unprocessed
     from mediamind.api.routes import teach
+    from mediamind.api.routes import people_folders
 
     app.include_router(libraries.router, prefix="/v1")
     app.include_router(files.router, prefix="/v1")
@@ -267,5 +295,6 @@ def create_app(
     app.include_router(people_view.router, prefix="/v1")
     app.include_router(unprocessed.router, prefix="/v1")
     app.include_router(teach.router, prefix="/v1")
+    app.include_router(people_folders.router, prefix="/v1")
 
     return app

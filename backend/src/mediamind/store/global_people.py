@@ -67,6 +67,20 @@ CREATE TABLE IF NOT EXISTS global_move_actions (
     error_count INTEGER,
     undone INTEGER NOT NULL DEFAULT 0
 );
+
+-- Where a picture of exactly this set of people goes (core/placement.py). key: the sorted,
+-- casefolded names joined by "|". dest NULL: leave such pictures where they are.
+CREATE TABLE IF NOT EXISTS group_rules (
+    key TEXT PRIMARY KEY,
+    names TEXT NOT NULL,
+    dest TEXT,
+    created_at REAL NOT NULL
+);
+
+-- Watched folders whose new pictures are filed into people's folders by themselves.
+CREATE TABLE IF NOT EXISTS auto_file_libraries (
+    library_id TEXT PRIMARY KEY
+);
 """
 
 

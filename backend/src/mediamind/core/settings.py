@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from mediamind.config import settings_path
+from mediamind.config import settings_path, replace_file
 
 DEFAULT_RECENT_FILES_ENABLED = True
 # Off by default: auto-scanning fires heavy background dedupe/face jobs on the
@@ -73,7 +73,7 @@ class SettingsStore:
             ),
             encoding="utf-8",
         )
-        tmp.replace(self._path)
+        replace_file(tmp, self._path)
 
     @property
     def recent_files_enabled(self) -> bool:

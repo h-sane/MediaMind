@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from mediamind.config import quick_access_path
+from mediamind.config import quick_access_path, replace_file
 
 
 class QuickAccessStore:
@@ -36,7 +36,7 @@ class QuickAccessStore:
     def _save(self) -> None:
         tmp = self._path.with_suffix(".tmp")
         tmp.write_text(json.dumps({"pins": self._pins}, indent=2), encoding="utf-8")
-        tmp.replace(self._path)
+        replace_file(tmp, self._path)
 
     def list_raw(self) -> list[str]:
         """Stored pin paths, unvalidated — callers resolve/filter for display."""

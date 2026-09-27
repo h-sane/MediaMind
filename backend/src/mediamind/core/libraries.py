@@ -13,7 +13,7 @@ import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from mediamind.config import app_data_dir, library_data_dir
+from mediamind.config import app_data_dir, library_data_dir, replace_file
 from mediamind.core.concurrency import TIMED_OUT, run_with_timeout
 
 REGISTRY_FILENAME = "libraries.json"
@@ -60,7 +60,7 @@ class LibraryRegistry:
         payload = {"libraries": [asdict(lib) for lib in self._libraries.values()]}
         tmp = self._path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        tmp.replace(self._path)
+        replace_file(tmp, self._path)
 
     def list(self) -> list[Library]:
         return sorted(self._libraries.values(), key=lambda lib: lib.name.lower())
