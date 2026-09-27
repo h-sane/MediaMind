@@ -20,7 +20,7 @@ from typing import Callable
 from mediamind.config import LIBRARY_DATA_DIRNAME, library_index_db_path
 from mediamind.core.reachability import is_root_reachable
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 # Two connections racing to create/migrate the SAME brand-new database file
 # (e.g. the always-on ingest worker and an HTTP request, opening within
@@ -424,6 +424,18 @@ def _v14_migration(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _v15_migration(conn: sqlite3.Connection) -> None:
+    """Schema v15: files the folder watcher picked up by itself (not a scan the user ran), so
+    Suggestions can ask about what just arrived and leave a scan's questions to Who's who."""
+    conn.executescript("""
+CREATE TABLE IF NOT EXISTS watch_arrivals (
+    path TEXT PRIMARY KEY,           -- library-relative
+    arrived_at REAL NOT NULL
+);
+""")
+    conn.commit()
+
+
 # v2 is a string; v3+ are callables (ALTER TABLE requires special handling).
 _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (2, _V2_ADDITIONS),
@@ -439,6 +451,7 @@ _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (12, _v12_migration),
     (13, _v13_migration),
     (14, _v14_migration),
+    (15, _v15_migration),
 ]
 
 

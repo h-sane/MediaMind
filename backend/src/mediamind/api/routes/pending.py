@@ -17,6 +17,8 @@ Routes:
 
 from __future__ import annotations
 
+import time
+
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -46,9 +48,15 @@ def _open_db(library_root: Path):
     return open_library_db(library_root)
 
 
+# Suggestions asks about what the watcher picked up in the last two weeks.
+ARRIVAL_WINDOW_SECONDS = 14 * 24 * 3600
+
+
 @router.get("/libraries/{library_id}/pending", response_model=list[PendingMatchOut])
-def list_pending(library_id: str, request: Request):
-    """Return all pending matches that haven't been decided yet, highest confidence first."""
+def list_pending(library_id: str, request: Request, arrived: bool = False):
+    """Return all pending matches that haven't been decided yet, highest confidence first.
+    With `arrived`, only those in files the folder watcher picked up recently (Suggestions);
+    a scan's questions are answered in Who's who."""
     library_root = _get_library_root(request, library_id)
     conn = _open_db(library_root)
     try:
@@ -61,8 +69,10 @@ def list_pending(library_id: str, request: Request):
             JOIN faces f ON f.id = pm.face_id
             JOIN files fi ON fi.id = f.file_id
             WHERE pm.decision IS NULL
+              AND (? = 0 OR fi.path IN (SELECT path FROM watch_arrivals WHERE arrived_at > ?))
             ORDER BY pm.confidence DESC
-            """
+            """,
+            (1 if arrived else 0, time.time() - ARRIVAL_WINDOW_SECONDS),
         ).fetchall()
         # ADR-0010: a file inside a person's bound folder is confirmed by
         # placement, so drop any pending match for that folder's own person.

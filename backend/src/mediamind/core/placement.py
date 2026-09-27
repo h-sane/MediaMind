@@ -62,6 +62,21 @@ def file_stats(conn: sqlite3.Connection, under: str | None = None) -> dict:
     return {"total": total, "sorted": sorted_, "unsorted": unsorted, "no_faces": total - sorted_ - unsorted}
 
 
+def no_face_files(conn: sqlite3.Connection, under: str | None = None) -> list[dict]:
+    """The pictures and videos in which the scan found no face (the "no faces" count), so the
+    user can look at them and keep, move or delete each one."""
+    prefix = under.strip("/").replace("\\", "/") + "/" if under and under.strip("/") else None
+    rows = conn.execute(
+        """
+        SELECT fi.id, fi.path, fi.kind, fi.size FROM files fi
+        WHERE fi.kind IN ('image', 'video') AND NOT EXISTS (SELECT 1 FROM faces f WHERE f.file_id = fi.id)
+        ORDER BY fi.path COLLATE NOCASE
+        """
+    ).fetchall()
+    return [{"file_id": r["id"], "path": r["path"], "kind": r["kind"], "size": r["size"]}
+            for r in rows if not prefix or r["path"].replace("\\", "/").startswith(prefix)]
+
+
 # --- primary folders (by name) --------------------------------------------------------------
 
 def primary_folders(gp_conn: sqlite3.Connection) -> dict[str, str]:

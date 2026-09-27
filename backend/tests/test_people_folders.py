@@ -47,6 +47,7 @@ def test_people_folders_end_to_end(tmp_path, monkeypatch):
         conn.close()
 
         assert client.get(f"/v1/libraries/{a_id}/teach/stats").json() == {"total": 6, "sorted": 4, "unsorted": 1, "no_faces": 1}
+        assert [f["path"] for f in client.get(f"/v1/libraries/{a_id}/teach/no-faces").json()] == ["landscape.jpg"]
 
         (aespa / "KARINA").mkdir(); (aespa / "WINTER").mkdir()
         for pid, folder in ((karina, "KARINA"), (winter, "WINTER")):
@@ -196,3 +197,28 @@ def test_cancelled_move_puts_everything_back(tmp_path, monkeypatch):
     conn = open_library_db(lib)
     assert sorted(tuple(r) for r in conn.execute("SELECT id, path FROM files")) == before
     conn.close()
+
+
+def test_suggestions_only_ask_about_what_the_watcher_picked_up(tmp_path, monkeypatch):
+    """Hussain, 2026-09-27: Suggestions is for what watched folders just picked up; a scan he
+    ran himself is answered in Who's who, never mixed into Suggestions."""
+    monkeypatch.setenv("MEDIAMIND_DATA_DIR", str(tmp_path / "appdata"))
+    lib = tmp_path / "BABY M"
+    lib.mkdir()
+    with TestClient(create_app()) as client:
+        lib_id = client.post("/v1/libraries", json={"path": str(lib)}).json()["id"]
+        conn = open_library_db(lib)
+        scanned, arrived = _file(conn, lib, "scanned.jpg"), _file(conn, lib, "new/arrived.jpg")
+        karina = teach.add_examples(conn, [_face(conn, _file(conn, lib, "example.jpg"))], name="Karina")
+        for fid in (scanned, arrived):
+            conn.execute("INSERT INTO pending_matches (face_id, person_id, confidence) VALUES (?, ?, 0.7)",
+                         (_face(conn, fid, 300), karina))
+        conn.execute("INSERT INTO watch_arrivals (path, arrived_at) VALUES ('new/arrived.jpg', ?)", (time.time(),))
+        conn.execute("INSERT INTO watch_arrivals (path, arrived_at) VALUES ('scanned.jpg', 0)")  # long ago
+        conn.commit()
+        conn.close()
+
+        everything = client.get(f"/v1/libraries/{lib_id}/pending").json()
+        just_arrived = client.get(f"/v1/libraries/{lib_id}/pending?arrived=true").json()
+        assert sorted(p["path"] for p in everything) == ["new/arrived.jpg", "scanned.jpg"]
+        assert [p["path"] for p in just_arrived] == ["new/arrived.jpg"]

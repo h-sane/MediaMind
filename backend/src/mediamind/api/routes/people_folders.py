@@ -1,6 +1,7 @@
 """People folders: counts, primary folders, moving a person's files, group pictures, auto-filing.
 
   GET  /v1/libraries/{id}/teach/stats?under=                 {total, sorted, unsorted, no_faces}
+  GET  /v1/libraries/{id}/teach/no-faces?under=              the files behind no_faces
   PUT  /v1/libraries/{id}/teach/people/{pid}/primary-location  {path | null}
   GET  /v1/libraries/{id}/teach/people/{pid}/move-plan       what "Move files" would do
   POST /v1/libraries/{id}/teach/people/{pid}/move-plan       the same, as a job with progress
@@ -91,6 +92,18 @@ def stats(library_id: str, request: Request, under: str | None = Query(default=N
         return placement.file_stats(conn, under)
     finally:
         conn.close()
+
+
+@router.get("/libraries/{library_id}/teach/no-faces")
+def no_faces(library_id: str, request: Request, under: str | None = Query(default=None)):
+    """The pictures and videos with no face found, to look at and keep, move or delete."""
+    root = Path(_library(request, library_id).path)
+    conn = open_library_db(root)
+    try:
+        files = placement.no_face_files(conn, under)
+    finally:
+        conn.close()
+    return [{**f, "abs_path": str(root / f["path"])} for f in files]
 
 
 @router.put("/libraries/{library_id}/teach/people/{person_id}/primary-location")

@@ -91,12 +91,27 @@ async def _lifespan(app: FastAPI):
         try:
             conn = open_library_db(lib.root)
             try:
+                _record_arrivals(conn, lib.root, paths)
                 apply_in_registry(app.state.registry, library_id, conn, _default_entry.id)
                 _auto_file(lib, conn, paths)
             finally:
                 conn.close()
         except Exception:
             logging.getLogger(__name__).exception("ingest: sorting by named examples failed")
+
+    def _record_arrivals(conn, root, paths: list[str]) -> None:
+        # What the watcher picked up is what Suggestions asks about (see pending.py `arrived`).
+        import time
+        from pathlib import Path
+
+        rels = []
+        for p in paths:
+            try:
+                rels.append((Path(p).relative_to(root).as_posix(), time.time()))
+            except ValueError:
+                continue
+        conn.executemany("INSERT OR REPLACE INTO watch_arrivals (path, arrived_at) VALUES (?, ?)", rels)
+        conn.commit()
 
     def _auto_file(lib, conn, paths: list[str]) -> None:
         from mediamind.core import placement
