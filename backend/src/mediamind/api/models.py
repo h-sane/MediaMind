@@ -901,6 +901,12 @@ class TeachPersonOut(BaseModel):
     examples_here: int
     examples_elsewhere: int
     files: int
+    guest: bool = False       # only in a few pictures here (or none): not one of this folder's people
+    membership: str | None = None  # the user's choice, 'member' | 'guest'; None: decided by file count
+
+
+class TeachMembershipIn(BaseModel):
+    membership: Literal["member", "guest"] | None = None
 
 
 class TeachExamplesIn(BaseModel):

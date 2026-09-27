@@ -2,6 +2,7 @@
 
   GET  /v1/libraries/{id}/teach/faces       face tiles to pick examples from
   GET  /v1/libraries/{id}/teach/people      people with example counts (here + other libraries)
+  PUT  /v1/libraries/{id}/teach/people/{person_id}/membership   {membership: member | guest | null}
   POST /v1/libraries/{id}/teach/examples    {face_ids, person_id | name}
   POST /v1/libraries/{id}/teach/examples/remove   {face_ids}
   POST /v1/libraries/{id}/teach/apply       re-sort against every library's examples
@@ -24,6 +25,7 @@ from mediamind.api.models import (
     TeachExamplesRemoveIn,
     TeachFaceOut,
     TeachFacesOut,
+    TeachMembershipIn,
     TeachPersonOut,
 )
 from mediamind.core.faces import teach
@@ -35,6 +37,12 @@ router = APIRouter(tags=["teach"])
 # A face narrower than this share of its frame's largest face, or not among the
 # frame's two largest, is treated as a background face (bystander, crowd).
 BACKGROUND_WIDTH_RATIO = 0.5
+
+# A person in fewer files than 1/GUEST_SHARE of this folder's most-seen person is a guest here
+# (someone from another group in a few shared pictures), unless the user says otherwise.
+# ponytail: one share for every folder; a folder of one person plus many one-off friends is the
+# case the manual switch covers.
+GUEST_SHARE = 20
 
 
 def _library_root(request: Request, library_id: str) -> Path:
@@ -129,11 +137,11 @@ def teach_people(library_id: str, request: Request):
         for e in teach.library_examples(conn, provider_id):
             here[e.person_id] += 1
         persons = conn.execute(
-            """SELECT p.id, p.name, COUNT(DISTINCT f.file_id) AS n FROM persons p
+            """SELECT p.id, p.name, p.membership, COUNT(DISTINCT f.file_id) AS n FROM persons p
                LEFT JOIN faces f ON f.person_id = p.id
                WHERE p.provider_id = ? AND (p.name IS NOT NULL OR p.id IN (%s))
                GROUP BY p.id""" % ",".join(str(i) for i in here) if here else
-            """SELECT p.id, p.name, COUNT(DISTINCT f.file_id) AS n FROM persons p
+            """SELECT p.id, p.name, p.membership, COUNT(DISTINCT f.file_id) AS n FROM persons p
                LEFT JOIN faces f ON f.person_id = p.id
                WHERE p.provider_id = ? AND p.name IS NOT NULL GROUP BY p.id""",
             (provider_id,),
@@ -142,6 +150,7 @@ def teach_people(library_id: str, request: Request):
         conn.close()
     elsewhere, display = teach.pool_foreign_examples(_other_library_openers(request, library_id), provider_id)
 
+    top = max((p["n"] for p in persons), default=0)
     out, seen = [], set()
     for p in persons:
         key = teach.name_key(p["name"]) if p["name"] else None
@@ -150,13 +159,30 @@ def teach_people(library_id: str, request: Request):
             person_id=p["id"], name=p["name"] or "Unnamed person",
             examples_here=here.get(p["id"], 0),
             examples_elsewhere=len(elsewhere.get(key, [])) if key else 0, files=p["n"],
+            guest=p["membership"] == "guest" or (p["membership"] is None and p["n"] * GUEST_SHARE < top),
+            membership=p["membership"],
         ))
     for key, embs in elsewhere.items():
         if key not in seen:
             out.append(TeachPersonOut(person_id=None, name=display.get(key, key), examples_here=0,
-                                      examples_elsewhere=len(embs), files=0))
+                                      examples_elsewhere=len(embs), files=0, guest=True))
     out.sort(key=lambda p: p.name.casefold())
     return out
+
+
+@router.put("/libraries/{library_id}/teach/people/{person_id}/membership")
+def set_membership(library_id: str, person_id: int, body: TeachMembershipIn, request: Request):
+    """Say whether a person belongs to this folder or is only a guest in it. Only changes how
+    Who's who lists them; sorting and their files are untouched."""
+    conn = open_library_db(_library_root(request, library_id))
+    try:
+        cur = conn.execute("UPDATE persons SET membership = ? WHERE id = ?", (body.membership, person_id))
+        conn.commit()
+    finally:
+        conn.close()
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Unknown person")
+    return {"person_id": person_id, "membership": body.membership}
 
 
 @router.post("/libraries/{library_id}/teach/examples")

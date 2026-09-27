@@ -83,3 +83,33 @@ def test_frame_endpoint_returns_whole_picture_with_face(tmp_path, monkeypatch):
         img = cv2.imdecode(np.frombuffer(res.content, np.uint8), cv2.IMREAD_COLOR)
         assert img.shape[:2] == (300, 400)            # whole frame, not a crop (already under 512)
         assert client.get(f"/v1/libraries/{lib_id}/teach/faces/999/frame").status_code == 404
+
+
+def test_people_in_a_few_pictures_are_guests_until_the_user_says_otherwise(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from mediamind.api.app import create_app
+
+    monkeypatch.setenv("MEDIAMIND_DATA_DIR", str(tmp_path / "appdata"))
+    lib = tmp_path / "lib"; lib.mkdir()
+    rng = np.random.default_rng(2)
+    with TestClient(create_app()) as client:
+        lib_id = client.post("/v1/libraries", json={"path": str(lib)}).json()["id"]
+        conn = open_library_db(lib)
+        conn.execute("INSERT INTO scans (id, type, state, finished_at) VALUES ('s', 'faces', 'done', 1)")
+        karina = teach.add_examples(conn, [_add_face(conn, i, _unit(rng.normal(size=64))) for i in range(40)], name="Karina")
+        yuna = teach.add_examples(conn, [_add_face(conn, 100, _unit(rng.normal(size=64)))], name="Yuna")
+        conn.close()
+
+        def guests():
+            return {p["name"]: p["guest"] for p in client.get(f"/v1/libraries/{lib_id}/teach/people").json()}
+
+        assert guests() == {"Karina": False, "Yuna": True}   # 1 file against Karina's 40
+        url = f"/v1/libraries/{lib_id}/teach/people/{yuna}/membership"
+        assert client.put(url, json={"membership": "member"}).status_code == 200
+        assert guests() == {"Karina": False, "Yuna": False}  # the switch wins over the file count
+        client.put(f"/v1/libraries/{lib_id}/teach/people/{karina}/membership", json={"membership": "guest"})
+        assert guests()["Karina"] is True
+        client.put(url, json={"membership": None})
+        assert guests()["Yuna"] is True                      # back to automatic
+        assert client.put(f"/v1/libraries/{lib_id}/teach/people/999/membership", json={"membership": "guest"}).status_code == 404

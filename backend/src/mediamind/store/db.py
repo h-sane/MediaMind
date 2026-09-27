@@ -20,7 +20,7 @@ from typing import Callable
 from mediamind.config import LIBRARY_DATA_DIRNAME, library_index_db_path
 from mediamind.core.reachability import is_root_reachable
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 # Two connections racing to create/migrate the SAME brand-new database file
 # (e.g. the always-on ingest worker and an HTTP request, opening within
@@ -414,6 +414,16 @@ CREATE INDEX IF NOT EXISTS idx_rejected_matches_key ON rejected_matches(content_
     conn.commit()
 
 
+def _v14_migration(conn: sqlite3.Connection) -> None:
+    """Schema v14: the user's choice whether a person belongs to this folder ('member') or only
+    turns up in a few of its pictures ('guest'). NULL leaves it to the file-count rule in
+    api/routes/teach.py."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(persons)")}
+    if "membership" not in cols:
+        conn.execute("ALTER TABLE persons ADD COLUMN membership TEXT")
+    conn.commit()
+
+
 # v2 is a string; v3+ are callables (ALTER TABLE requires special handling).
 _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (2, _V2_ADDITIONS),
@@ -428,6 +438,7 @@ _MIGRATIONS: list[tuple[int, str | Callable[[sqlite3.Connection], None]]] = [
     (11, _v11_migration),
     (12, _v12_migration),
     (13, _v13_migration),
+    (14, _v14_migration),
 ]
 
 
