@@ -77,6 +77,13 @@ CREATE TABLE IF NOT EXISTS group_rules (
     created_at REAL NOT NULL
 );
 
+-- Group pictures the user already placed (or left where they are), by file content: never
+-- asked about or moved again, whoever's folder is being filled later.
+CREATE TABLE IF NOT EXISTS group_settled (
+    content_hash TEXT PRIMARY KEY,
+    created_at REAL NOT NULL
+);
+
 -- Watched folders whose new pictures are filed into people's folders by themselves.
 CREATE TABLE IF NOT EXISTS auto_file_libraries (
     library_id TEXT PRIMARY KEY

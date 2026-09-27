@@ -39,3 +39,34 @@ Hussain's ask (2026-09-27):
 ## Not in this round
 - Re-attaching faces for files moved into a *different* library: the destination rescans.
 - A dedicated toast for auto-filing, beyond the Status centre card and the Group pictures count.
+
+## Follow-up (s102, 2026-09-27): progress, no double copies, answered groups, ignored faces
+Hussain's first live run: choosing Karina's folder and opening Move files each sat on a spinner for 1 to 2 minutes, and the move itself showed no real progress.
+
+**Why it was slow.**
+- `placement._under` called `Path.resolve()` on every file. On the network vault that is one round-trip per picture: 22 s for `teach/groups` on AESPA, and most of the time spent building the move plan.
+- It now resolves each library root and each destination folder once (`_real`, cached), then compares the paths as strings.
+
+**Progress everywhere a person waits.**
+- `POST teach/people/{id}/move-plan` is the plan as a job. Phase `checking` counts the scanned folders read (the detail is the folder's name), then phase `comparing` counts the files checked against the destination. The GET route stays for compatibility.
+- The move job reports the same two phases, then `moving` with the name of the file being moved.
+- `POST teach/apply-job` is Sort as a job: `checking` for each other folder's examples read, then `sorting`.
+- Who's who shows one activity card in the message slot: the title, counts, a real progress bar, the current file or folder, the elapsed time, and Cancel for the plan and the move.
+  - It only appears after 400 ms, so quick actions don't flash it.
+  - The page reload names the parts still loading.
+- Jobs the page is following stay off the bottom strip until the user leaves the page. The strip now has a title for every job type and never shows a raw code.
+- Duplicate removal uses the existing `execute-job`, so the strip counts deletions.
+
+**No second copies.** `already_there()`:
+- A file whose identical copy is already somewhere under the destination is not moved. The check lists the folder once and hashes only files of the same size.
+- The plan reports `already_there`, and the Move dialog says so.
+- The file stays where it is. Removing copies is the duplicate finder's job, never an automatic delete.
+- Files already inside the destination were already left out.
+
+**Answered group pictures stay answered.**
+- `group_settled` (global db, keyed by content hash) records every group picture the user placed or left, with or without "remember".
+- `classify(settled=…)` skips them, so they are never asked about or moved again, whoever's folder is filled next.
+
+**Ignored faces don't count.**
+- `_named_files` drops a person from a file when the user said No, or Ignore, to that person in that file's content (`rejected_matches`), unless they also named that person there.
+- So Karina's video with Winter ignored in the background is Karina's alone, not a group picture. This is the same rule the review queue uses to settle a file for a person.

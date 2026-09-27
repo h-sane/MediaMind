@@ -3,6 +3,7 @@
   GET  /v1/libraries/{id}/teach/stats?under=                 {total, sorted, unsorted, no_faces}
   PUT  /v1/libraries/{id}/teach/people/{pid}/primary-location  {path | null}
   GET  /v1/libraries/{id}/teach/people/{pid}/move-plan       what "Move files" would do
+  POST /v1/libraries/{id}/teach/people/{pid}/move-plan       the same, as a job with progress
   POST /v1/libraries/{id}/teach/people/{pid}/move            {expected_plan_hash} -> job
   GET  /v1/libraries/{id}/teach/groups                       group pictures waiting for a choice
   POST /v1/libraries/{id}/teach/groups/place                 answer one (and maybe remember it)
@@ -69,6 +70,13 @@ def _person(request: Request, library_id: str, person_id: int) -> tuple[str, str
     return row["name"], row["provider_id"]
 
 
+def _moving(ctx, moves: list[placement.Placement]):
+    """Progress for execute_moves: the count, and the name of the file being moved next."""
+    def report(done: int, total: int) -> None:
+        ctx.report_progress(done, total, "moving", Path(moves[min(done, len(moves) - 1)].file.path).name)
+    return report
+
+
 def _invalidate_people_cache() -> None:
     from mediamind.api.routes.global_people import _invalidate_cache
 
@@ -109,24 +117,48 @@ def _question_out(q: placement.GroupQuestion) -> dict:
     }
 
 
-@router.get("/libraries/{library_id}/teach/people/{person_id}/move-plan")
-def move_plan(library_id: str, person_id: int, request: Request):
-    """Every picture and video of this person, in every folder, that isn't in their folder yet.
-    Group pictures without a rule are counted but not moved: they wait for a choice."""
-    name, _ = _person(request, library_id, person_id)
+def _plan(registry, name: str, ctx=None) -> tuple[list[placement.Placement], dict]:
+    """Every picture and video of this person, in every folder, that isn't in their folder yet,
+    minus those whose identical copy is already there. Group pictures without a rule are counted
+    but not moved: they wait for a choice. With a job `ctx`, each step reports progress."""
     gp = gp_store.open_global_db()
     try:
         primary = placement.primary_folders(gp).get(placement.name_key(name))
         if not primary:
-            raise HTTPException(status_code=422, detail="Choose this person's folder first.")
-        moves, questions = placement.person_plan(gp, request.app.state.registry, name)
+            raise ValueError("Choose this person's folder first.")
+        moves, questions = placement.person_plan(
+            gp, registry, name, (lambda d, t, what: ctx.report_progress(d, t, "checking", what)) if ctx else None)
     finally:
         gp.close()
-    return {
+    moves, there = placement.already_there(
+        moves, (lambda d, t, what: ctx.report_progress(d, t, "comparing", what)) if ctx else None)
+    return moves, {
         "name": name, "primary_location": primary, "moves": len(moves),
         "to_group_folders": sum(1 for m in moves if m.dest != primary),
-        "groups_waiting": len(questions), "plan_hash": placement.plan_hash(moves),
+        "groups_waiting": len(questions), "already_there": len(there), "plan_hash": placement.plan_hash(moves),
     }
+
+
+@router.get("/libraries/{library_id}/teach/people/{person_id}/move-plan")
+def move_plan(library_id: str, person_id: int, request: Request):
+    """What "Move files" would do (see _plan). Blocks; the app uses the job below."""
+    name, _ = _person(request, library_id, person_id)
+    try:
+        return _plan(request.app.state.registry, name)[1]
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.post("/libraries/{library_id}/teach/people/{person_id}/move-plan", status_code=202)
+def start_move_plan(library_id: str, person_id: int, request: Request):
+    """The same plan as a job, so the app can show which folder is being checked; the plan is
+    the job's result. Reading every scanned folder can take a minute on a network drive."""
+    from mediamind.api.routes.organize import _snapshot
+
+    name, _ = _person(request, library_id, person_id)
+    registry = request.app.state.registry
+    job = request.app.state.job_manager.start(library_id, "people-move-plan", lambda ctx: _plan(registry, name, ctx)[1])
+    return _snapshot(job)
 
 
 @router.post("/libraries/{library_id}/teach/people/{person_id}/move", status_code=202)
@@ -140,16 +172,16 @@ def move_person_files(library_id: str, person_id: int, body: MoveIn, request: Re
         raise HTTPException(status_code=409, detail=f"A {running.type} job is still running here. Try again when it's done.")
 
     def runner(ctx) -> dict:
+        moves, _ = _plan(registry, name, ctx)
+        if placement.plan_hash(moves) != body.expected_plan_hash:
+            raise ValueError("The files changed since you looked. Open Move files again.")
+        if not moves:
+            return {"planned": 0, "moved": 0, "errors": []}
         gp = gp_store.open_global_db()
         try:
-            moves, _ = placement.person_plan(gp, registry, name)
-            if placement.plan_hash(moves) != body.expected_plan_hash:
-                raise ValueError("The files changed since you looked. Open Move files again.")
-            if not moves:
-                return {"planned": 0, "moved": 0, "errors": []}
             return placement.execute_moves(
                 gp, registry, moves, label=f"move-{placement.name_key(name)}",
-                on_progress=lambda d, t: ctx.report_progress(d, t, "moving"), should_cancel=ctx.cancelled)
+                on_progress=_moving(ctx, moves), should_cancel=ctx.cancelled)
         finally:
             gp.close()
 
@@ -203,18 +235,21 @@ def place_group_picture(library_id: str, body: PlaceIn, request: Request):
             placement.set_group_rule(gp, list(q.file.names.values()), dest)
             key = placement.group_key(set(q.file.names))
             same = [o for o in questions.values() if placement.group_key(set(o.file.names)) == key]
+        # Answered: never asked again, whoever's folder is filled next.
+        placement.settle_groups(gp, [o.file for o in same])
         if dest is None:
             return {"moved": 0, "remembered": body.remember}
-        moves = [placement.Placement(o.file, dest) for o in same]
+        moves, _ = placement.already_there([placement.Placement(o.file, dest) for o in same])
     finally:
         gp.close()
         conn.close()
+    if not moves:
+        return {"moved": 0, "remembered": body.remember, "dest": dest}
 
     def runner(ctx) -> dict:
         g = gp_store.open_global_db()
         try:
-            return placement.execute_moves(g, registry, moves, label="group",
-                                           on_progress=lambda d, t: ctx.report_progress(d, t, "moving"))
+            return placement.execute_moves(g, registry, moves, label="group", on_progress=_moving(ctx, moves))
         finally:
             g.close()
 

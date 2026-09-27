@@ -91,12 +91,16 @@ def named_examples(conn: sqlite3.Connection, provider_id: str) -> dict[str, list
 
 def pool_foreign_examples(
     open_conns: Iterable[Callable[[], sqlite3.Connection]], provider_id: str,
+    on_progress: Callable[[int], None] | None = None,
 ) -> tuple[dict[str, list[np.ndarray]], dict[str, str]]:
     """Named examples from other libraries. Unreachable libraries are skipped
-    (an offline drive must never block sorting). Returns (examples, display names)."""
+    (an offline drive must never block sorting). Returns (examples, display names).
+    `on_progress(i)` is called before the i-th library (0-based) is read."""
     pooled: dict[str, list[np.ndarray]] = defaultdict(list)
     display: dict[str, str] = {}
-    for opener in open_conns:
+    for i, opener in enumerate(open_conns):
+        if on_progress is not None:
+            on_progress(i)
         try:
             conn = opener()
         except (OSError, sqlite3.Error, Exception):  # LibraryOffline and friends
@@ -263,10 +267,16 @@ def apply_teaching(
     return {"people": people, "attached": attached, "pending": pending, "detached": detached}
 
 
-def apply_in_registry(registry, library_id: str, conn: sqlite3.Connection, provider_id: str) -> dict:
-    """apply_teaching with examples pooled from every other registered library."""
+def apply_in_registry(registry, library_id: str, conn: sqlite3.Connection, provider_id: str,
+                      on_progress: Callable[[int, int, str, str], None] | None = None) -> dict:
+    """apply_teaching with examples pooled from every other registered library.
+    `on_progress(done, total, phase, detail)`: "checking" per library read, then "sorting"."""
     from mediamind.store.db import open_library_db
 
-    openers = [(lambda p=lib.path: open_library_db(Path(p))) for lib in registry.list() if lib.id != library_id]
-    foreign, display = pool_foreign_examples(openers, provider_id)
+    others = [lib for lib in registry.list() if lib.id != library_id]
+    openers = [(lambda p=lib.path: open_library_db(Path(p))) for lib in others]
+    step = (lambda i: on_progress(i, len(others), "checking", others[i].name)) if on_progress else None
+    foreign, display = pool_foreign_examples(openers, provider_id, step)
+    if on_progress is not None:
+        on_progress(0, 0, "sorting", "")
     return apply_teaching(conn, provider_id, foreign, display)

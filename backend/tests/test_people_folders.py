@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 
 from mediamind.api.app import create_app
 from mediamind.core.faces import teach
+from mediamind.core.hashing import hash_file
+from mediamind.store import rejected_matches
 from mediamind.store.db import open_library_db
 
 P = "fake"
@@ -88,3 +90,63 @@ def test_people_folders_end_to_end(tmp_path, monkeypatch):
         assert (aespa / "KARINA" / "new.jpg").exists() and not (downloads / "new.jpg").exists()
         assert conn.execute("SELECT COUNT(*) FROM files WHERE id = ?", (new,)).fetchone()[0] == 0  # left its library
         conn.close()
+
+
+def _wait(client, lib, job_id):
+    for _ in range(200):
+        snap = client.get(f"/v1/libraries/{lib}/scans/{job_id}").json()
+        if snap["state"] in ("succeeded", "failed", "cancelled"):
+            return snap
+        time.sleep(0.05)
+    raise AssertionError(snap)
+
+
+def test_move_skips_copies_answered_groups_and_ignored_faces(tmp_path, monkeypatch):
+    """Hussain, 2026-09-27: a file already copied into Karina's folder isn't copied again; a group
+    picture answered once isn't asked again for Winter; Winter ignored in a video doesn't make it
+    a group picture."""
+    monkeypatch.setenv("MEDIAMIND_DATA_DIR", str(tmp_path / "appdata"))
+    aespa = tmp_path / "AESPA"
+    (aespa / "KARINA").mkdir(parents=True)
+    (aespa / "WINTER").mkdir()
+    with TestClient(create_app()) as client:
+        a_id = client.post("/v1/libraries", json={"path": str(aespa)}).json()["id"]
+        conn = open_library_db(aespa)
+        copied = _file(conn, aespa, "copied.jpg")
+        (aespa / "KARINA" / "copied (old).jpg").write_bytes(b"copied.jpg")          # the same bytes, already there
+        conn.execute("UPDATE files SET size = ?, content_hash = ? WHERE id = ?",
+                     (len(b"copied.jpg"), hash_file(aespa / "copied.jpg"), copied))
+        solo = _file(conn, aespa, "solo.jpg")
+        video = _file(conn, aespa, "video.mp4", kind="video")
+        group = _file(conn, aespa, "group.jpg")
+        karina = teach.add_examples(conn, [_face(conn, f) for f in (copied, solo, video, group)], name="Karina")
+        winter_face = _face(conn, video, 200)
+        winter = teach.add_examples(conn, [_face(conn, group, 200)], name="Winter")
+        conn.execute("UPDATE faces SET person_id = ? WHERE id = ?", (winter, winter_face))
+        rejected_matches.record(conn, "hvideo.mp4", P, (200, 0, 300, 100), winter)  # "Ignore" in review
+        conn.commit()
+        conn.close()
+        for pid, folder in ((karina, "KARINA"), (winter, "WINTER")):
+            client.put(f"/v1/libraries/{a_id}/teach/people/{pid}/primary-location", json={"path": str(aespa / folder)})
+
+        job = client.post(f"/v1/libraries/{a_id}/teach/people/{karina}/move-plan").json()
+        plan = _wait(client, a_id, job["id"])
+        assert plan["state"] == "succeeded" and plan["phase"] == "comparing", plan
+        p = plan["result"]
+        assert (p["moves"], p["already_there"], p["groups_waiting"]) == (2, 1, 1)   # solo + video; group waits
+        assert p == client.get(f"/v1/libraries/{a_id}/teach/people/{karina}/move-plan").json()
+
+        res = client.post(f"/v1/libraries/{a_id}/teach/groups/place",
+                          json={"file_id": group, "choice": "stay", "remember": False})
+        assert res.status_code == 200, res.text
+        assert client.get(f"/v1/libraries/{a_id}/teach/people/{winter}/move-plan").json()["groups_waiting"] == 0
+        assert client.get(f"/v1/libraries/{a_id}/teach/groups").json() == []
+
+        # Not scanned here: the sort job refuses at once, like the blocking route.
+        assert client.post(f"/v1/libraries/{a_id}/teach/apply-job").status_code == 409
+        conn = open_library_db(aespa)
+        conn.execute("INSERT INTO scans (id, type, state, finished_at) VALUES ('s', 'faces', 'succeeded', 1)")
+        conn.commit()
+        conn.close()
+        sort = _wait(client, a_id, client.post(f"/v1/libraries/{a_id}/teach/apply-job").json()["id"])
+        assert sort["state"] == "succeeded" and "people" in sort["result"], sort

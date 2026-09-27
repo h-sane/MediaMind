@@ -16,13 +16,15 @@ import logging
 import os
 import sqlite3
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable
 
 from mediamind.config import global_moves_dir
 from mediamind.core.faces.teach import name_key
+from mediamind.core.hashing import hash_file, is_sampled, sampled_hash
 from mediamind.core.organize_plan import safe_folder_name
 from mediamind.core.safety import FileOp, execute as safety_execute
 from mediamind.store import global_people as gp_store
@@ -103,6 +105,16 @@ class GroupRule:
     dest: str | None  # None: leave these pictures where they are
 
 
+def settled_groups(gp_conn: sqlite3.Connection) -> set[str]:
+    return {r["content_hash"] for r in gp_conn.execute("SELECT content_hash FROM group_settled")}
+
+
+def settle_groups(gp_conn: sqlite3.Connection, files: list[NamedFile]) -> None:
+    gp_conn.executemany("INSERT OR IGNORE INTO group_settled (content_hash, created_at) VALUES (?, ?)",
+                        [(f.content_hash, time.time()) for f in files if f.content_hash])
+    gp_conn.commit()
+
+
 def group_rules(gp_conn: sqlite3.Connection) -> dict[str, GroupRule]:
     return {r["key"]: GroupRule(r["dest"]) for r in gp_conn.execute("SELECT key, dest FROM group_rules")}
 
@@ -136,6 +148,8 @@ class NamedFile:
     file_id: int
     path: str            # library-relative
     names: dict[str, str]  # name key -> display name
+    size: int = 0
+    content_hash: str | None = None
 
     @property
     def abs_path(self) -> Path:
@@ -143,9 +157,17 @@ class NamedFile:
 
 
 def _named_files(conn: sqlite3.Connection, library_id: str, root: Path, file_ids: list[int] | None = None) -> list[NamedFile]:
-    sql = """SELECT fi.id, fi.path, p.name FROM files fi
+    # A person the user said No to (or whose face they ignored) in this file doesn't count in
+    # it, even if other frames of them were attached by themselves, unless the user also named
+    # them in it. The same rule the review uses to settle a file for a person.
+    sql = """SELECT fi.id, fi.path, fi.size, fi.content_hash, p.name FROM files fi
              JOIN faces f ON f.file_id = fi.id JOIN persons p ON p.id = f.person_id
-             WHERE p.name IS NOT NULL"""
+             WHERE p.name IS NOT NULL
+               AND NOT (EXISTS (SELECT 1 FROM rejected_matches rm
+                                WHERE rm.content_hash = fi.content_hash AND rm.person_id = p.id)
+                        AND NOT EXISTS (SELECT 1 FROM face_assignments fa
+                                        WHERE fa.content_hash = fi.content_hash AND fa.person_id = p.id
+                                          AND fa.source = 'user'))"""
     params: tuple = ()
     if file_ids is not None:
         if not file_ids:
@@ -154,18 +176,30 @@ def _named_files(conn: sqlite3.Connection, library_id: str, root: Path, file_ids
         params = tuple(file_ids)
     by_file: dict[int, NamedFile] = {}
     for r in conn.execute(sql, params):
-        nf = by_file.setdefault(r["id"], NamedFile(library_id, root, r["id"], r["path"], {}))
+        nf = by_file.setdefault(r["id"], NamedFile(library_id, root, r["id"], r["path"], {}, r["size"] or 0, r["content_hash"]))
         nf.names.setdefault(name_key(r["name"]), " ".join(r["name"].split()))
     return list(by_file.values())
 
 
-def _under(path: Path, folder: str | None) -> bool:
+@lru_cache(maxsize=4096)
+def _real(folder: str) -> str:
+    """A folder resolved once (mapped drive -> UNC, symlinks), normalised for comparing.
+    Resolving every file instead cost a network round-trip per picture on a NAS."""
+    try:
+        folder = str(Path(folder).resolve())
+    except OSError:
+        pass
+    return os.path.normcase(os.path.normpath(folder))
+
+
+def _under(f: NamedFile, folder: str | None) -> bool:
+    # ponytail: roots and folders are resolved once per process; a drive remapped while the
+    # engine runs keeps its old resolution until restart.
     if not folder:
         return False
-    try:
-        return path.resolve().is_relative_to(Path(folder).resolve())
-    except (OSError, ValueError):
-        return False
+    path = os.path.normcase(os.path.normpath(os.path.join(_real(str(f.library_root)), f.path)))
+    d = _real(folder)
+    return path == d or path.startswith(d.rstrip(os.sep) + os.sep)
 
 
 @dataclass(frozen=True)
@@ -182,32 +216,39 @@ class GroupQuestion:
 
 
 def classify(files: list[NamedFile], primaries: dict[str, str], rules: dict[str, GroupRule],
-             *, only_name: str | None = None) -> tuple[list[Placement], list[GroupQuestion]]:
+             *, only_name: str | None = None, settled: set[str] | frozenset[str] = frozenset(),
+             ) -> tuple[list[Placement], list[GroupQuestion]]:
     """Where each file goes. One named person: their primary folder. Two or more: the group's
     rule, else a question — asked only when someone in it has a primary folder. Files already
-    in their destination (or in any of their people's folders, for a question) are left out."""
+    in their destination (or in any of their people's folders, for a question) are left out,
+    and so are group pictures the user already placed (`settled` content hashes)."""
     moves: list[Placement] = []
     questions: list[GroupQuestion] = []
     for f in files:
         if only_name is not None and only_name not in f.names:
             continue
+        if len(f.names) > 1 and f.content_hash in settled:
+            continue
         if len(f.names) == 1:
             dest = primaries.get(next(iter(f.names)))
-            if dest and not _under(f.abs_path, dest):
+            if dest and not _under(f, dest):
                 moves.append(Placement(f, dest))
             continue
         rule = rules.get(group_key(set(f.names)))
         if rule is not None:
-            if rule.dest and not _under(f.abs_path, rule.dest):
+            if rule.dest and not _under(f, rule.dest):
                 moves.append(Placement(f, rule.dest))
             continue
         mine = {k: primaries[k] for k in f.names if k in primaries}
-        if mine and not any(_under(f.abs_path, d) for d in mine.values()):
+        if mine and not any(_under(f, d) for d in mine.values()):
             questions.append(GroupQuestion(f, mine, default_group_parent(list(mine.values()), f.abs_path)))
     return moves, questions
 
 
-def _library_files(registry, name: str | None = None) -> list[NamedFile]:
+Progress = Callable[[int, int, str], None]  # (done, total, what is being looked at)
+
+
+def _library_files(registry, name: str | None = None, on_progress: Progress | None = None) -> list[NamedFile]:
     """Named files across every reachable library (only those with `name`, when given)."""
     key = name_key(name) if name else None
 
@@ -228,8 +269,15 @@ def _library_files(registry, name: str | None = None) -> list[NamedFile]:
             conn.close()
 
     libs = registry.list()
+    found: dict[int, list[NamedFile]] = {}
     with ThreadPoolExecutor(max_workers=8) as pool:
-        return [f for files in pool.map(load, libs) for f in files]
+        futures = {pool.submit(load, lib): i for i, lib in enumerate(libs)}
+        for n, fut in enumerate(as_completed(futures), 1):
+            i = futures[fut]
+            found[i] = fut.result()
+            if on_progress is not None:
+                on_progress(n, len(libs), libs[i].name)
+    return [f for i in sorted(found) for f in found[i]]
 
 
 def _dedupe_nested(files: list[NamedFile]) -> list[NamedFile]:
@@ -243,14 +291,71 @@ def _dedupe_nested(files: list[NamedFile]) -> list[NamedFile]:
     return list(best.values())
 
 
-def person_plan(gp_conn: sqlite3.Connection, registry, name: str) -> tuple[list[Placement], list[GroupQuestion]]:
-    files = _dedupe_nested(_library_files(registry, name))
-    return classify(files, primary_folders(gp_conn), group_rules(gp_conn), only_name=name_key(name))
+def person_plan(gp_conn: sqlite3.Connection, registry, name: str,
+                on_progress: Progress | None = None) -> tuple[list[Placement], list[GroupQuestion]]:
+    files = _dedupe_nested(_library_files(registry, name, on_progress))
+    return classify(files, primary_folders(gp_conn), group_rules(gp_conn), only_name=name_key(name),
+                    settled=settled_groups(gp_conn))
 
 
 def library_questions(gp_conn: sqlite3.Connection, conn: sqlite3.Connection, library_id: str, root: Path) -> list[GroupQuestion]:
-    _, questions = classify(_named_files(conn, library_id, root), primary_folders(gp_conn), group_rules(gp_conn))
+    _, questions = classify(_named_files(conn, library_id, root), primary_folders(gp_conn), group_rules(gp_conn),
+                            settled=settled_groups(gp_conn))
     return questions
+
+
+# --- already in the destination -----------------------------------------------------------
+
+def _sizes_under(folder: str) -> dict[int, list[str]]:
+    """size -> files anywhere under `folder`, from one listing per folder (on Windows the size
+    comes with the listing, so no file is opened)."""
+    out: dict[int, list[str]] = {}
+    stack = [folder]
+    while stack:
+        try:
+            with os.scandir(stack.pop()) as it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            stack.append(e.path)
+                        elif e.is_file():
+                            out.setdefault(e.stat().st_size, []).append(e.path)
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return out
+
+
+def _same_content(path: str, f: NamedFile) -> bool:
+    try:
+        if f.content_hash and is_sampled(f.content_hash):
+            return sampled_hash(Path(path), f.size) == f.content_hash
+        return hash_file(Path(path)) == (f.content_hash or hash_file(f.abs_path))
+    except OSError:
+        return False
+
+
+def already_there(moves: list[Placement], on_progress: Progress | None = None,
+                  ) -> tuple[list[Placement], list[Placement]]:
+    """Split off the moves whose identical file (same size, same content) is already somewhere
+    in the destination folder: moving them would only make a second copy there. They stay where
+    they are; removing copies is the duplicate finder's job. Only same-size files are read."""
+    by_dest: dict[str, list[Placement]] = {}
+    for m in moves:
+        by_dest.setdefault(m.dest, []).append(m)
+    keep: list[Placement] = []
+    there: list[Placement] = []
+    done = 0
+    for dest, ms in by_dest.items():
+        sizes = _sizes_under(dest)
+        for m in ms:
+            done += 1
+            if on_progress is not None:
+                on_progress(done, len(moves), Path(m.file.path).name)
+            same = m.file.size > 0 and any(_same_content(p, m.file) for p in sizes.get(m.file.size, ()))
+            (there if same else keep).append(m)
+    return keep, there
 
 
 # --- moving ---------------------------------------------------------------------------------
@@ -346,8 +451,9 @@ def auto_file_moves(gp_conn: sqlite3.Connection, conn: sqlite3.Connection, libra
         return []
     ids = [r["id"] for r in conn.execute(
         "SELECT id FROM files WHERE path IN (%s)" % ",".join("?" * len(rels)), tuple(rels))]
-    moves, _ = classify(_named_files(conn, library_id, root, ids), primary_folders(gp_conn), group_rules(gp_conn))
-    return moves
+    moves, _ = classify(_named_files(conn, library_id, root, ids), primary_folders(gp_conn), group_rules(gp_conn),
+                        settled=settled_groups(gp_conn))
+    return already_there(moves)[0]
 
 
 if __name__ == "__main__":
@@ -362,4 +468,21 @@ if __name__ == "__main__":
     assert [(m.file.file_id, m.dest) for m in moves] == [(2, "C:/lib/OT2")] and not qs
     _, qs = classify([f(2, "Karina", "Winter")], prim, {group_key({"karina", "winter"}): GroupRule(None)})
     assert not qs                                                                # "leave it here" is remembered
+    assert _under(f(9, "Karina"), "C:/lib/x") and _under(f(9, "Karina"), "c:/LIB/x/")
+    assert not _under(f(9, "Karina"), "C:/lib/x2") and not _under(f(9, "Karina"), None)
+    g = NamedFile("L", root, 2, "x/2.jpg", {"karina": "Karina", "winter": "Winter"}, 5, "h2")
+    assert classify([g], prim, {}, settled={"h2"}) == ([], [])                  # already placed once
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        src, dest = Path(tmp, "src"), Path(tmp, "KARINA")
+        (dest / "sub").mkdir(parents=True)
+        src.mkdir()
+        (src / "a.jpg").write_bytes(b"same")
+        (src / "b.jpg").write_bytes(b"diff")
+        (dest / "sub" / "a copy.jpg").write_bytes(b"same")
+        (dest / "c.jpg").write_bytes(b"othr")                                     # same size, other bytes
+        mk = lambda n: Placement(NamedFile("L", src, 1, n, {"karina": "Karina"}, 4, hash_file(src / n)), str(dest))
+        keep, there = already_there([mk("a.jpg"), mk("b.jpg")])
+        assert [m.file.path for m in there] == ["a.jpg"] and [m.file.path for m in keep] == ["b.jpg"]
     print("placement self-check ok")

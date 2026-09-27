@@ -6,6 +6,7 @@
   POST /v1/libraries/{id}/teach/examples    {face_ids, person_id | name}
   POST /v1/libraries/{id}/teach/examples/remove   {face_ids}
   POST /v1/libraries/{id}/teach/apply       re-sort against every library's examples
+  POST /v1/libraries/{id}/teach/apply-job   the same, as a job with progress
   POST /v1/libraries/{id}/files/forget-missing   drop index rows of files gone from disk
 
 See core/faces/teach.py.
@@ -225,6 +226,31 @@ def apply(library_id: str, request: Request):
         return teach.apply_in_registry(request.app.state.registry, library_id, conn, _provider(conn))
     finally:
         conn.close()
+
+
+@router.post("/libraries/{library_id}/teach/apply-job", status_code=202)
+def start_apply(library_id: str, request: Request):
+    """The same sort as a job: which folder's examples are being read, then sorting. The
+    result is the TeachApplyOut dict."""
+    from mediamind.api.routes.organize import _snapshot
+
+    root = _library_root(request, library_id)
+    registry = request.app.state.registry
+    conn = open_library_db(root)
+    try:
+        provider = _provider(conn)  # "scan first" answers the click, not the job
+    finally:
+        conn.close()
+
+    def runner(ctx) -> dict:
+        conn = open_library_db(root)
+        try:
+            return teach.apply_in_registry(registry, library_id, conn, provider,
+                                           lambda d, t, phase, what: ctx.report_progress(d, t, phase, what))
+        finally:
+            conn.close()
+
+    return _snapshot(request.app.state.job_manager.start(library_id, "teach-sort", runner))
 
 
 @router.get("/libraries/{library_id}/teach/faces/{face_id}/frame")
