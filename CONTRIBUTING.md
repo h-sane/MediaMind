@@ -26,7 +26,6 @@ to code.
    opening a PR:
    ```bash
    cd backend && python -m pytest -m "not integration"
-   cd app && npm run typecheck && npm run build
    ```
 5. Open a pull request against `main` with a clear description of what
    changed and why.

@@ -7,7 +7,10 @@ registry), so that case is covered in `test_watcher.py` instead.
 from __future__ import annotations
 
 import ctypes
+import sys
 from pathlib import Path
+
+import pytest
 
 from mediamind.core import discovery
 
@@ -16,6 +19,7 @@ _DRIVE_REMOVABLE = 2
 _DRIVE_REMOTE = 4
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="patches the Windows drive-type API")
 def test_fixed_drive_roots_filters_by_drive_type(monkeypatch):
     fixed = {"C:\\": _DRIVE_FIXED, "D:\\": _DRIVE_REMOVABLE, "Z:\\": _DRIVE_REMOTE}
 

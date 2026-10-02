@@ -1,7 +1,7 @@
 """Logging configuration for the engine process.
 
-Emits to stderr (captured and shown live by the Electron main process, see
-app/src/main/backend.ts) and to a rotating file under the app data dir, so
+Emits to stderr (captured by the desktop app that spawned the engine, see
+`MediaMindEngineService.cs` in the WinUI frontend) and to a rotating file under the app data dir, so
 errors from a crashed or closed session are still inspectable afterwards.
 """
 
@@ -29,7 +29,7 @@ def configure_logging(level: int = logging.INFO) -> None:
     file_handler.setFormatter(formatter)
     root.addHandler(file_handler)
 
-    # stderr here is a pipe the desktop host (Electron/WinUI) reads to show
+    # stderr here is a pipe the desktop host (the WinUI app) reads to show
     # live logs. If that reader ever stops draining it (observed: a WinUI
     # window losing focus can stall the host's async pipe-read loop), a
     # direct StreamHandler.emit() blocks in flush() until the pipe has room

@@ -9,9 +9,9 @@
 #     mediamind.exe
 #     _internal/                    (DLLs, .pyd, collected packages)
 #
-# The Electron main process reads MEDIAMIND_ENGINE_PATH from its environment
-# (set by electron-builder extraResources) and falls back to the system Python
-# if not set (dev mode).
+# The WinUI app starts `engine/mediamind.exe` from its install directory when
+# it is there, and falls back to `python -m mediamind` (MEDIAMIND_PYTHON, else
+# the system Python) in development.
 
 import sys
 from pathlib import Path

@@ -329,10 +329,3 @@ Get-Content "$env:APPDATA\MediaMind\logs\engine.log" -Tail 50
   that folder's next scan.
 - Windows only for now.
 
----
-
-## The older Electron app
-
-The first MediaMind desktop app was built with Electron and lives in `app/`.
-The app described in this guide replaced it. The old one still runs from
-source (`npm run dev` inside `app/`), and gets no new features.

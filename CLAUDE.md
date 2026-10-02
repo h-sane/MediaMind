@@ -28,26 +28,20 @@ for organizing it.
   single-file CLI that face-sorts a folder of mixed media.
   `prototype/sort_faces.py` is the earlier images-only version (reference
   only). See `prototype/HANDOFF.md` for the full prototype context.
-- **Previous frontend (Electron, superseded):** `app/` holds the earlier
-  Electron + React Windows Explorer clone (`app/src/renderer/src/explorer/`)
-  and the original duplicate and people screens
-  (`app/src/renderer/src/screens/`). New UI work goes into the WinUI app
-  below. `docs/PRD.md` and `docs/IMPLEMENTATION_PLAN.md` describe the target
-  feature set and backend architecture accurately; their UI-flow descriptions
-  predate both Explorer clones.
-- **Version 1.x (current frontend — the WinUI overhaul):** the app's real,
-  single intended UI is now the **WinUI Explorer clone** in
-  `winui-frontend/Files/` (the "Block 5" overhaul, ADR-0012 — a fork of the
-  MIT-licensed Files app), with the Python engine **bundled inside it** and all
-  People-flow features surfaced natively (People sidebar, Suggestions,
-  per-person Consolidation, consistency check, Watched Folders). This is **not a
-  separate app or a side experiment** — it is THE app, replacing the Electron
-  frontend above. "Build/release the app" means this WinUI app + bundled engine
-  packaged as a (sideload) MSIX — **never** the Electron NSIS build. The Electron
-  UI (`app/`) is the previous frontend, kept working but superseded. GitHub
-  Releases continue by number (v0.3.x were Electron; v0.4.0+ carry the WinUI
-  app). See the `.claude/handoffs/` session history (s73+) and
+- **The app (WinUI):** the single frontend is the **WinUI Explorer clone** in
+  `winui-frontend/Files/` (the "Block 5" overhaul, ADR-0012), built on the
+  MIT-licensed Files app, with the Python engine **bundled inside it** and the
+  People flow surfaced natively (Who's who, Duplicates, People sidebar,
+  Suggestions, people's folders, Watched Folders). "Build/release the app"
+  means this app plus the bundled engine, packaged as a sideload MSIX. GitHub
+  Releases continue by number: v0.3.x were the retired Electron app, v0.4.0+
+  carry this one. See the `.claude/handoffs/` session history (s73+) and
   `docs/BLOCK5_UI_BLUEPRINT.md`.
+- **Retired Electron frontend:** the earlier Electron + React app (`app/`) was
+  removed from the repository on 2026-10-02 and remains in git history up to
+  v0.3.7. `docs/PRD.md` and `docs/IMPLEMENTATION_PLAN.md` describe the target
+  feature set and backend architecture accurately; their UI-flow descriptions
+  predate the WinUI app.
 
 ## Product identity & UX doctrine (non-negotiable)
 
@@ -86,7 +80,7 @@ Three rules bind every UI change:
   update `.claude/handoffs/` richly enough that the next session continues without
   re-grilling.
 - **Frontend-design skill is mandatory, no exceptions.** Before writing or
-  editing any frontend UI code — WinUI XAML, Electron/React, CSS, any visual
+  editing any frontend UI code — WinUI XAML, CSS, any visual
   surface — invoke the `frontend-design` skill first, even for a small,
   surgical tweak to an existing view. This is a hard rule (set 2026-09-03
   after a UI change shipped without it); there is no "too small to bother"
@@ -119,8 +113,7 @@ Three rules bind every UI change:
 | Path | Role |
 |---|---|
 | `backend/` | Python engine package `mediamind` (FastAPI, core pipeline, providers, store). |
-| `winui-frontend/Files/` | The app: WinUI 3 frontend with the bundled engine. A separate git repository (branch `mediamind`), ignored by this one. Read its `AGENTS.md` before editing there: its `CLAUDE.md` is a symlink that Windows checks out as plain text, so those guidelines do not load on their own. Its commit and pull-request sections describe the upstream Files project; the git workflow below applies instead, on the `mediamind` branch. |
-| `app/` | Previous Electron + React frontend, superseded. |
+| `winui-frontend/Files/` | The app: WinUI 3 frontend with the bundled engine, built on Files. Its upstream guidelines are in `AGENTS.md` there (imported by that folder's `CLAUDE.md`); its commit and pull-request sections describe the upstream Files project, and the git workflow below applies instead. MediaMind's own code sits mostly under `src/Files.App/Services/MediaMind/`, `Views/People/`, `Utils/MediaMind/` and `Actions/MediaMind/`. Some upstream files sit under paths that folder's `.gitignore` excludes (`Release/`, `*.pubxml`); a new file there needs `git add -f`. |
 | `prototype/sort_media.py` | V0 engine, the reference the backend's `core/` was ported from. Reference only; leave it unchanged. |
 | `prototype/sort_faces.py` | Original images-only prototype. Reference only. |
 | `prototype/HANDOFF.md` | Original prototype handoff (context, decisions, limitations). |
@@ -137,15 +130,12 @@ installed (see `backend/pyproject.toml` for exact dependencies).
   `dotnet msbuild src/Files.App/Files.App.csproj -p:Configuration=Debug -p:Platform=x64 -v:m`
   and launch with `Start-Process "shell:AppsFolder\FilesDev_ykqwq8d6ps0ag!App"`
   (launch through the package identity, not the raw exe). This works with the
-  .NET SDK and Build Tools alone; the Developer PowerShell command in the
-  fork's `AGENTS.md` needs a full Visual Studio install.
+  .NET SDK and Build Tools alone; the Developer PowerShell command in that
+  folder's `AGENTS.md` needs a full Visual Studio install.
 - **The dev app's engine runs straight from `backend/src`**, so every backend
   edit must leave the package importable while the app is open.
 - **Backend tests:** from `backend/`, with the venv's Python,
   `python -m pytest -m "not integration and not real_media"`.
-- **Electron app only:** point `MAIN_VITE_PYTHON` in `app/.env` (see
-  `app/.env.example`) at the venv's `python.exe`/`python`.
-
 
 Note: NumPy 2.x works fine with insightface 1.0.1 — the `numpy<2` pin
 mentioned in the V0 handoff is obsolete for current environments.
@@ -228,8 +218,9 @@ Hussain does not manage git for this repo; Claude Code does, every session, with
 - **Python:** 3.10+, PEP 8, type hints on public functions, `pathlib.Path` for
   all paths. Per-file try/except in pipelines — one bad file must never crash a
   run (V0 pattern).
-- **TypeScript/React:** strict mode, functional components, no `any` without a
-  comment justifying it.
+- **C#/XAML:** follow `winui-frontend/Files/AGENTS.md` and its `.editorconfig`;
+  keep changed files in CRLF; keep C# plain (exotic pattern syntax has crashed
+  the XAML compiler on clean builds).
 - **Tests:** backend logic gets pytest coverage; face detection stays behind an
   injectable interface so tests never need the 300 MB model (see
   `prototype/HANDOFF.md` §6). Safety invariants (routing, count checks, dry-run,

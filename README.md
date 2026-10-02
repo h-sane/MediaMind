@@ -55,11 +55,10 @@ deleted without your explicit confirmation.
 ## Repository layout
 
 ```
-winui-frontend/Files/  The app: WinUI 3 frontend (a fork of Files, kept in its
-                       own git repository) with the engine bundled inside
+winui-frontend/Files/  The app: WinUI 3 frontend, built on the open-source
+                       Files app, with the engine bundled inside
 backend/               Python engine (FastAPI) — scanning, dedupe, faces,
                        safe organizing
-app/                   Previous Electron + React frontend (superseded)
 prototype/             Version 0 CLI scripts (validated reference implementation)
 docs/                  Product & engineering documentation
 ```
@@ -106,11 +105,15 @@ Releases are a sideload package (`MediaMind-<version>-WinUI-x64.zip`) on
 GitHub Releases, signed with a test certificate. The install steps are in
 the [User Guide](docs/USER_GUIDE.md).
 
-## The previous Electron frontend
+## Credits
 
-`app/` holds the earlier Electron + React app. It still runs from source
-(Node.js 20+): `cd app`, `npm install`, `npm run dev`. It gets no new
-features.
+The desktop app in `winui-frontend/Files/` is built on
+[Files](https://github.com/files-community/Files) (MIT; see `LICENSE-MIT`
+and `LICENSE-MPL` in that folder). MediaMind's own code there lives mostly
+under `Services/MediaMind/`, `Views/People/` and `Utils/MediaMind/`.
+
+An earlier Electron + React frontend was retired in favour of this app; it
+remains in the git history up to v0.3.7.
 
 **Model license note:** Face recognition models are downloaded on first use,
 with their license shown in-app before download. InsightFace `buffalo_l` is
