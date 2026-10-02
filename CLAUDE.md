@@ -17,8 +17,10 @@ for organizing it.
   models carry their own licenses (e.g., InsightFace `buffalo_l` is
   non-commercial/research-only) — the app must surface a model's license before
   it is downloaded.
-- Stack (V1): **Electron + React (TypeScript)** frontend, **Python (FastAPI)**
-  backend over localhost HTTP/WebSocket. See `docs/IMPLEMENTATION_PLAN.md`.
+- Stack: **WinUI 3 (C#/.NET)** frontend in `winui-frontend/Files/`, with the
+  **Python (FastAPI)** engine bundled inside it and reached over localhost
+  HTTP/WebSocket. See `docs/BLOCK5_UI_BLUEPRINT.md` for the frontend and
+  `docs/IMPLEMENTATION_PLAN.md` for the engine.
 
 ## Current state
 
@@ -26,25 +28,14 @@ for organizing it.
   single-file CLI that face-sorts a folder of mixed media.
   `prototype/sort_faces.py` is the earlier images-only version (reference
   only). See `prototype/HANDOFF.md` for the full prototype context.
-- **Version 1 (main framework built):** the desktop application's primary UI
-  is a full **Windows Explorer clone** (`app/src/renderer/src/explorer/`) —
-  navigation pane, tabs, address bar, six view modes including a recursive
-  Gallery view, search/filter, drag-and-drop, full context menus, Properties,
-  compress/extract, and a Recent Deletions history — scoped to real drives
-  and folders and filtered to media. This supersedes the original
-  scan/select workflow described in `docs/PRD.md` §5 as V1's UI: the vision
-  is now filesystem-first browsing as the primary layer, with duplicate
-  detection, face recognition, and organize-by-person layered on top as
-  actions inside that shell. The duplicate-detection and face-recognition
-  **engine** (backend `core/`, `providers/`) and their original screens
-  (`DedupeReview.tsx`, `PeopleScreen.tsx`, etc.) are fully built and tested
-  but not yet wired into the Explorer shell — that integration is a
-  deliberately deferred, separate effort. `docs/PRD.md` and
-  `docs/IMPLEMENTATION_PLAN.md` still describe the target feature set and
-  backend architecture accurately; their UI-flow descriptions predate the
-  Explorer-clone pivot. See `docs/USER_GUIDE.md` for the current, accurate
-  feature list and `.claude/handoffs/` for the session-by-session history of
-  how the Explorer clone was built.
+- **Previous frontend (Electron, superseded):** `app/` holds the earlier
+  Electron + React Windows Explorer clone (`app/src/renderer/src/explorer/`)
+  and the original duplicate and people screens
+  (`app/src/renderer/src/screens/`). New UI work goes into the WinUI app
+  below. `docs/PRD.md` and `docs/IMPLEMENTATION_PLAN.md` describe the target
+  feature set and backend architecture accurately; their UI-flow descriptions
+  predate both Explorer clones. `docs/USER_GUIDE.md` covers the Electron app
+  only.
 - **Version 1.x (current frontend — the WinUI overhaul):** the app's real,
   single intended UI is now the **WinUI Explorer clone** in
   `winui-frontend/Files/` (the "Block 5" overhaul, ADR-0012 — a fork of the
@@ -101,9 +92,12 @@ Three rules bind every UI change:
   surgical tweak to an existing view. This is a hard rule (set 2026-09-03
   after a UI change shipped without it); there is no "too small to bother"
   exception. When Hussain sends a concrete visual reference (a screenshot),
-  treat it as ground truth to match and use the skill's critique lens to
-  avoid generic AI-default patterns in everything the reference doesn't pin
-  down.
+  treat it as ground truth to match. For everything the reference doesn't pin
+  down, aim for simple, minimal and classy with very easy UX, and steer clear
+  of the layouts he has already rejected: controls stacked under or over
+  media instead of in a column on the right, cards whose buttons clip or
+  crowd, features reachable only through a right-click or a settings page,
+  and feedback tucked into a status flyout.
 
 - **Own the front end completely (non-negotiable, set 2026-09-26).** Hussain
   focuses on backend/functionality and delegates *all* UI craft to Claude; a UI
@@ -126,8 +120,9 @@ Three rules bind every UI change:
 | Path | Role |
 |---|---|
 | `backend/` | Python engine package `mediamind` (FastAPI, core pipeline, providers, store). |
-| `app/` | Electron + React desktop frontend. |
-| `prototype/sort_media.py` | V0 engine. The reference implementation being ported into the backend. Do not break it until its logic is fully ported and tested. |
+| `winui-frontend/Files/` | The app: WinUI 3 frontend with the bundled engine. A separate git repository (branch `mediamind`), ignored by this one. Read its `AGENTS.md` before editing there: its `CLAUDE.md` is a symlink that Windows checks out as plain text, so those guidelines do not load on their own. Its commit and pull-request sections describe the upstream Files project; the git workflow below applies instead, on the `mediamind` branch. |
+| `app/` | Previous Electron + React frontend, superseded. |
+| `prototype/sort_media.py` | V0 engine, the reference the backend's `core/` was ported from. Reference only; leave it unchanged. |
 | `prototype/sort_faces.py` | Original images-only prototype. Reference only. |
 | `prototype/HANDOFF.md` | Original prototype handoff (context, decisions, limitations). |
 | `docs/PRD.md` | Product requirements for Version 1. |
@@ -136,9 +131,23 @@ Three rules bind every UI change:
 | `.claude/handoffs/` | Current session handoffs (session 09+, gitignored — internal continuity notes, not published). |
 
 **Dev environment:** a Python 3.10+ venv with InsightFace/ONNX/OpenCV
-installed (see `backend/pyproject.toml` for exact dependencies). Point
-`MAIN_VITE_PYTHON` in `app/.env` (see `app/.env.example`) at that venv's
-`python.exe`/`python` for the Electron app to spawn the backend correctly.
+installed (see `backend/pyproject.toml` for exact dependencies).
+
+- **Build and relaunch the app:** stop the running `Files` process and the
+  engine's Python process, then from `winui-frontend/Files/` run
+  `dotnet msbuild src/Files.App/Files.App.csproj -p:Configuration=Debug -p:Platform=x64 -v:m`
+  and launch with `Start-Process "shell:AppsFolder\FilesDev_ykqwq8d6ps0ag!App"`
+  (launch through the package identity, not the raw exe). This works with the
+  .NET SDK and Build Tools alone; the Developer PowerShell command in the
+  fork's `AGENTS.md` needs a full Visual Studio install.
+- **The dev app's engine runs straight from `backend/src`**, so every backend
+  edit must leave the package importable while the app is open.
+- **Backend tests:** from `backend/`, with the venv's Python,
+  `python -m pytest -m "not integration and not real_media"`.
+- **Electron app only:** point `MAIN_VITE_PYTHON` in `app/.env` (see
+  `app/.env.example`) at the venv's `python.exe`/`python`.
+
+
 Note: NumPy 2.x works fine with insightface 1.0.1 — the `numpy<2` pin
 mentioned in the V0 handoff is obsolete for current environments.
 

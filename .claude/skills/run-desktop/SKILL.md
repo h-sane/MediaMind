@@ -1,10 +1,12 @@
 ---
 name: run-desktop
-description: Build, run, and drive the MediaMind Electron desktop app on Windows. Use when asked to start the desktop app, take a screenshot of it, or interact with its UI.
+description: Build, run, and drive MediaMind's previous Electron frontend (`app/`) on Windows. Use only when the request names the Electron app. The current app is the WinUI app in `winui-frontend/Files/`, which this skill does not launch.
 ---
 
-MediaMind is an Electron + React desktop app (`app/`) over a Python FastAPI
-engine (`backend/`) spawned by the Electron main process. For agent/automated
+This skill covers the Electron + React frontend in `app/`, which the WinUI app
+in `winui-frontend/Files/` has superseded (see the project CLAUDE.md). It runs
+over a Python FastAPI engine (`backend/`) spawned by the Electron main
+process. For agent/automated
 use, drive it via the Playwright `_electron` REPL at `app/scripts/driver.mjs`.
 No xvfb/DISPLAY setup needed — this runs on native Windows with a real
 session.
