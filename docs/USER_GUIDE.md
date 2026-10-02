@@ -1,372 +1,338 @@
 # MediaMind — User Guide
 
-This guide tells you everything you need to run the app, reload it correctly
-after changes, and work through the situations that come up while testing.
-No coding knowledge required — just follow the steps in order.
+This guide covers the MediaMind desktop app for Windows: how to install or
+start it, what each part does, and what to check when something looks wrong.
+No coding knowledge is needed.
+
+MediaMind is a file explorer built for photos and videos. It works on your
+real folders. Nothing is imported into a hidden library, and nothing is
+deleted or moved without you saying so.
 
 ---
 
-## What the app can do right now
+## Starting the app
 
-The app's main window is a **full Windows-Explorer clone** — navigation
-pane, tabs, address bar, view modes, search/filter, drag-and-drop, context
-menus, the works — scoped to real drives and folders on your machine and
-filtered to media (images, GIFs, videos, audio; other file types are hidden,
-not touched). There is no "add a folder" step before you can look around:
-the app opens straight to a **Home** page and you navigate exactly like the
-real File Explorer.
+### From a release (no setup)
 
-- **Navigate** — a Home page (pinned folders + Recent Files), a drive/folder
-  tree, multiple tabs (`Ctrl+T`/`Ctrl+W`/`Ctrl+Tab`), an address bar with
-  clickable breadcrumbs or a type-in path (UNC/network paths like
-  `\\server\share` work too), back/forward/up, live search with an escalate-
-  to-recursive-subfolder-search option, and Type/Date/Size filter chips.
-- **View** — six view modes: Large icons, Tiles, List, Details, Content, and
-  **Gallery** (a recursive, date-grouped view of every media file under the
-  current folder — the "camera roll" view). Details' columns can be
-  resized, reordered, and shown/hidden via the columns picker. Sort and
-  Group-by work in every view; view mode and sort are remembered per folder
-  and persist across restarts.
-- **Organize** — select (click, Ctrl/Shift, marquee-drag, arrow keys,
-  type-ahead-to-select), cut/copy/paste, rename, new folder, create
-  shortcut, compress to ZIP / extract, delete (Recycle Bin or permanent,
-  with confirmation), and a single-level undo/redo — all from the toolbar,
-  right-click menu, or keyboard shortcuts.
-- **Drag and drop** — drag files/folders onto another folder (in the grid,
-  the folder tree, or a Quick Access pin) to move them; hold Ctrl while
-  dropping to copy instead. Drag a folder onto the "Quick access" header to
-  pin it. You can also drag files in from Windows Explorer to copy them into
-  the current folder. (Dragging files *out* of MediaMind into another app
-  isn't implemented yet — see "What is NOT available yet".)
-- **Quick Access** — pin frequently-used folders (via drag or right-click),
-  shown above the folder tree, reorderable by dragging, persisted across
-  restarts.
-- **Preview & Properties** — a collapsible preview pane (tabbed
-  Preview/Details) shows a selected file's thumbnail or an inline
-  video/audio player plus its metadata; a full Properties dialog (Alt+Enter)
-  adds a disk-usage gauge for folders.
-- **OS integration** — Open with… (native chooser), Reveal in File Explorer,
-  Copy as path, Send to, and a "Recent deletions" history panel (the History
-  icon in the toolbar) that lists everything you've deleted and hands off to
-  the real Windows Recycle Bin to restore a file.
-- **Find duplicates, People (face recognition), Providers, Organize-by-
-  person** — these engine features are fully built and tested on the
-  backend, but as of this writing they are **not yet wired into the
-  Explorer window** (see "Where the older features went"). They exist as
-  working code and can be reached again once that integration happens.
+1. Download `MediaMind-<version>-WinUI-x64.zip` from the project's GitHub
+   Releases page and unzip it.
+2. Right-click **Install-MediaMind.ps1** and choose **Run with PowerShell**.
+   Accept the admin prompt. The script trusts the test certificate that ships
+   in the zip, installs the Windows App Runtime, then installs MediaMind.
+3. Open **Files - Dev** from the Start menu. The app still carries that name
+   and icon; the MediaMind name comes later.
+
+The engine that finds faces and duplicates is bundled inside the app. You do
+not install Python or start anything else.
+
+Release v0.4.0 is older than this guide. It has the explorer, Scan for
+People, the People sidebar and Suggestions. Who's who, the Duplicates page,
+people's folders and automatic filing arrive with the next release; until
+then they are in the build from source.
+
+### From source (development)
+
+See "Development setup" in the root [`README.md`](../README.md). In short:
+build `winui-frontend/Files/`, then launch **Files - Dev** from the Start
+menu. After a code change, close the app, build again, and launch again.
 
 ---
 
-## Prerequisites (one-time setup)
+## What you see first
 
-| What | Notes |
+The window works like Windows File Explorer: a sidebar on the left, tabs
+across the top, an address bar, a toolbar, and the folder's contents in the
+middle.
+
+Two things are different from File Explorer:
+
+- **Folders show photos and videos only.** Documents and other files are
+  still on disk, just not listed. Press **Ctrl+M**, or choose **Show all
+  files**, to see everything. Press it again to go back.
+- **People is near the top of the sidebar.** It lists everyone MediaMind has
+  found in the folders you have scanned.
+
+---
+
+## The usual order of work
+
+1. **Scan a folder for people.** This finds the faces and also finds
+   duplicate copies.
+2. **Name a few faces per person** in Who's who, then choose **Sort people
+   now**.
+3. **Answer the questions** MediaMind is not sure about (Needs your check).
+4. **Clear out duplicates.**
+5. Optional: **give each person a folder** and move their pictures into it.
+6. Optional: **watch a folder** so new pictures are sorted as they arrive.
+
+Each step is described below.
+
+---
+
+## 1. Scan for People
+
+Open a folder and choose **Scan for People** on the toolbar (it is also in
+the folder's right-click menu). Scan one group of pictures at a time rather
+than a whole drive: a scan of a few thousand files finishes in minutes, and
+a scan of tens of thousands can take hours.
+
+The first scan downloads the face-recognition model (about 300 MB). Its
+license is shown before the download starts.
+
+While a scan runs, a strip at the bottom of the window shows what it is
+doing: finding files, reading file details, identifying files, looking for
+faces, looking for duplicates, grouping faces into people, saving. You can
+keep browsing. Long videos on a slow or network drive can take a while per
+file; the strip says so when one file is taking long.
+
+A scan only reads your files. You can **stop** it from the strip; nothing on
+your drive changes, and the people and duplicates you already had stay as
+they were.
+
+Files that could not be read are listed afterwards under **Not scanned**.
+Open one to see who is in it, then tag it to a person by hand.
+
+---
+
+## 2. Who's who: name people
+
+Choose **Who's who** on the toolbar while you are in a scanned folder. The
+page shows the faces found there.
+
+1. Select a few clear faces of one person. Five good examples is plenty.
+2. Type a name under **Name as**, or pick someone you have already named.
+3. Repeat for the other people.
+4. Choose **Sort people now**. MediaMind matches every photo and video in the
+   folder to your examples.
+
+Things to know:
+
+- **A name carries across folders.** Name someone in one folder, and a later
+  scan of another folder recognises them from the same examples.
+- **The list on the left** has one row per person, plus rows for **No one
+  named yet**, **Needs your check**, **Group pictures**, and **No faces
+  found**. A count line at the top says how many files are sorted, how many
+  have faces nobody is named on yet, and how many have no faces.
+- **Guests.** Someone who only turns up in a few pictures in this folder is
+  listed under **Guests**, apart from the people the folder is about. Use the
+  **Belongs to this folder** switch to move a person either way.
+- **View full size.** Open any face to see the whole picture or video.
+  Left and Right move between faces, the number keys 1 to 9 name the face,
+  double-click or Ctrl+scroll zooms, 0 fits the picture again, Esc goes back.
+
+### Needs your check
+
+After a sort, faces MediaMind is unsure about wait here as yes-or-no
+questions, likeliest matches first. The picture or video is shown full
+height, with the answers in a column on the right.
+
+| Key | Answer |
 |---|---|
-| Python 3.11 + MediaMind backend | A venv with the backend installed — see the README's "Development setup" |
-| Node.js + npm | Node 20+ |
-| MediaMind app | This repo, checked out locally |
+| `Y` | Yes, this is that person |
+| `N` | No |
+| `I` | Ignore this face in this file (someone in the background, say). The file will not be linked to that person, even after a rescan |
+| `S` | Skip for now |
+| `D` or `Del` | Delete the file (asks first) |
+| `F` | Full screen |
 
-See the root [`README.md`](../README.md#development-setup) if you haven't set
-these up yet.
+**It's someone else** lets you pick the right person, or **Someone new…** to
+type a new name. Your yes answers become examples too, so sort again
+afterwards to use them.
 
----
+### No faces found
 
-## How to run the app
-
-### Step 1 — Open a terminal
-
-Press **Win + X** → choose **Terminal** (or **PowerShell**).
-
-### Step 2 — Navigate to the app folder
-
-```
-cd <path-to-this-repo>\app
-```
-
-### Step 3 — Start the app
-
-```
-npm run dev
-```
-
-Wait about 5–10 seconds. You'll see Vite and Electron start up in the
-terminal, and the MediaMind window opens automatically.
-
-### Step 4 — Stop the app
-
-Press **Ctrl + C** in the terminal, then close the window. See
-**"If the app won't fully close"** below if a window or process lingers.
+Pictures and videos in which the scan found no face. Look at each one, then
+keep it where it is, move it into a folder, or delete it.
 
 ---
 
-## How to reload after a change
+## 3. Duplicates
 
-This is the part that trips people up, because **it depends on what changed**:
+Choose **Duplicates** on the toolbar. Scan for People already looks for
+copies; **Find duplicates** runs the check on its own, and **Check again**
+re-runs it.
 
-- **Something in a screen, button, or anything you clicked on** (the visual
-  app) → the app **hot-reloads automatically**. You'll see it flicker/update
-  within a second or two. No action needed.
-- **Something about how the app starts up, talks to the engine, or the
-  window itself** → hot-reload **does not** pick this up reliably. You need
-  to fully restart:
-  1. Press **Ctrl+C** in the terminal running `npm run dev`.
-  2. Close the MediaMind window if it's still open.
-  3. Check nothing was left running (see below) — this is the step people
-     usually skip.
-  4. Run `npm run dev` again.
+There are two kinds, on two tabs:
 
-### Checking nothing was left running
+- **Exact** copies are identical byte for byte. Keeping any one loses
+  nothing.
+- **Look alike** copies show the same picture at a different size or
+  quality. Keep the best one.
 
-Electron sometimes leaves background processes alive even after you close
-the window and Ctrl+C the terminal. If the app behaves like it's running old
-code after a restart, this is almost always why. In PowerShell:
+For each set, click the copy to keep, or press its number. Then:
 
-```powershell
-Get-Process | Where-Object { $_.ProcessName -match "electron|python" } | Select-Object Id, ProcessName
-```
-
-If that shows anything, kill the whole tree by PID (replace `<PID>` with the
-**topmost** one — usually the lowest/first `electron.exe` or the `node.exe`
-running `electron-vite`):
-
-```powershell
-taskkill /PID <PID> /F /T
-```
-
-Then confirm the list above is empty and start `npm run dev` again.
-
----
-
-## What you will see on first launch
-
-The app opens to **Home** — a page with tiles for your pinned folders (empty
-until you pin something) and a "Recent Files" grid of media you've recently
-opened or touched. A thin amber banner at the very top reads "Starting
-engine…" for the first few seconds while the Python backend boots, then
-disappears; if it turns into "Engine offline — retrying…" instead, see
-Troubleshooting below.
-
-Use the folder tree on the left (or the drive list under "This PC") to
-navigate — there's no "add a folder" step. Every folder is filtered to show
-only subfolders that contain media (or might, until the background check
-finishes) and the media files themselves; everything else on disk is simply
-not shown. Network paths work too — type a UNC path like `\\server\share`
-into the address bar and it navigates like any local folder.
-
-### Getting around
-
-- **Tabs** — the strip above the address bar; `Ctrl+T` opens a new tab at
-  the current folder, `Ctrl+W` closes the active one, `Ctrl+Tab` /
-  `Ctrl+Shift+Tab` cycle between them.
-- **Address bar** — shows breadcrumbs for the current path; click the empty
-  space to its right to edit it as raw text (type a path, press Enter).
-- **Search box** (top right) — live, name-only filter over the current
-  folder's contents; `Ctrl+Shift+F` (or pressing Enter with something
-  typed) escalates the same query into a recursive search of every
-  subfolder. Clears when you navigate away.
-- **Filters icon** — toggles a row of Type / Date / Size filter chips.
-- **View icon** — switch between Large icons, Tiles, List, Details, Content,
-  and Gallery. Sort-by and Group-by are the two dropdowns next to it.
-- **Preview pane icon** — toggles a right-side panel (Preview/Details tabs)
-  for the selected file, including inline playback for video and audio.
-- **History icon** — opens the "Recent deletions" panel (see below).
-- **Quick access** — right-click any folder → "Pin to Quick access", or
-  drag a folder onto the "Quick access" label in the nav pane. Hover a pin
-  to reveal an "×" to unpin; drag pins up/down to reorder them.
-
-### Organizing files
-
-Right-click for a context menu — Open/Open with…, Cut/Copy/Paste, Rename,
-Pin to Quick access, Reveal in File Explorer, Copy as path, Send to
-(zipped folder / desktop shortcut), Create shortcut, Compress to ZIP,
-Extract (on archives), Properties, and Delete — or use the toolbar/keyboard
-shortcuts. Delete offers Recycle Bin (default) or permanent delete (with an
-explicit confirmation dialog, since it can't be undone). One level of
-undo/redo is available (`Ctrl+Z` / `Ctrl+Y`, or the toolbar) for the most
-recent move/copy/rename/delete/new-folder — making a new change clears the
-redo slot, same as any editor.
-
-Drag a file or folder onto another folder to move it; hold **Ctrl** while
-dropping to copy instead. This works whether the destination is a folder
-tile in the current view, a node in the folder tree, or a Quick Access pin.
-
-**Recent deletions panel.** `Ctrl+Z` can only undo the single most recent
-operation, and deletes are treated as a boundary it won't reach past (so it
-never accidentally reverses an older, unrelated action). For a fuller
-history, open the History icon's "Recent deletions" panel — it lists every
-file you've deleted, most recent first. Files sent to the Recycle Bin get a
-"Restore" button that opens the real Windows Recycle Bin for you to restore
-from (MediaMind doesn't do the restore itself — see "What is NOT available
-yet" for why); permanently-deleted files are shown greyed out since there's
-nothing left to restore.
-
-### Keyboard shortcuts
-
-| Shortcut | Action |
+| Key | Action |
 |---|---|
-| `Ctrl+T` / `Ctrl+W` | New tab / close tab |
-| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next tab / previous tab |
-| `Alt+←` / `Alt+→` / `Alt+↑` or `Backspace` | Back / forward / up one folder |
-| Arrow keys | Move keyboard focus (Ctrl/Shift extend selection, like a mouse click) |
-| Type a letter/number | Jump to (type-ahead select) the next matching item |
-| `Ctrl+A` | Select all |
-| `F2` | Rename |
-| `Delete` | Delete (to Recycle Bin) |
-| `Shift+Delete` | Delete permanently (asks for confirmation) |
-| `Ctrl+X` / `Ctrl+C` / `Ctrl+V` | Cut / Copy / Paste |
-| `Ctrl+Z` / `Ctrl+Y` | Undo / Redo |
-| `Ctrl+Shift+N` | New folder |
-| `Ctrl+F`, `Ctrl+E`, or `F3` | Focus the search box |
-| `Ctrl+Shift+F` | Search subfolders too (recursive search) |
-| `F5` | Refresh |
-| `Alt+Enter` | Properties |
-| `Ctrl+Shift+1`–`4` | Icon size (extra large → small, in icon views) |
-| `Escape` | Clear selection |
+| `K` | Keep the chosen copy and remove the others |
+| `N` | Not duplicates. The set is not shown again unless a file changes |
+| `S` | Skip |
+| `F` | View the copy full screen (Left and Right show the other copies) |
+
+Removed copies go to the Recycle Bin. On a drive that has no Recycle Bin the
+page tells you the delete is permanent before you confirm. **Select all**
+lets you clear many sets in one go; the strip at the bottom counts the
+deletions as they happen.
 
 ---
 
-## Where the older features went
+## 4. The People page
 
-**Duplicate finding, People (face recognition), Providers, and organize-
-by-person** are fully implemented and tested on the backend (and have
-working screens in the codebase) but are **not currently reachable from the
-app window** — the main window now shows only the Explorer-style file
-browser described above. This is a deliberate, in-progress step: the plan
-is to fold these features back in as actions within the Explorer shell
-(e.g. a right-click "Find duplicates in this folder", a "People" panel)
-rather than as a separate app-specific screen, but that integration work
-hasn't started yet — it's a design decision for a dedicated conversation,
-not incidental wiring. If you need one of these features today, ask — the
-underlying API and screens still work, they just need to be temporarily
-re-wired into the app's routing to reach them.
+**People** in the sidebar shows everyone across all scanned folders.
+
+- Switch between **Faces** (one tile per person) and **Folders** (people
+  grouped by where their pictures live).
+- **Pin** people you look at often, and group people into **Collections**.
+- People who are not named yet are shown too. Type a name on the tile.
+- **Merge** joins two entries that are the same person. **Remove** hides a
+  person from People; your photos are not touched, and **Hidden** brings
+  them back.
+- **Possible duplicates** flags two entries that may be one person. Answer
+  **Same person** or **Different people**.
+- Open a person to see all their photos and videos.
+
+### Suggestions
+
+The Suggestions panel lists new pictures picked up from watched folders that
+may show someone you have already named. Select the ones that are the same
+person and choose **Confirm selected**, or **Reject selected**.
 
 ---
 
-## Where to look when something seems broken
+## 5. A folder for each person
 
-MediaMind keeps two persistent log files that survive restarts — check these
-**first** before assuming something is broken, especially if the app looks
-fine but a specific feature (thumbnails, a file operation) fails silently:
+In Who's who, select a person. The bar under the folder row has:
 
-| Log file | What it contains |
+- **Choose folder…** sets the folder on disk where this person's pictures
+  belong. It is the same for that name in every folder you scan. Nothing
+  moves yet.
+- **Move files to this folder** moves every picture and video of that
+  person, from every scanned folder, into it. You see the counts first and
+  confirm.
+
+How the move behaves:
+
+- Each file is copied first and removed from its old place only after the
+  copy is complete.
+- A file that is already in the person's folder as an identical copy stays
+  where it is and is not copied again.
+- You can **stop** a move from the strip. The files already moved are put
+  back, and folders the move created are removed again if they are empty.
+- A finished move can be undone from the People page.
+
+### Group pictures
+
+A picture with more than one named person can only live in one place, so
+MediaMind asks. Under **Group pictures**, choose for each one: a person's
+folder, an existing or new **group folder**, or **Leave it where it is**.
+Tick **Do the same for every picture of exactly these people** and the
+answer is remembered, including for new pictures later.
+
+---
+
+## 6. Watched folders
+
+Open **Settings → Watched folders** and choose **Add folder…**. MediaMind
+then notices new pictures and videos there and sorts them against the people
+you have named.
+
+Tick **File new pictures into people's folders** on a watched folder to have
+confident matches moved into each person's folder by themselves. Group
+pictures still wait for your answer in Who's who. This is off until you turn
+it on for a folder.
+
+---
+
+## Long tasks and the strip at the bottom
+
+Scans, sorts, moves, and duplicate removal show their progress in two
+places: a card on the page where you started them, and the strip at the
+bottom of the window when you go elsewhere. Both say what is happening, how
+far along it is, and which file is being worked on. Tasks that can be
+stopped safely have a **Stop** button, and it tells you what stopping will
+and will not change before you confirm.
+
+---
+
+## Keyboard shortcuts
+
+Everyday File Explorer shortcuts work as you expect (tabs, copy and paste,
+rename, delete, refresh). The MediaMind ones:
+
+| Shortcut | Where | Action |
+|---|---|---|
+| `Ctrl+M` | Any folder | Show all files / photos and videos only |
+| `1`–`9` | Who's who viewer | Name the face as that person |
+| `Left` / `Right` | Viewers | Previous / next |
+| `Y` `N` `I` `S` `D` | Needs your check | Yes, No, Ignore face, Skip, Delete file |
+| `K` `N` `S` | Duplicates | Keep and remove others, Not duplicates, Skip |
+| `F` | Any picture or video viewer | Full screen |
+| `0` | Any viewer | Fit the picture again |
+| `Esc` | Any viewer | Leave full screen, then go back |
+
+---
+
+## File safety
+
+1. **Nothing is deleted without you confirming it.** Deletes go to the
+   Recycle Bin wherever the drive has one.
+2. **Moves copy first.** A file is removed from its old place only after the
+   copy is complete, so a crash or a pulled cable mid-move loses nothing.
+3. **You review before anything is final.** Uncertain matches are questions,
+   not decisions, and a move shows you what it will do first.
+4. **Every move is recorded**, which is what lets it be undone.
+5. **Your folders are the truth.** MediaMind's own records can always be
+   rebuilt by scanning again.
+
+---
+
+## Where MediaMind keeps its own data
+
+| Place | What is there |
 |---|---|
-| `%APPDATA%\MediaMind\logs\engine.log` | Every backend API request (method, path, status, timing) and full tracebacks for any backend error |
-| `%APPDATA%\mediamind-app\logs\mediamind.log` | Electron startup/shutdown events and everything the Python engine prints |
+| `.mediamind\` inside each scanned folder | That folder's index of files, faces and names. Deleting it loses nothing on disk; a rescan rebuilds it |
+| `%APPDATA%\MediaMind\` | The list of scanned folders, settings, the record of people across folders, and the history of moves |
+| `%APPDATA%\MediaMind\logs\engine.log` | What the engine did, with any error in full |
+| `~\.insightface\` | The downloaded face-recognition model |
 
-In PowerShell, to see the last 50 lines of either:
+---
+
+## If something looks wrong
+
+| What you see | What to do |
+|---|---|
+| A page says the MediaMind engine isn't running | Close the app fully and open it again. If it repeats, look at the end of `engine.log` |
+| A scan seems stuck on one file | Check the strip: it names the file and how long it has been on it. Long videos on a network or encrypted drive are slow. If it is truly stuck, stop the scan and start it again |
+| Who's who says the folder hasn't been scanned | Run Scan for People on that folder first, then open Who's who again |
+| Faces couldn't be loaded | The folder's drive is probably not connected or not unlocked. Connect it and open the page again |
+| A video shows one still frame instead of playing | Windows cannot play that video's format inside the app. **Open file** plays it in your video player |
+| A folder looks empty | It may hold no photos or videos. Press `Ctrl+M` to show all files |
+| An opened tab says the drive is unplugged | Reconnect the drive and press Refresh |
+
+To read the last 50 lines of the engine log, in PowerShell:
 
 ```powershell
 Get-Content "$env:APPDATA\MediaMind\logs\engine.log" -Tail 50
-Get-Content "$env:APPDATA\mediamind-app\logs\mediamind.log" -Tail 50
 ```
 
-If the app crashes or a screen goes blank, the renderer (the part you see)
-also forwards its own errors into `mediamind.log` — so that file is the
-right place to check for a frozen or blank-screen situation, not just engine
-problems.
+---
+
+## Known limits
+
+- The app installs as **Files - Dev** with a test certificate. A signed
+  build under the MediaMind name is not ready yet.
+- Moving a person's files, group pictures, and automatic filing from watched
+  folders are the newest features and have had the least real-world use.
+  Try them on a small folder first.
+- Undoing a people-move puts the files back, but those files need a rescan
+  before their faces show again.
+- A picture moved into a different scanned folder is recognised there after
+  that folder's next scan.
+- Windows only for now.
 
 ---
 
-## Possible issues and what to do
+## The older Electron app
 
-| Symptom | What to do |
-|---|---|
-| "Starting engine…" banner stays up for >30 seconds | Close app, check for leftover processes (above), re-run `npm run dev` |
-| "Engine offline — retrying…" banner | Check `engine.log` for a traceback. Or run `<your-venv>\Scripts\python.exe -m mediamind` directly in a terminal to see the raw error |
-| Thumbnails/photos don't show even though names/counts look right | Make sure you have the latest code and did a full restart, not just a hot-reload (this was a real, now-fixed bug — see below) |
-| A brand-new folder shows "0 items" for a couple seconds then looks like it vanished | The background "does this folder contain media" check hasn't resolved yet — wait ~1-3s |
-| App won't fully close / acts like it's running old code | See "Checking nothing was left running" above |
-| Drag-and-drop doesn't seem to do anything | Confirm you're dropping directly onto a folder tile/row, a folder-tree node, or a Quick Access pin — dropping onto empty space in the *same* folder you dragged from is an intentional no-op |
-| Pressing `Escape` doesn't close the media viewer / Properties dialog / a confirmation dialog | Known bug — click the × button or click outside the dialog instead |
-| A right-click menu or dropdown seems to do nothing when clicked | Not a known app bug in normal mouse use — if you hit this, note exactly what you clicked and tell me |
-
-The dedupe/People/organize screens (scan progress, duplicate review, bulk
-rules, pending matches) aren't reachable from the app right now — see
-"Where the older features went" above — so their old troubleshooting
-entries have been removed from this table.
-
----
-
-## Known bug found and fixed (2026-07-05)
-
-Early on, thumbnails rendered as broken-image icons everywhere in the app
-even though the backend was serving them correctly — the window's security
-policy didn't allow `blob:` image sources, which is how thumbnails are
-delivered to the browser. Fixed by allowing `blob:` alongside the existing
-allowed sources; verified thumbnails render with real pixel dimensions. If
-you ever see broken-image icons again, it's not this same bug (already
-fixed) — check `engine.log` for that specific file's error instead.
-
----
-
-## What is NOT available yet
-
-- **Duplicate finding, People/face recognition, Providers, organize-by-
-  person** — implemented and tested, not currently wired into the app
-  window (see "Where the older features went" above).
-- **Dragging files out of MediaMind** into another app or the Windows
-  desktop (drag *in*, from Explorer into MediaMind, does work). Deferred
-  because it needs Electron's native `webContents.startDrag`, which would
-  compete with the in-app drag-and-drop library for the same browser drag
-  event.
-- **One-click Recycle Bin restore.** The "Recent deletions" panel shows your
-  deletion history and can open the real Windows Recycle Bin, but restoring
-  a specific file back to its original location is something you do in that
-  Recycle Bin window yourself, not a button in MediaMind. This was a
-  deliberate safety call — automating it would mean scripting Windows Shell
-  operations against your real files without a well-tested way to verify
-  they land back in the right place.
-- **Escape doesn't close the media viewer, Properties dialog, or
-  confirmation dialogs** — use the × button or click outside instead.
-  Known, not yet fixed.
-- **Column resize/reorder/visibility for Details view is remembered
-  globally, not per folder** (unlike view mode and sort, which are
-  remembered per folder).
-- **App packaging** — an installer/executable via `electron-builder` isn't
-  set up; you always run from source (`npm run dev` or a manual
-  `npm run build`).
-- **Settings screen** — no dedicated settings UI (so there's no toggle yet
-  for things like showing hidden files or file extensions).
-- Pagination/virtualization for very large folders (10,000+ files), a
-  thumbnail disk cache, and external-drive-safe eject handling — deliberate
-  scope cuts, not bugs.
-
----
-
-## File safety guarantees
-
-MediaMind is designed to never lose or destroy your files:
-
-1. Files are **moved to the Recycle Bin by default**; permanent delete is a
-   separate, explicitly-confirmed action.
-2. You must **explicitly confirm** before anything is permanently deleted.
-3. Every file operation (move/copy/rename/delete/new-folder) is recorded to
-   an operation log, which is what powers undo/redo and the "Recent
-   deletions" history panel.
-4. Files that **can't be found** at execute time are skipped with an error,
-   not silently trashed.
-
----
-
-## Where MediaMind stores its own data
-
-Explorer file operations (undo/redo history, the "Recent deletions" log,
-Quick Access pins, Recent Files, per-folder view preferences) are stored
-app-wide, not inside your folders:
-
-```
-%APPDATA%\MediaMind\
-├─ fs_ops\           ← operation log powering undo/redo + Recent deletions
-├─ logs\              ← engine.log (see Troubleshooting above)
-└─ ...
-```
-
-Nothing is written into the folders you browse. The one exception is the
-older, currently-unreachable dedupe/faces workflow (see "Where the older
-features went"): if you were to reach one of those screens today, scanning
-a folder there still creates a `.mediamind/` subfolder inside it
-(`index.db` + `manifests/`) exactly as before — that behavior is unchanged,
-just not reachable from the current UI.
-
-Face-recognition models download to `~/.insightface` (shared with any other
-tool built on the `insightface` package, so you never end up with duplicate
-copies).
+The first MediaMind desktop app was built with Electron and lives in `app/`.
+The app described in this guide replaced it. The old one still runs from
+source (`npm run dev` inside `app/`), and gets no new features.

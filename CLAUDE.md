@@ -34,8 +34,7 @@ for organizing it.
   (`app/src/renderer/src/screens/`). New UI work goes into the WinUI app
   below. `docs/PRD.md` and `docs/IMPLEMENTATION_PLAN.md` describe the target
   feature set and backend architecture accurately; their UI-flow descriptions
-  predate both Explorer clones. `docs/USER_GUIDE.md` covers the Electron app
-  only.
+  predate both Explorer clones.
 - **Version 1.x (current frontend — the WinUI overhaul):** the app's real,
   single intended UI is now the **WinUI Explorer clone** in
   `winui-frontend/Files/` (the "Block 5" overhaul, ADR-0012 — a fork of the
@@ -208,7 +207,10 @@ Hussain does not manage git for this repo; Claude Code does, every session, with
 - **Avoid unnecessary dependencies.** Every new dependency must justify itself;
   prefer the standard library and already-present packages.
 - **Write clean documentation.** User docs and developer docs are part of the
-  feature, not an afterthought.
+  feature, not an afterthought. Claude writes and maintains every file in
+  this repository, docs included: when a change alters what the user sees or
+  how the app is built, update `docs/USER_GUIDE.md`, `README.md` and this
+  file in the same change, without waiting to be asked.
 - **Keep public APIs stable.** Backend HTTP API, plugin interfaces, and CLI
   flags are contracts. Preserve backward compatibility whenever practical;
   when a break is unavoidable, document the migration.
