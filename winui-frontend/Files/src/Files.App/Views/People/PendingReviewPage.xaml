@@ -1,0 +1,113 @@
+<!--  Copyright (c) Files Community. Licensed under the MIT License.  -->
+<Page
+	x:Class="Files.App.Views.People.PendingReviewPage"
+	xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+	xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+	xmlns:converters="using:Files.App.Converters"
+	xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+	xmlns:helpers="using:Files.App.Helpers"
+	xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+	xmlns:vm="using:Files.App.ViewModels.People"
+	DataContext="{x:Bind ViewModel, Mode=OneWay}"
+	mc:Ignorable="d">
+
+	<Page.Resources>
+		<ResourceDictionary>
+			<converters:EmptyListToVisibilityConverter x:Key="EmptyListToVisibilityConverter" />
+			<converters:PopulatedListToVisibilityConverter x:Key="PopulatedListToVisibilityConverter" />
+		</ResourceDictionary>
+	</Page.Resources>
+
+	<Grid x:Name="ContainerGrid">
+		<Grid.RowDefinitions>
+			<RowDefinition Height="Auto" />
+			<RowDefinition Height="Auto" />
+			<RowDefinition Height="*" />
+		</Grid.RowDefinitions>
+
+		<!--  Header  -->
+		<StackPanel
+			Grid.Row="0"
+			Margin="24,16,24,4"
+			Spacing="2">
+			<TextBlock
+				FontSize="20"
+				FontWeight="SemiBold"
+				Text="{x:Bind ViewModel.PersonName, Mode=OneWay}" />
+			<TextBlock
+				Opacity="0.7"
+				Style="{StaticResource CaptionTextBlockStyle}"
+				Text="{helpers:ResourceString Name=MediaMind_PendingReviewSubtitle}" />
+		</StackPanel>
+
+		<!--  Action bar  -->
+		<StackPanel
+			Grid.Row="1"
+			Margin="24,4,24,8"
+			Orientation="Horizontal"
+			Spacing="8"
+			Visibility="{x:Bind ViewModel.Items.Count, Mode=OneWay, Converter={StaticResource PopulatedListToVisibilityConverter}}">
+			<CheckBox
+				x:Name="SelectAllCheckBox"
+				Checked="SelectAllCheckBox_Checked"
+				Content="{helpers:ResourceString Name=MediaMind_SelectAll}"
+				IsChecked="True"
+				Unchecked="SelectAllCheckBox_Unchecked" />
+			<Button
+				Click="ConfirmSelectedButton_Click"
+				Content="{helpers:ResourceString Name=MediaMind_ConfirmSelected}"
+				Style="{ThemeResource AccentButtonStyle}" />
+			<Button
+				Click="RejectSelectedButton_Click"
+				Content="{helpers:ResourceString Name=MediaMind_RejectSelected}" />
+		</StackPanel>
+
+		<!--  Empty state: everything in this group has been decided  -->
+		<StackPanel
+			Grid.Row="2"
+			MaxWidth="360"
+			Margin="0,64,0,0"
+			HorizontalAlignment="Center"
+			Spacing="8"
+			Visibility="{x:Bind ViewModel.Items.Count, Mode=OneWay, Converter={StaticResource EmptyListToVisibilityConverter}}">
+			<TextBlock
+				HorizontalAlignment="Center"
+				FontWeight="SemiBold"
+				Text="{helpers:ResourceString Name=MediaMind_PendingReviewDoneTitle}"
+				TextAlignment="Center" />
+		</StackPanel>
+
+		<ScrollViewer Grid.Row="2" Padding="24,0,24,24">
+			<GridView
+				ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}"
+				SelectionMode="None">
+				<GridView.ItemTemplate>
+					<DataTemplate x:DataType="vm:PendingMatchTileViewModel">
+						<StackPanel
+							Width="128"
+							Padding="8"
+							Spacing="6">
+							<Grid Width="96" Height="96" HorizontalAlignment="Center">
+								<PersonPicture
+									Width="96"
+									Height="96"
+									ProfilePicture="{x:Bind Thumbnail, Mode=OneWay}" />
+								<CheckBox
+									HorizontalAlignment="Left"
+									VerticalAlignment="Top"
+									IsChecked="{x:Bind IsSelected, Mode=TwoWay}" />
+							</Grid>
+							<TextBlock
+								HorizontalAlignment="Center"
+								Opacity="0.7"
+								Style="{StaticResource CaptionTextBlockStyle}"
+								Text="{x:Bind FileName}"
+								TextAlignment="Center"
+								TextTrimming="CharacterEllipsis" />
+						</StackPanel>
+					</DataTemplate>
+				</GridView.ItemTemplate>
+			</GridView>
+		</ScrollViewer>
+	</Grid>
+</Page>

@@ -1,0 +1,221 @@
+<!--  Copyright (c) Files Community. Licensed under the MIT License.  -->
+<Page
+	x:Class="Files.App.Views.People.PeopleGroupPage"
+	xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+	xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+	xmlns:converters="using:Files.App.Converters"
+	xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+	xmlns:helpers="using:Files.App.Helpers"
+	xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+	xmlns:vm="using:Files.App.ViewModels.People"
+	DataContext="{x:Bind ViewModel, Mode=OneWay}"
+	mc:Ignorable="d">
+
+	<Page.Resources>
+		<ResourceDictionary>
+			<converters:PopulatedListToVisibilityConverter x:Key="PopulatedListToVisibilityConverter" />
+			<converters:EmptyListToVisibilityConverter x:Key="EmptyListToVisibilityConverter" />
+			<converters:NullToVisibilityCollapsedConverter x:Key="NullToVisibilityCollapsedConverter" />
+		</ResourceDictionary>
+	</Page.Resources>
+
+	<Grid x:Name="ContainerGrid">
+		<Grid.RowDefinitions>
+			<RowDefinition Height="Auto" />
+			<RowDefinition Height="*" />
+		</Grid.RowDefinitions>
+
+		<!--  Header  -->
+		<StackPanel
+			Grid.Row="0"
+			Margin="24,16,24,8"
+			Orientation="Horizontal"
+			Spacing="12">
+			<TextBlock
+				VerticalAlignment="Center"
+				FontSize="20"
+				FontWeight="SemiBold"
+				Text="{x:Bind ViewModel.Group.Text, Mode=OneWay}" />
+			<ToggleSwitch
+				VerticalAlignment="Center"
+				Header="{helpers:ResourceString Name=MediaMind_ShowEverythingBelow}"
+				IsOn="{x:Bind ViewModel.ShowEverythingBelow, Mode=TwoWay}" />
+		</StackPanel>
+
+		<Grid Grid.Row="1">
+
+			<!--  Empty state: this group genuinely has nothing yet (mirrors PeopleHomePage's block)  -->
+			<StackPanel
+				MaxWidth="360"
+				Margin="0,64,0,0"
+				HorizontalAlignment="Center"
+				Spacing="8"
+				Visibility="{x:Bind ViewModel.TotalCount, Mode=OneWay, Converter={StaticResource EmptyListToVisibilityConverter}}">
+				<TextBlock
+					HorizontalAlignment="Center"
+					FontWeight="SemiBold"
+					Text="{helpers:ResourceString Name=MediaMind_PeopleEmptyTitle}"
+					TextAlignment="Center" />
+				<TextBlock
+					HorizontalAlignment="Center"
+					Opacity="0.7"
+					Text="{helpers:ResourceString Name=MediaMind_PeopleEmptyDescription}"
+					TextAlignment="Center"
+					TextWrapping="Wrap" />
+			</StackPanel>
+
+			<ScrollViewer Padding="24,0,24,24">
+				<StackPanel Spacing="16">
+
+					<!--  Subgroups  -->
+					<GridView
+						ItemsSource="{x:Bind ViewModel.Subgroups, Mode=OneWay}"
+						SelectionMode="None"
+						Visibility="{x:Bind ViewModel.Subgroups.Count, Mode=OneWay, Converter={StaticResource PopulatedListToVisibilityConverter}}">
+						<GridView.ItemTemplate>
+							<DataTemplate x:DataType="vm:GroupTileViewModel">
+								<Border
+									Width="190"
+									Padding="12"
+									Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+									CornerRadius="{StaticResource ControlCornerRadius}"
+									DoubleTapped="GroupTile_DoubleTapped"
+									Tag="{x:Bind Item}">
+									<StackPanel Spacing="8">
+
+										<!--  Folder-style face-stack preview: first three members as circles, +N badge for the rest  -->
+										<Grid Width="72" Height="72">
+											<PersonPicture
+												Width="34"
+												Height="34"
+												Margin="0,0,38,38"
+												DisplayName="{x:Bind Person1.Text}"
+												ProfilePicture="{x:Bind Person1.Thumbnail, Mode=OneWay}"
+												Visibility="{x:Bind Person1, Converter={StaticResource NullToVisibilityCollapsedConverter}}" />
+											<PersonPicture
+												Width="34"
+												Height="34"
+												Margin="38,0,0,38"
+												DisplayName="{x:Bind Person2.Text}"
+												ProfilePicture="{x:Bind Person2.Thumbnail, Mode=OneWay}"
+												Visibility="{x:Bind Person2, Converter={StaticResource NullToVisibilityCollapsedConverter}}" />
+											<PersonPicture
+												Width="34"
+												Height="34"
+												Margin="0,38,38,0"
+												DisplayName="{x:Bind Person3.Text}"
+												ProfilePicture="{x:Bind Person3.Thumbnail, Mode=OneWay}"
+												Visibility="{x:Bind Person3, Converter={StaticResource NullToVisibilityCollapsedConverter}}" />
+											<Border
+												Width="34"
+												Height="34"
+												Margin="38,38,0,0"
+												Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+												CornerRadius="17"
+												Visibility="{x:Bind RemainingCount, Mode=OneWay, Converter={StaticResource PopulatedListToVisibilityConverter}}">
+												<TextBlock
+													HorizontalAlignment="Center"
+													VerticalAlignment="Center"
+													FontSize="12"
+													FontWeight="SemiBold"
+													Text="{x:Bind RemainingLabel}" />
+											</Border>
+										</Grid>
+
+										<TextBlock
+											HorizontalAlignment="Center"
+											FontWeight="SemiBold"
+											Text="{x:Bind Text}"
+											TextAlignment="Center"
+											TextTrimming="CharacterEllipsis" />
+										<TextBlock
+											HorizontalAlignment="Center"
+											Opacity="0.7"
+											Style="{StaticResource CaptionTextBlockStyle}"
+											Text="{x:Bind TotalPersons}" />
+									</StackPanel>
+								</Border>
+							</DataTemplate>
+						</GridView.ItemTemplate>
+					</GridView>
+
+					<!--  Persons  -->
+					<GridView
+						ItemsSource="{x:Bind ViewModel.Persons, Mode=OneWay}"
+						SelectionMode="None"
+						Visibility="{x:Bind ViewModel.Persons.Count, Mode=OneWay, Converter={StaticResource PopulatedListToVisibilityConverter}}">
+						<GridView.ItemTemplate>
+							<DataTemplate x:DataType="vm:PersonTileViewModel">
+								<Border
+									Width="190"
+									Padding="12"
+									Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+									CornerRadius="{StaticResource ControlCornerRadius}"
+									DoubleTapped="PersonTile_DoubleTapped"
+									Tag="{x:Bind Item}">
+									<StackPanel Spacing="8">
+										<PersonPicture
+											Width="80"
+											Height="80"
+											HorizontalAlignment="Center"
+											DisplayName="{x:Bind Text, Mode=OneWay}"
+											ProfilePicture="{x:Bind Thumbnail, Mode=OneWay}" />
+										<TextBlock
+											HorizontalAlignment="Center"
+											FontWeight="SemiBold"
+											Text="{x:Bind Text, Mode=OneWay}"
+											TextAlignment="Center"
+											TextTrimming="CharacterEllipsis"
+											Visibility="{x:Bind NameVisibility, Mode=OneWay}" />
+
+										<!--  Tier 1: a real, clustered-but-unnamed person is nameable right here, no
+										      dialog — Enter, clicking away, or the checkmark all commit it. Two
+										      columns (not an overlay) so the button never sits on top of the text.  -->
+										<Grid Visibility="{x:Bind NameBoxVisibility, Mode=OneWay}">
+											<Grid.ColumnDefinitions>
+												<ColumnDefinition Width="*" />
+												<ColumnDefinition Width="Auto" />
+											</Grid.ColumnDefinitions>
+											<TextBox
+												Grid.Column="0"
+												PlaceholderText="{helpers:ResourceString Name=MediaMind_NameThisPerson}"
+												KeyDown="PersonNameTextBox_KeyDown"
+												LostFocus="PersonNameTextBox_LostFocus"
+												Tag="{x:Bind}" />
+											<Button
+												Grid.Column="1"
+												Width="32"
+												Height="32"
+												Margin="4,0,0,0"
+												Padding="0"
+												VerticalAlignment="Center"
+												Click="PersonNameConfirmButton_Click"
+												Tag="{x:Bind}"
+												ToolTipService.ToolTip="{helpers:ResourceString Name=Confirm}">
+												<FontIcon FontSize="14" Glyph="&#xE73E;" />
+											</Button>
+										</Grid>
+										<TextBlock
+											Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+											Style="{StaticResource CaptionTextBlockStyle}"
+											Text="{x:Bind NameError, Mode=OneWay}"
+											TextAlignment="Center"
+											TextWrapping="Wrap"
+											Visibility="{x:Bind NameErrorVisibility, Mode=OneWay}" />
+
+										<TextBlock
+											HorizontalAlignment="Center"
+											Opacity="0.7"
+											Style="{StaticResource CaptionTextBlockStyle}"
+											Text="{x:Bind MediaCount, Mode=OneWay}" />
+									</StackPanel>
+								</Border>
+							</DataTemplate>
+						</GridView.ItemTemplate>
+					</GridView>
+
+				</StackPanel>
+			</ScrollViewer>
+		</Grid>
+	</Grid>
+</Page>

@@ -1,0 +1,124 @@
+<!--  Copyright (c) Files Community. Licensed under the MIT License.  -->
+<UserControl
+	x:Class="Files.App.UserControls.MediaMind.ScanActivityStrip"
+	xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+	xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+	xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+	xmlns:helpers="using:Files.App.Helpers"
+	xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+	xmlns:mm="using:Files.App.ViewModels.UserControls.MediaMind"
+	mc:Ignorable="d">
+
+	<!--  What the engine is doing right now. Collapsed when nothing runs; one row per job.  -->
+	<ItemsControl
+		ItemsSource="{x:Bind ViewModel.Rows, Mode=OneWay}"
+		Visibility="{x:Bind ViewModel.StripVisibility, Mode=OneWay}">
+		<ItemsControl.ItemTemplate>
+			<DataTemplate x:DataType="mm:ScanJobRowViewModel">
+				<Grid
+					Padding="16,8,12,10"
+					Background="{ThemeResource LayerFillColorDefaultBrush}"
+					BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+					BorderThickness="0,1,0,0"
+					RowSpacing="2">
+					<Grid.RowDefinitions>
+						<RowDefinition Height="Auto" />
+						<RowDefinition Height="Auto" />
+						<RowDefinition Height="Auto" />
+						<RowDefinition Height="Auto" />
+					</Grid.RowDefinitions>
+					<Grid.ColumnDefinitions>
+						<ColumnDefinition Width="*" />
+						<ColumnDefinition Width="Auto" />
+					</Grid.ColumnDefinitions>
+
+					<TextBlock
+						Grid.Row="0"
+						Grid.Column="0"
+						VerticalAlignment="Center"
+						MaxLines="1"
+						TextTrimming="CharacterEllipsis">
+						<Run
+							FontWeight="SemiBold"
+							Text="{x:Bind Title, Mode=OneWay}" />
+						<Run Text="   " />
+						<Run
+							Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+							Text="{x:Bind PhaseText, Mode=OneWay}" />
+					</TextBlock>
+
+					<StackPanel
+						Grid.Row="0"
+						Grid.Column="1"
+						Orientation="Horizontal"
+						Spacing="12">
+						<TextBlock
+							VerticalAlignment="Center"
+							Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+							Style="{StaticResource CaptionTextBlockStyle}"
+							Text="{x:Bind CountersText, Mode=OneWay}" />
+						<!--  Stop it: a scan saves nothing, a move puts back what it moved (asks first)  -->
+						<Button
+							Padding="10,2"
+							Click="Cancel_Click"
+							Content="{helpers:ResourceString Name=Cancel}"
+							Tag="{x:Bind}"
+							ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_JobCancelTip}"
+							Visibility="{x:Bind CancelVisibility, Mode=OneWay}" />
+						<!--  The scan found copies: straight to reviewing them  -->
+						<HyperlinkButton
+							Padding="6,2"
+							Click="ReviewDuplicates_Click"
+							Content="{x:Bind ReviewDuplicatesText, Mode=OneWay}"
+							Tag="{x:Bind}"
+							Visibility="{x:Bind ReviewDuplicatesVisibility, Mode=OneWay}" />
+						<Button
+							Width="24"
+							Height="24"
+							Padding="0"
+							Background="Transparent"
+							BorderThickness="0"
+							Click="Dismiss_Click"
+							Tag="{x:Bind}"
+							ToolTipService.ToolTip="{helpers:ResourceString Name=Close}"
+							Visibility="{x:Bind DismissVisibility, Mode=OneWay}">
+							<FontIcon
+								FontSize="10"
+								Glyph="&#xE711;" />
+						</Button>
+					</StackPanel>
+
+					<TextBlock
+						Grid.Row="1"
+						Grid.ColumnSpan="2"
+						Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+						MaxLines="1"
+						Style="{StaticResource CaptionTextBlockStyle}"
+						TextTrimming="CharacterEllipsis"
+						Visibility="{x:Bind DetailVisibility, Mode=OneWay}">
+						<Run Text="{x:Bind DetailText, Mode=OneWay}" />
+					</TextBlock>
+
+					<TextBlock
+						Grid.Row="2"
+						Grid.ColumnSpan="2"
+						Foreground="{ThemeResource SystemFillColorCautionBrush}"
+						MaxLines="2"
+						Style="{StaticResource CaptionTextBlockStyle}"
+						TextWrapping="Wrap"
+						Visibility="{x:Bind HeartbeatVisibility, Mode=OneWay}"
+						Text="{x:Bind HeartbeatText, Mode=OneWay}" />
+
+					<ProgressBar
+						Grid.Row="3"
+						Grid.ColumnSpan="2"
+						Margin="0,6,0,0"
+						IsIndeterminate="{x:Bind IsIndeterminate, Mode=OneWay}"
+						Maximum="100"
+						Visibility="{x:Bind ProgressVisibility, Mode=OneWay}"
+						Value="{x:Bind Progress, Mode=OneWay}" />
+				</Grid>
+			</DataTemplate>
+		</ItemsControl.ItemTemplate>
+	</ItemsControl>
+</UserControl>

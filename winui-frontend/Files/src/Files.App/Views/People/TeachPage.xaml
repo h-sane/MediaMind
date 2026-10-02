@@ -1,0 +1,1537 @@
+<!--  Copyright (c) Files Community. Licensed under the MIT License.  -->
+<Page
+	x:Class="Files.App.Views.People.TeachPage"
+	xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+	xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+	xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+	xmlns:helpers="using:Files.App.Helpers"
+	xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+	xmlns:toolkit="using:CommunityToolkit.WinUI.Controls"
+	xmlns:local="using:Files.App.Views.People"
+	xmlns:services="using:Files.App.Services.MediaMind"
+	xmlns:vm="using:Files.App.ViewModels.People"
+	mc:Ignorable="d">
+
+	<Grid x:Name="ContainerGrid" SizeChanged="ContainerGrid_SizeChanged">
+		<Grid.RowDefinitions>
+			<RowDefinition Height="Auto" />
+			<RowDefinition Height="Auto" />
+			<RowDefinition Height="*" />
+			<RowDefinition Height="Auto" />
+		</Grid.RowDefinitions>
+
+		<!--  Header: what this page is for, and the one action that applies it  -->
+		<Grid
+			x:Name="HeaderGrid"
+			Grid.Row="0"
+			Margin="24,16,24,8"
+			ColumnSpacing="16">
+			<Grid.ColumnDefinitions>
+				<ColumnDefinition Width="*" />
+				<ColumnDefinition Width="Auto" />
+			</Grid.ColumnDefinitions>
+			<StackPanel Spacing="2">
+				<TextBlock
+					x:Name="TitleText"
+					FontSize="20"
+					FontWeight="SemiBold"
+					Text="{x:Bind ViewModel.Title, Mode=OneWay}"
+					TextTrimming="CharacterEllipsis" />
+				<TextBlock
+					MaxWidth="640"
+					HorizontalAlignment="Left"
+					Opacity="0.7"
+					Style="{StaticResource CaptionTextBlockStyle}"
+					Text="{helpers:ResourceString Name=MediaMind_TeachSubtitle}"
+					TextWrapping="Wrap" />
+				<TextBlock
+					x:Name="StatsText"
+					Margin="0,4,0,0"
+					Style="{StaticResource CaptionTextBlockStyle}"
+					Text="{x:Bind ViewModel.StatsText, Mode=OneWay}"
+					TextWrapping="Wrap" />
+			</StackPanel>
+			<StackPanel
+				Grid.Column="1"
+				VerticalAlignment="Center"
+				Orientation="Horizontal"
+				Spacing="12">
+				<ProgressRing
+					Width="20"
+					Height="20"
+					IsActive="{x:Bind ViewModel.IsBusy, Mode=OneWay}" />
+				<Button
+					x:Name="SortButton"
+					AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_TeachSort}"
+					Click="SortButton_Click"
+					IsEnabled="{x:Bind ViewModel.CanSort, Mode=OneWay}"
+					Style="{ThemeResource AccentButtonStyle}"
+					ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_TeachSortTip}"
+					Visibility="{x:Bind ViewModel.ContentVisibility, Mode=OneWay}">
+					<StackPanel Orientation="Horizontal" Spacing="8">
+						<FontIcon FontSize="14" Glyph="&#xE8CB;" />
+						<TextBlock Text="{helpers:ResourceString Name=MediaMind_TeachSort}" />
+					</StackPanel>
+				</Button>
+			</StackPanel>
+		</Grid>
+
+		<StackPanel Grid.Row="1" Margin="24,0,24,0">
+			<!--  A long action, live: what it is doing, how far along, the file or folder right now  -->
+			<Border
+				x:Name="ActivityCard"
+				Margin="0,0,0,8"
+				Padding="16,12,12,12"
+				AutomationProperties.LiveSetting="Polite"
+				AutomationProperties.Name="{x:Bind ViewModel.ActivityTitle, Mode=OneWay}"
+				Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+				BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+				BorderThickness="1"
+				CornerRadius="{StaticResource OverlayCornerRadius}"
+				Visibility="{x:Bind ViewModel.ActivityVisibility, Mode=OneWay}">
+				<Grid ColumnSpacing="16" RowSpacing="6">
+					<Grid.RowDefinitions>
+						<RowDefinition Height="Auto" />
+						<RowDefinition Height="Auto" />
+						<RowDefinition Height="Auto" />
+					</Grid.RowDefinitions>
+					<Grid.ColumnDefinitions>
+						<ColumnDefinition Width="*" />
+						<ColumnDefinition Width="Auto" />
+					</Grid.ColumnDefinitions>
+					<TextBlock
+						x:Name="ActivityTitleText"
+						VerticalAlignment="Center"
+						MaxLines="1"
+						Style="{StaticResource BodyStrongTextBlockStyle}"
+						Text="{x:Bind ViewModel.ActivityTitle, Mode=OneWay}"
+						TextTrimming="CharacterEllipsis" />
+					<StackPanel
+						Grid.Column="1"
+						VerticalAlignment="Center"
+						Orientation="Horizontal"
+						Spacing="12">
+						<TextBlock
+							x:Name="ActivityCountsText"
+							VerticalAlignment="Center"
+							Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+							Style="{StaticResource CaptionTextBlockStyle}"
+							Text="{x:Bind ViewModel.ActivityCounts, Mode=OneWay}" />
+						<TextBlock
+							x:Name="ActivityElapsedText"
+							MinWidth="32"
+							VerticalAlignment="Center"
+							Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+							Style="{StaticResource CaptionTextBlockStyle}"
+							Text="{x:Bind ViewModel.ActivityElapsed, Mode=OneWay}"
+							TextAlignment="Right"
+							ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_ActivityElapsedTip}" />
+						<Button
+							x:Name="ActivityCancelButton"
+							Padding="10,3"
+							Click="ActivityCancel_Click"
+							Content="{helpers:ResourceString Name=Cancel}"
+							Visibility="{x:Bind ViewModel.ActivityCancelVisibility, Mode=OneWay}" />
+					</StackPanel>
+					<ProgressBar
+						x:Name="ActivityProgress"
+						Grid.Row="1"
+						Grid.ColumnSpan="2"
+						IsIndeterminate="{x:Bind ViewModel.ActivityIndeterminate, Mode=OneWay}"
+						Maximum="100"
+						Value="{x:Bind ViewModel.ActivityValue, Mode=OneWay}" />
+					<TextBlock
+						x:Name="ActivityDetailText"
+						Grid.Row="2"
+						Grid.ColumnSpan="2"
+						Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+						MaxLines="1"
+						Style="{StaticResource CaptionTextBlockStyle}"
+						Text="{x:Bind ViewModel.ActivityDetail, Mode=OneWay}"
+						TextTrimming="CharacterEllipsis"
+						ToolTipService.ToolTip="{x:Bind ViewModel.ActivityDetail, Mode=OneWay}" />
+				</Grid>
+			</Border>
+
+			<!--  The single message area: every action's result lands here  -->
+			<InfoBar
+				x:Name="StatusBar"
+				Margin="0,0,0,8"
+				IsOpen="{x:Bind ViewModel.StatusOpen, Mode=TwoWay}"
+				Message="{x:Bind ViewModel.StatusMessage, Mode=OneWay}"
+				Severity="{x:Bind ViewModel.StatusSeverity, Mode=OneWay}"
+				Title="{x:Bind ViewModel.StatusTitle, Mode=OneWay}" />
+		</StackPanel>
+
+		<!--  Blocking state: not scanned yet / engine unavailable  -->
+		<StackPanel
+			Grid.Row="2"
+			MaxWidth="420"
+			Margin="24,64,24,0"
+			HorizontalAlignment="Center"
+			Spacing="12"
+			Visibility="{x:Bind ViewModel.BlockingVisibility, Mode=OneWay}">
+			<FontIcon
+				FontSize="32"
+				Glyph="&#xE77B;"
+				Opacity="0.6" />
+			<TextBlock
+				HorizontalAlignment="Center"
+				Text="{x:Bind ViewModel.BlockingText, Mode=OneWay}"
+				TextAlignment="Center"
+				TextWrapping="Wrap" />
+			<Button
+				x:Name="ScanFirstButton"
+				HorizontalAlignment="Center"
+				Click="ScanFirstButton_Click"
+				Content="{helpers:ResourceString Name=MediaMind_ScanForPeople}"
+				Style="{ThemeResource AccentButtonStyle}"
+				Visibility="{x:Bind ViewModel.ScanButtonVisibility}" />
+		</StackPanel>
+
+		<!--  Body: whose faces (left) and the faces themselves (right)  -->
+		<Grid
+			x:Name="BodyGrid"
+			Grid.Row="2"
+			Margin="24,0,24,0"
+			ColumnSpacing="16"
+			Visibility="{x:Bind ViewModel.ContentVisibility, Mode=OneWay}">
+			<Grid.ColumnDefinitions>
+				<ColumnDefinition x:Name="FilterColumn" Width="248" />
+				<ColumnDefinition Width="*" />
+			</Grid.ColumnDefinitions>
+
+			<ListView
+				x:Name="FilterList"
+				Grid.Column="0"
+				Padding="0,0,0,12"
+				AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_TeachPeopleHeader}"
+				ContainerContentChanging="FilterList_ContainerContentChanging"
+				ItemsSource="{x:Bind ViewModel.Filters, Mode=OneWay}"
+				SelectedItem="{x:Bind ViewModel.SelectedFilter, Mode=TwoWay}"
+				SelectionMode="Single">
+				<ListView.Header>
+					<TextBlock
+						Margin="12,0,0,8"
+						Opacity="0.7"
+						Style="{StaticResource BodyStrongTextBlockStyle}"
+						Text="{helpers:ResourceString Name=MediaMind_TeachPeopleHeader}" />
+				</ListView.Header>
+				<ListView.ItemTemplate>
+					<DataTemplate x:DataType="vm:TeachFilterItem">
+						<Grid
+							Margin="{x:Bind RowMargin}"
+							Padding="{x:Bind RowPadding}"
+							ColumnSpacing="12"
+							Opacity="{x:Bind RowOpacity}">
+							<Grid.ColumnDefinitions>
+								<ColumnDefinition Width="16" />
+								<ColumnDefinition Width="*" />
+							</Grid.ColumnDefinitions>
+							<FontIcon
+								VerticalAlignment="Center"
+								FontSize="16"
+								Glyph="{x:Bind Glyph}"
+								Opacity="0.8" />
+							<StackPanel Grid.Column="1" Spacing="0">
+								<TextBlock
+									FontWeight="{x:Bind NameWeight}"
+									Text="{x:Bind Name}"
+									TextTrimming="CharacterEllipsis"
+									ToolTipService.ToolTip="{x:Bind Name}" />
+								<TextBlock
+									Opacity="0.7"
+									Style="{StaticResource CaptionTextBlockStyle}"
+									Text="{x:Bind Detail, Mode=OneWay}"
+									TextTrimming="CharacterEllipsis" />
+							</StackPanel>
+						</Grid>
+					</DataTemplate>
+				</ListView.ItemTemplate>
+			</ListView>
+
+			<!--  The folder row scopes every tab (faces, the viewer and Needs your check), so it sits above all three  -->
+			<Grid Grid.Column="1" RowSpacing="8">
+				<Grid.RowDefinitions>
+					<RowDefinition Height="Auto" />
+					<RowDefinition Height="*" />
+				</Grid.RowDefinitions>
+
+				<StackPanel Spacing="8">
+				<Grid ColumnSpacing="12">
+					<Grid.ColumnDefinitions>
+						<ColumnDefinition Width="Auto" />
+						<ColumnDefinition Width="*" />
+						<ColumnDefinition Width="Auto" />
+					</Grid.ColumnDefinitions>
+					<TextBlock
+						VerticalAlignment="Center"
+						Text="{helpers:ResourceString Name=MediaMind_TeachFolderLabel}" />
+					<ComboBox
+						x:Name="FolderBox"
+						Grid.Column="1"
+						MinWidth="200"
+						MaxWidth="420"
+						HorizontalAlignment="Left"
+						AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_TeachFolderLabel}"
+						ItemsSource="{x:Bind ViewModel.Folders, Mode=OneWay}"
+						SelectedItem="{x:Bind ViewModel.SelectedFolder, Mode=TwoWay}">
+						<ComboBox.ItemTemplate>
+							<DataTemplate x:DataType="vm:TeachFolderOption">
+								<TextBlock
+									Text="{x:Bind Label}"
+									TextTrimming="CharacterEllipsis"
+									ToolTipService.ToolTip="{x:Bind Label}" />
+							</DataTemplate>
+						</ComboBox.ItemTemplate>
+					</ComboBox>
+					<TextBlock
+						Grid.Column="2"
+						VerticalAlignment="Center"
+						Opacity="0.7"
+						Style="{StaticResource CaptionTextBlockStyle}"
+						Text="{x:Bind ViewModel.ShownText, Mode=OneWay}"
+						Visibility="{x:Bind ViewModel.FacesAreaVisibility, Mode=OneWay}" />
+				</Grid>
+
+				<!--  The selected person: part of this folder or a guest, and their own folder on disk  -->
+				<Border
+					x:Name="PersonBar"
+					Padding="12,6"
+					Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+					BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+					BorderThickness="1"
+					CornerRadius="{StaticResource OverlayCornerRadius}"
+					Visibility="{x:Bind ViewModel.MembershipVisibility, Mode=OneWay}">
+					<Grid ColumnSpacing="12" RowSpacing="4">
+						<Grid.RowDefinitions>
+							<RowDefinition Height="Auto" />
+							<RowDefinition Height="Auto" />
+						</Grid.RowDefinitions>
+						<Grid.ColumnDefinitions>
+							<ColumnDefinition Width="Auto" />
+							<ColumnDefinition Width="*" />
+							<ColumnDefinition Width="Auto" />
+							<ColumnDefinition Width="Auto" />
+						</Grid.ColumnDefinitions>
+						<ToggleSwitch
+							x:Name="MembershipSwitch"
+							MinWidth="0"
+							VerticalAlignment="Center"
+							AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_TeachBelongsHere}"
+							IsEnabled="{x:Bind ViewModel.CanSort, Mode=OneWay}"
+							IsOn="{x:Bind ViewModel.BelongsHere, Mode=TwoWay}"
+							OffContent="{helpers:ResourceString Name=MediaMind_TeachGuestHere}"
+							OnContent="{helpers:ResourceString Name=MediaMind_TeachBelongsHere}"
+							ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_TeachBelongsHereTip}" />
+						<!--  On narrow pages this drops to its own row (TeachPage.ApplyColumns)  -->
+						<StackPanel
+							x:Name="PersonFolderPanel"
+							Grid.Column="1"
+							VerticalAlignment="Center"
+							Opacity="{x:Bind ViewModel.PrimaryFolderOpacity, Mode=OneWay}"
+							Orientation="Horizontal"
+							Spacing="8">
+							<FontIcon
+								FontSize="14"
+								Glyph="&#xE8B7;"
+								Opacity="0.8" />
+							<TextBlock
+								x:Name="PrimaryFolderText"
+								VerticalAlignment="Center"
+								Text="{x:Bind ViewModel.PrimaryFolderText, Mode=OneWay}"
+								TextTrimming="CharacterEllipsis"
+								ToolTipService.ToolTip="{x:Bind ViewModel.PrimaryFolderText, Mode=OneWay}" />
+						</StackPanel>
+						<Button
+							x:Name="ChooseFolderButton"
+							Grid.Column="2"
+							Click="ChooseFolder_Click"
+							Content="{helpers:ResourceString Name=MediaMind_TeachChooseFolder}"
+							IsEnabled="{x:Bind ViewModel.CanSort, Mode=OneWay}"
+							ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_TeachChooseFolderTip}" />
+						<Button
+							x:Name="MoveFilesButton"
+							Grid.Column="3"
+							Click="MoveFiles_Click"
+							IsEnabled="{x:Bind ViewModel.CanMoveFiles, Mode=OneWay}"
+							ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_TeachMoveFilesTip}">
+							<StackPanel Orientation="Horizontal" Spacing="8">
+								<FontIcon FontSize="14" Glyph="&#xE8DE;" />
+								<TextBlock Text="{helpers:ResourceString Name=MediaMind_TeachMoveFiles}" />
+							</StackPanel>
+						</Button>
+					</Grid>
+				</Border>
+				</StackPanel>
+
+				<Grid Grid.Row="1" Visibility="{x:Bind ViewModel.FacesAreaVisibility, Mode=OneWay}">
+				<ProgressRing
+					Width="32"
+					Height="32"
+					Margin="0,48,0,0"
+					VerticalAlignment="Top"
+					IsActive="{x:Bind ViewModel.IsLoading, Mode=OneWay}" />
+
+				<TextBlock
+					MaxWidth="420"
+					Margin="0,48,0,0"
+					HorizontalAlignment="Center"
+					Opacity="0.8"
+					Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}"
+					TextAlignment="Center"
+					TextWrapping="Wrap"
+					Visibility="{x:Bind ViewModel.EmptyVisibility, Mode=OneWay}" />
+
+				<!--  Fixed-size tiles: every cell is the same 120x152, so the first item can't mis-size the grid  -->
+				<GridView
+					x:Name="FaceGrid"
+					Padding="0,0,0,16"
+					AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_TeachFacesLabel}"
+					ContainerContentChanging="FaceGrid_ContainerContentChanging"
+					DoubleTapped="FaceGrid_DoubleTapped"
+					IsItemClickEnabled="False"
+					ItemsSource="{x:Bind ViewModel.VisibleFaces, Mode=OneWay}"
+					SelectionChanged="FaceGrid_SelectionChanged"
+					SelectionMode="Multiple"
+					Visibility="{x:Bind ViewModel.GridVisibility, Mode=OneWay}">
+					<GridView.ItemTemplate>
+						<DataTemplate x:DataType="vm:TeachFaceTileViewModel">
+							<StackPanel
+								Width="120"
+								Height="152"
+								Padding="4"
+								Spacing="6"
+								ToolTipService.ToolTip="{x:Bind ToolTip}">
+								<Grid
+									Width="112"
+									Height="112"
+									Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+									CornerRadius="{StaticResource OverlayCornerRadius}">
+									<FontIcon
+										FontSize="28"
+										Glyph="&#xE77B;"
+										Opacity="0.35" />
+									<Image
+										Source="{x:Bind Thumbnail, Mode=OneWay}"
+										Stretch="UniformToFill" />
+									<!--  Named example: the faces MediaMind learns from  -->
+									<Border
+										Width="24"
+										Height="24"
+										Margin="4"
+										HorizontalAlignment="Right"
+										VerticalAlignment="Bottom"
+										Background="{ThemeResource AccentFillColorDefaultBrush}"
+										CornerRadius="12"
+										ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_TeachExampleBadge}"
+										Visibility="{x:Bind ExampleBadgeVisibility, Mode=OneWay}">
+										<FontIcon
+											FontSize="12"
+											Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
+											Glyph="&#xE735;" />
+									</Border>
+									<Border
+										Margin="4"
+										Padding="4,2"
+										HorizontalAlignment="Left"
+										VerticalAlignment="Bottom"
+										Background="{ThemeResource SmokeFillColorDefaultBrush}"
+										CornerRadius="4"
+										Visibility="{x:Bind VideoBadgeVisibility}">
+										<FontIcon
+											FontSize="10"
+											Foreground="White"
+											Glyph="&#xE714;" />
+									</Border>
+								</Grid>
+								<TextBlock
+									HorizontalAlignment="Center"
+									Opacity="{x:Bind NameOpacity, Mode=OneWay}"
+									Style="{StaticResource CaptionTextBlockStyle}"
+									Text="{x:Bind NameText, Mode=OneWay}"
+									TextAlignment="Center"
+									TextTrimming="CharacterEllipsis" />
+							</StackPanel>
+						</DataTemplate>
+					</GridView.ItemTemplate>
+				</GridView>
+				</Grid>
+
+				<!--  One face full size: the whole photo with the face outlined, or the video playing,
+				      so it can be judged before it is named. Walks the faces the grid shows.  -->
+				<Grid
+					x:Name="ViewerPanel"
+					Grid.Row="1"
+					Padding="0,0,0,16"
+					ColumnSpacing="16"
+					RowSpacing="12"
+					Visibility="{x:Bind ViewModel.Viewer.Visibility, Mode=OneWay}">
+					<!--  The picture takes the full height; naming sits beside it, not under it  -->
+					<Grid.RowDefinitions>
+						<RowDefinition Height="Auto" />
+						<RowDefinition Height="*" />
+					</Grid.RowDefinitions>
+					<Grid.ColumnDefinitions>
+						<ColumnDefinition Width="*" />
+						<ColumnDefinition x:Name="ViewerAnswersColumn" Width="300" />
+					</Grid.ColumnDefinitions>
+
+					<Grid Grid.ColumnSpan="2" ColumnSpacing="16">
+						<Grid.ColumnDefinitions>
+							<ColumnDefinition Width="Auto" />
+							<ColumnDefinition Width="*" />
+							<ColumnDefinition Width="Auto" />
+						</Grid.ColumnDefinitions>
+						<Button
+							x:Name="ViewerBackButton"
+							AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_ViewerBackTip}"
+							Click="ViewerBack_Click"
+							ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_ViewerBackTip}">
+							<StackPanel Orientation="Horizontal" Spacing="8">
+								<FontIcon FontSize="14" Glyph="&#xE72B;" />
+								<TextBlock Text="{helpers:ResourceString Name=MediaMind_ViewerBack}" />
+							</StackPanel>
+						</Button>
+						<StackPanel Grid.Column="1" VerticalAlignment="Center">
+							<TextBlock
+								Style="{StaticResource BodyStrongTextBlockStyle}"
+								Text="{x:Bind ViewModel.Viewer.FileName, Mode=OneWay}"
+								TextTrimming="CharacterEllipsis"
+								ToolTipService.ToolTip="{x:Bind ViewModel.Viewer.FileName, Mode=OneWay}" />
+							<TextBlock
+								Opacity="0.7"
+								Style="{StaticResource CaptionTextBlockStyle}"
+								Text="{x:Bind ViewModel.Viewer.NowText, Mode=OneWay}"
+								TextTrimming="CharacterEllipsis" />
+						</StackPanel>
+						<StackPanel
+							Grid.Column="2"
+							Orientation="Horizontal"
+							Spacing="8">
+							<TextBlock
+								Margin="0,0,4,0"
+								VerticalAlignment="Center"
+								Opacity="0.7"
+								Style="{StaticResource CaptionTextBlockStyle}"
+								Text="{x:Bind ViewModel.Viewer.PositionText, Mode=OneWay}" />
+							<Button
+								x:Name="ViewerPreviousButton"
+								Width="40"
+								AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_ViewerPrevious}"
+								Click="ViewerPrevious_Click"
+								IsEnabled="{x:Bind ViewModel.Viewer.CanGoBack, Mode=OneWay}"
+								ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_ViewerPrevious}">
+								<FontIcon FontSize="14" Glyph="&#xE76B;" />
+							</Button>
+							<Button
+								x:Name="ViewerNextButton"
+								Width="40"
+								AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_ViewerNext}"
+								Click="ViewerNext_Click"
+								IsEnabled="{x:Bind ViewModel.Viewer.CanGoForward, Mode=OneWay}"
+								ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_ViewerNext}">
+								<FontIcon FontSize="14" Glyph="&#xE76C;" />
+							</Button>
+						</StackPanel>
+					</Grid>
+
+					<Grid
+						x:Name="ViewerFrame"
+						Grid.Row="1"
+						MinHeight="240"
+						Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+						BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+						BorderThickness="1"
+						CornerRadius="{StaticResource OverlayCornerRadius}">
+						<!--  Zoom and video controls as in Needs your check  -->
+						<local:MediaZoomView
+							x:Name="ViewerMedia"
+							Margin="8"
+							ImageName="{x:Bind ViewModel.Viewer.FileName, Mode=OneWay}"
+							ImageSource="{x:Bind ViewModel.Viewer.Preview, Mode=OneWay}"
+							ImageVisibility="{x:Bind ViewModel.Viewer.ImageVisibility, Mode=OneWay}"
+							PlayerVisibility="{x:Bind ViewModel.Viewer.PlayerVisibility, Mode=OneWay}" />
+						<ProgressRing
+							Width="32"
+							Height="32"
+							IsActive="{x:Bind ViewModel.Viewer.IsLoading, Mode=OneWay}" />
+						<TextBlock
+							MaxWidth="360"
+							HorizontalAlignment="Center"
+							VerticalAlignment="Center"
+							Text="{x:Bind ViewModel.Viewer.Error, Mode=OneWay}"
+							TextAlignment="Center"
+							TextWrapping="Wrap"
+							Visibility="{x:Bind ViewModel.Viewer.ErrorVisibility, Mode=OneWay}" />
+						<Border
+							Margin="16"
+							Padding="6"
+							HorizontalAlignment="Right"
+							VerticalAlignment="Top"
+							Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
+							BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+							BorderThickness="1"
+							CornerRadius="{StaticResource OverlayCornerRadius}">
+							<StackPanel Orientation="Horizontal" Spacing="6">
+								<Button
+									x:Name="ViewerFullScreenButton"
+									AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_ReviewFullScreen}"
+									Click="ViewerFullScreen_Click"
+									ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_ReviewFullScreen}">
+									<FontIcon
+										x:Name="ViewerFullScreenIcon"
+										FontSize="14"
+										Glyph="&#xE740;" />
+								</Button>
+								<Button
+									x:Name="ViewerOpenButton"
+									Click="ViewerOpen_Click"
+									Content="{helpers:ResourceString Name=MediaMind_ReviewOpenFile}" />
+							</StackPanel>
+						</Border>
+					</Grid>
+
+					<ScrollViewer
+						Grid.Row="1"
+						Grid.Column="1"
+						VerticalScrollBarVisibility="Auto">
+					<StackPanel
+						x:Name="ViewerAnswers"
+						Padding="0,0,4,0"
+						Spacing="8">
+						<TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="{helpers:ResourceString Name=MediaMind_ViewerWho}" />
+						<TextBlock
+							Style="{StaticResource CaptionTextBlockStyle}"
+							Text="{helpers:ResourceString Name=MediaMind_ReviewVideoFallback}"
+							TextWrapping="Wrap"
+							Visibility="{x:Bind ViewModel.Viewer.VideoNoteVisibility, Mode=OneWay}" />
+						<!--  Each person in their review colour, so a name looks the same here as in the queue  -->
+						<ItemsControl x:Name="ViewerPeople" ItemsSource="{x:Bind ViewModel.Viewer.People, Mode=OneWay}">
+							<ItemsControl.ItemsPanel>
+								<ItemsPanelTemplate>
+									<StackPanel Spacing="6" />
+								</ItemsPanelTemplate>
+							</ItemsControl.ItemsPanel>
+							<ItemsControl.ItemTemplate>
+								<DataTemplate x:DataType="vm:TeachViewerPerson">
+									<Button
+										HorizontalAlignment="Stretch"
+										HorizontalContentAlignment="Left"
+										AutomationProperties.Name="{x:Bind Name}"
+										Background="{x:Bind Background}"
+										BorderBrush="{x:Bind Border}"
+										Click="ViewerPerson_Click"
+										Content="{x:Bind Label}"
+										Tag="{x:Bind Name}" />
+								</DataTemplate>
+							</ItemsControl.ItemTemplate>
+						</ItemsControl>
+						<StackPanel Margin="0,4,0,0" Spacing="12">
+							<DropDownButton
+								x:Name="ViewerNewPersonButton"
+								HorizontalAlignment="Stretch"
+								HorizontalContentAlignment="Left"
+								Content="{helpers:ResourceString Name=MediaMind_ViewerSomeoneNew}">
+								<DropDownButton.Flyout>
+									<Flyout x:Name="ViewerNameFlyout" Placement="BottomEdgeAlignedLeft">
+										<AutoSuggestBox
+											x:Name="ViewerNameBox"
+											Width="280"
+											AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_TeachNamePlaceholder}"
+											PlaceholderText="{helpers:ResourceString Name=MediaMind_TeachNamePlaceholder}"
+											QueryIcon="Accept"
+											QuerySubmitted="ViewerNameBox_QuerySubmitted" />
+									</Flyout>
+								</DropDownButton.Flyout>
+							</DropDownButton>
+							<TextBlock
+								Opacity="0.7"
+								Style="{StaticResource CaptionTextBlockStyle}"
+								Text="{helpers:ResourceString Name=MediaMind_ViewerKeysHint}"
+								TextWrapping="Wrap" />
+						</StackPanel>
+					</StackPanel>
+					</ScrollViewer>
+				</Grid>
+
+			<!--  Group pictures: two or more named people in one file, which can only go one place.
+			     One at a time like Needs your check: the list, the picture itself (full height), the choices beside it.  -->
+			<Grid
+				x:Name="GroupsPanel"
+				Grid.Row="1"
+				ColumnSpacing="16"
+				Visibility="{x:Bind ViewModel.GroupsVisibility, Mode=OneWay}">
+				<Grid.ColumnDefinitions>
+					<ColumnDefinition x:Name="GroupListColumn" Width="300" />
+					<ColumnDefinition Width="*" />
+				</Grid.ColumnDefinitions>
+
+				<Grid RowSpacing="8">
+					<Grid.RowDefinitions>
+						<RowDefinition Height="Auto" />
+						<RowDefinition Height="*" />
+					</Grid.RowDefinitions>
+					<TextBlock
+						x:Name="GroupsIntroText"
+						Margin="12,4,0,0"
+						Opacity="0.7"
+						Style="{StaticResource CaptionTextBlockStyle}"
+						Text="{helpers:ResourceString Name=MediaMind_TeachGroupsIntro}"
+						TextWrapping="Wrap" />
+					<ListView
+						x:Name="GroupList"
+						Grid.Row="1"
+						Padding="0,0,0,12"
+						AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_TeachGroupsTab}"
+						ContainerContentChanging="GroupList_ContainerContentChanging"
+						ItemsSource="{x:Bind ViewModel.Groups, Mode=OneWay}"
+						SelectedItem="{x:Bind ViewModel.CurrentGroup, Mode=TwoWay}"
+						SelectionMode="Single">
+						<ListView.ItemTemplate>
+							<DataTemplate x:DataType="vm:TeachGroupItem">
+								<Grid Padding="0,6" ColumnSpacing="12">
+									<Grid.ColumnDefinitions>
+										<ColumnDefinition Width="64" />
+										<ColumnDefinition Width="*" />
+									</Grid.ColumnDefinitions>
+									<Grid
+										Width="64"
+										Height="64"
+										Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+										CornerRadius="{StaticResource ControlCornerRadius}">
+										<Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="UniformToFill" />
+									</Grid>
+									<StackPanel
+										Grid.Column="1"
+										VerticalAlignment="Center"
+										Spacing="2">
+										<TextBlock
+											MaxLines="1"
+											Text="{x:Bind FileName}"
+											TextTrimming="CharacterEllipsis"
+											ToolTipService.ToolTip="{x:Bind Question.AbsPath}" />
+										<TextBlock
+											MaxLines="2"
+											Opacity="0.7"
+											Style="{StaticResource CaptionTextBlockStyle}"
+											Text="{x:Bind PeopleText}"
+											TextTrimming="CharacterEllipsis"
+											TextWrapping="Wrap" />
+									</StackPanel>
+								</Grid>
+							</DataTemplate>
+						</ListView.ItemTemplate>
+					</ListView>
+				</Grid>
+
+				<Grid
+					Grid.Column="1"
+					Padding="0,0,0,12"
+					ColumnSpacing="16"
+					Visibility="{x:Bind ViewModel.GroupAnswerVisibility, Mode=OneWay}">
+					<Grid.ColumnDefinitions>
+						<ColumnDefinition Width="*" />
+						<ColumnDefinition x:Name="GroupAnswersColumn" Width="300" />
+					</Grid.ColumnDefinitions>
+
+					<!--  The whole picture, full height: zoom, and videos play with their controls, as in Needs your check  -->
+					<Grid Background="{ThemeResource SubtleFillColorSecondaryBrush}" CornerRadius="{StaticResource OverlayCornerRadius}">
+						<local:MediaZoomView
+							x:Name="GroupMedia"
+							Margin="8"
+							ImageName="{x:Bind ViewModel.GroupFileName, Mode=OneWay}"
+							ImageSource="{x:Bind ViewModel.GroupPreview, Mode=OneWay}"
+							ImageVisibility="{x:Bind ViewModel.GroupImageVisibility, Mode=OneWay}"
+							PlayerVisibility="{x:Bind ViewModel.GroupPlayerVisibility, Mode=OneWay}" />
+						<ProgressRing
+							Width="32"
+							Height="32"
+							IsActive="{x:Bind ViewModel.GroupPreviewLoading, Mode=OneWay}" />
+						<Border
+							Margin="16"
+							Padding="6"
+							HorizontalAlignment="Right"
+							VerticalAlignment="Top"
+							Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
+							BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+							BorderThickness="1"
+							CornerRadius="{StaticResource OverlayCornerRadius}">
+							<StackPanel Orientation="Horizontal" Spacing="6">
+								<Button
+									x:Name="GroupFullScreenButton"
+									AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_ReviewFullScreen}"
+									Click="GroupFullScreen_Click"
+									ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_ReviewFullScreen}">
+									<FontIcon
+										x:Name="GroupFullScreenIcon"
+										FontSize="14"
+										Glyph="&#xE740;" />
+								</Button>
+								<Button Click="GroupOpen_Click" Content="{helpers:ResourceString Name=MediaMind_ReviewOpenFile}" />
+							</StackPanel>
+						</Border>
+					</Grid>
+
+					<!--  Where it goes, beside the picture: one person's folder, a group folder (already there or new), or here  -->
+					<ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+						<StackPanel Padding="0,0,4,0" Spacing="8">
+							<TextBlock
+								Style="{StaticResource BodyStrongTextBlockStyle}"
+								Text="{x:Bind ViewModel.GroupFileName, Mode=OneWay}"
+								TextWrapping="Wrap" />
+							<TextBlock
+								Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+								Style="{StaticResource CaptionTextBlockStyle}"
+								Text="{x:Bind ViewModel.GroupPeopleText, Mode=OneWay}"
+								TextWrapping="Wrap" />
+							<TextBlock
+								Margin="0,8,0,0"
+								Opacity="0.8"
+								Style="{StaticResource CaptionTextBlockStyle}"
+								Text="{helpers:ResourceString Name=MediaMind_TeachGroupPutIn}" />
+							<ItemsControl ItemsSource="{x:Bind ViewModel.GroupFolders, Mode=OneWay}">
+								<ItemsControl.ItemsPanel>
+									<ItemsPanelTemplate>
+										<StackPanel Spacing="8" />
+									</ItemsPanelTemplate>
+								</ItemsControl.ItemsPanel>
+								<ItemsControl.ItemTemplate>
+									<DataTemplate x:DataType="services:GroupFolderOption">
+										<Button
+											HorizontalAlignment="Stretch"
+											HorizontalContentAlignment="Left"
+											AutomationProperties.Name="{x:Bind Name}"
+											Click="GroupFolder_Click"
+											Tag="{x:Bind Name}"
+											ToolTipService.ToolTip="{x:Bind Path}">
+											<StackPanel Orientation="Horizontal" Spacing="10">
+												<FontIcon FontSize="14" Glyph="&#xE8B7;" />
+												<TextBlock Text="{x:Bind Name}" TextTrimming="CharacterEllipsis" />
+											</StackPanel>
+										</Button>
+									</DataTemplate>
+								</ItemsControl.ItemTemplate>
+							</ItemsControl>
+							<DropDownButton
+								x:Name="GroupFolderButton"
+								HorizontalAlignment="Stretch"
+								HorizontalContentAlignment="Left"
+								AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_TeachGroupFolder}">
+								<StackPanel Orientation="Horizontal" Spacing="10">
+									<FontIcon FontSize="14" Glyph="&#xE902;" />
+									<TextBlock Text="{helpers:ResourceString Name=MediaMind_TeachGroupFolder}" />
+								</StackPanel>
+								<DropDownButton.Flyout>
+									<Flyout
+										x:Name="GroupFolderFlyout"
+										Opened="GroupFolderFlyout_Opened"
+										Placement="LeftEdgeAlignedTop">
+										<StackPanel Width="340" Spacing="8">
+											<TextBlock
+												Opacity="0.8"
+												Style="{StaticResource CaptionTextBlockStyle}"
+												Text="{x:Bind ViewModel.GroupNewFolderHint, Mode=OneWay}"
+												TextWrapping="Wrap" />
+											<TextBox
+												x:Name="GroupFolderBox"
+												AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_TeachGroupFolderSearch}"
+												KeyDown="GroupFolderBox_KeyDown"
+												PlaceholderText="{helpers:ResourceString Name=MediaMind_TeachGroupFolderSearch}"
+												Text="{x:Bind ViewModel.GroupFolderQuery, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+											<ListView
+												x:Name="GroupExistingList"
+												MaxHeight="260"
+												AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_TeachGroupFolder}"
+												IsItemClickEnabled="True"
+												ItemClick="GroupExistingFolder_ItemClick"
+												ItemsSource="{x:Bind ViewModel.GroupFolderMatches}"
+												SelectionMode="None">
+												<ListView.ItemTemplate>
+													<DataTemplate x:DataType="vm:GroupExistingFolder">
+														<StackPanel
+															Padding="0,4"
+															AutomationProperties.Name="{x:Bind Display}"
+															Orientation="Horizontal"
+															Spacing="10"
+															ToolTipService.ToolTip="{x:Bind Path}">
+															<FontIcon
+																FontSize="14"
+																Glyph="&#xE8B7;"
+																Opacity="0.8" />
+															<TextBlock
+																MaxWidth="260"
+																Text="{x:Bind Display}"
+																TextTrimming="CharacterEllipsis" />
+														</StackPanel>
+													</DataTemplate>
+												</ListView.ItemTemplate>
+											</ListView>
+											<TextBlock
+												Opacity="0.7"
+												Style="{StaticResource CaptionTextBlockStyle}"
+												Text="{helpers:ResourceString Name=MediaMind_TeachGroupNoFolders}"
+												TextWrapping="Wrap"
+												Visibility="{x:Bind ViewModel.GroupNoFoldersVisibility, Mode=OneWay}" />
+											<Button
+												HorizontalAlignment="Right"
+												Click="GroupCreate_Click"
+												Content="{x:Bind ViewModel.GroupCreateText, Mode=OneWay}"
+												IsEnabled="{x:Bind ViewModel.CanCreateGroupFolder, Mode=OneWay}"
+												Style="{ThemeResource AccentButtonStyle}" />
+										</StackPanel>
+									</Flyout>
+								</DropDownButton.Flyout>
+							</DropDownButton>
+							<Button
+								HorizontalAlignment="Stretch"
+								HorizontalContentAlignment="Left"
+								AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_TeachGroupStay}"
+								Click="GroupStay_Click">
+								<StackPanel Orientation="Horizontal" Spacing="10">
+									<FontIcon FontSize="14" Glyph="&#xE8BB;" />
+									<TextBlock Text="{helpers:ResourceString Name=MediaMind_TeachGroupStay}" />
+								</StackPanel>
+							</Button>
+							<CheckBox Margin="0,4,0,0" IsChecked="{x:Bind ViewModel.GroupRemember, Mode=TwoWay}">
+								<TextBlock Text="{helpers:ResourceString Name=MediaMind_TeachGroupRemember}" TextWrapping="Wrap" />
+							</CheckBox>
+							<TextBlock
+								Margin="0,8,0,0"
+								Opacity="0.6"
+								Style="{StaticResource CaptionTextBlockStyle}"
+								Text="{helpers:ResourceString Name=MediaMind_TeachGroupKeysHint}"
+								TextWrapping="Wrap" />
+						</StackPanel>
+					</ScrollViewer>
+				</Grid>
+			</Grid>
+
+			<!--  No faces found: the pictures and videos in which the scan found no face, one at a time:
+			     the list, the file itself (full height), and what to do with it beside it  -->
+			<Grid
+				x:Name="NoFacesPanel"
+				Grid.Row="1"
+				ColumnSpacing="16"
+				Visibility="{x:Bind ViewModel.NoFacesVisibility, Mode=OneWay}">
+				<Grid.ColumnDefinitions>
+					<ColumnDefinition x:Name="NoFaceListColumn" Width="300" />
+					<ColumnDefinition Width="*" />
+				</Grid.ColumnDefinitions>
+
+				<Grid RowSpacing="8">
+					<Grid.RowDefinitions>
+						<RowDefinition Height="Auto" />
+						<RowDefinition Height="*" />
+					</Grid.RowDefinitions>
+					<TextBlock
+						x:Name="NoFacesIntroText"
+						Margin="12,4,0,0"
+						Opacity="0.7"
+						Style="{StaticResource CaptionTextBlockStyle}"
+						Text="{helpers:ResourceString Name=MediaMind_NoFacesIntro}"
+						TextWrapping="Wrap" />
+					<ListView
+						x:Name="NoFaceList"
+						Grid.Row="1"
+						Padding="0,0,0,12"
+						AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_NoFacesTab}"
+						ContainerContentChanging="NoFaceList_ContainerContentChanging"
+						ItemsSource="{x:Bind ViewModel.NoFaceFiles, Mode=OneWay}"
+						SelectedItem="{x:Bind ViewModel.CurrentNoFace, Mode=TwoWay}"
+						SelectionMode="Single">
+						<ListView.ItemTemplate>
+							<DataTemplate x:DataType="vm:TeachNoFaceItem">
+								<Grid Padding="0,6" ColumnSpacing="12">
+									<Grid.ColumnDefinitions>
+										<ColumnDefinition Width="64" />
+										<ColumnDefinition Width="*" />
+									</Grid.ColumnDefinitions>
+									<Grid
+										Width="64"
+										Height="64"
+										Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+										CornerRadius="{StaticResource ControlCornerRadius}">
+										<Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="UniformToFill" />
+									</Grid>
+									<TextBlock
+										Grid.Column="1"
+										VerticalAlignment="Center"
+										MaxLines="2"
+										Text="{x:Bind FileName}"
+										TextTrimming="CharacterEllipsis"
+										TextWrapping="Wrap"
+										ToolTipService.ToolTip="{x:Bind File.AbsPath}" />
+								</Grid>
+							</DataTemplate>
+						</ListView.ItemTemplate>
+					</ListView>
+				</Grid>
+
+				<Grid
+					Grid.Column="1"
+					Padding="0,0,0,12"
+					ColumnSpacing="16"
+					Visibility="{x:Bind ViewModel.NoFaceAnswerVisibility, Mode=OneWay}">
+					<Grid.ColumnDefinitions>
+						<ColumnDefinition Width="*" />
+						<ColumnDefinition x:Name="NoFaceAnswersColumn" Width="300" />
+					</Grid.ColumnDefinitions>
+
+					<Grid Background="{ThemeResource SubtleFillColorSecondaryBrush}" CornerRadius="{StaticResource OverlayCornerRadius}">
+						<local:MediaZoomView
+							x:Name="NoFaceMedia"
+							Margin="8"
+							ImageName="{x:Bind ViewModel.NoFaceFileName, Mode=OneWay}"
+							ImageSource="{x:Bind ViewModel.NoFacePreview, Mode=OneWay}"
+							ImageVisibility="{x:Bind ViewModel.NoFaceImageVisibility, Mode=OneWay}"
+							PlayerVisibility="{x:Bind ViewModel.NoFacePlayerVisibility, Mode=OneWay}" />
+						<ProgressRing
+							Width="32"
+							Height="32"
+							IsActive="{x:Bind ViewModel.NoFacePreviewLoading, Mode=OneWay}" />
+						<Border
+							Margin="16"
+							Padding="6"
+							HorizontalAlignment="Right"
+							VerticalAlignment="Top"
+							Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
+							BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+							BorderThickness="1"
+							CornerRadius="{StaticResource OverlayCornerRadius}">
+							<StackPanel Orientation="Horizontal" Spacing="6">
+								<Button
+									x:Name="NoFaceFullScreenButton"
+									AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_ReviewFullScreen}"
+									Click="NoFaceFullScreen_Click"
+									ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_ReviewFullScreen}">
+									<FontIcon
+										x:Name="NoFaceFullScreenIcon"
+										FontSize="14"
+										Glyph="&#xE740;" />
+								</Button>
+								<Button Click="NoFaceOpen_Click" Content="{helpers:ResourceString Name=MediaMind_ReviewOpenFile}" />
+							</StackPanel>
+						</Border>
+					</Grid>
+
+					<!--  What to do with it: leave it (just go on), move it into a folder, or delete it  -->
+					<ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+						<StackPanel Padding="0,0,4,0" Spacing="8">
+							<TextBlock
+								Style="{StaticResource BodyStrongTextBlockStyle}"
+								Text="{x:Bind ViewModel.NoFaceFileName, Mode=OneWay}"
+								TextWrapping="Wrap" />
+							<TextBlock
+								Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+								Style="{StaticResource CaptionTextBlockStyle}"
+								Text="{x:Bind ViewModel.NoFaceDetail, Mode=OneWay}"
+								TextWrapping="Wrap" />
+							<Button
+								x:Name="NoFaceMoveButton"
+								Margin="0,8,0,0"
+								HorizontalAlignment="Stretch"
+								HorizontalContentAlignment="Left"
+								AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_NoFaceMove}"
+								Click="NoFaceMove_Click">
+								<StackPanel Orientation="Horizontal" Spacing="10">
+									<FontIcon FontSize="14" Glyph="&#xE8DE;" />
+									<TextBlock Text="{helpers:ResourceString Name=MediaMind_NoFaceMove}" />
+								</StackPanel>
+							</Button>
+							<Button
+								x:Name="NoFaceKeepButton"
+								HorizontalAlignment="Stretch"
+								HorizontalContentAlignment="Left"
+								AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_NoFaceKeep}"
+								Click="NoFaceKeep_Click">
+								<StackPanel Orientation="Horizontal" Spacing="10">
+									<FontIcon FontSize="14" Glyph="&#xE76C;" />
+									<TextBlock Text="{helpers:ResourceString Name=MediaMind_NoFaceKeep}" />
+								</StackPanel>
+							</Button>
+							<Button
+								x:Name="NoFaceDeleteButton"
+								HorizontalAlignment="Stretch"
+								HorizontalContentAlignment="Left"
+								AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_NoFaceDelete}"
+								Click="NoFaceDelete_Click">
+								<StackPanel Orientation="Horizontal" Spacing="10">
+									<FontIcon FontSize="14" Glyph="&#xE74D;" />
+									<TextBlock Text="{helpers:ResourceString Name=MediaMind_NoFaceDelete}" />
+								</StackPanel>
+							</Button>
+							<TextBlock
+								Margin="0,8,0,0"
+								Opacity="0.6"
+								Style="{StaticResource CaptionTextBlockStyle}"
+								Text="{helpers:ResourceString Name=MediaMind_NoFaceKeysHint}"
+								TextWrapping="Wrap" />
+						</StackPanel>
+					</ScrollViewer>
+				</Grid>
+			</Grid>
+
+			<!--  Needs your check: the queue (left) and the whole original picture (right)  -->
+			<Grid
+				x:Name="ReviewPanel"
+				Grid.Row="1"
+				Padding="12,8,12,0"
+				ColumnSpacing="16"
+				CornerRadius="{StaticResource OverlayCornerRadius}"
+				Visibility="{x:Bind ViewModel.ReviewVisibility, Mode=OneWay}">
+				<Grid.ColumnDefinitions>
+					<ColumnDefinition x:Name="QueueColumn" Width="300" />
+					<ColumnDefinition x:Name="PreviewColumn" Width="*" />
+				</Grid.ColumnDefinitions>
+
+				<Grid RowSpacing="8">
+					<Grid.RowDefinitions>
+						<RowDefinition Height="Auto" />
+						<RowDefinition Height="*" />
+					</Grid.RowDefinitions>
+					<TextBlock
+						Margin="12,4,0,0"
+						Opacity="0.7"
+						Style="{StaticResource CaptionTextBlockStyle}"
+						Text="{x:Bind ViewModel.Review.CountText, Mode=OneWay}" />
+					<ListView
+						x:Name="ReviewList"
+						Grid.Row="1"
+						Padding="0,0,0,12"
+						AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_ReviewTab}"
+						ContainerContentChanging="ReviewList_ContainerContentChanging"
+						ItemsSource="{x:Bind ViewModel.Review.Items, Mode=OneWay}"
+						SelectionChanged="ReviewList_SelectionChanged"
+						SelectionMode="Extended">
+						<ListView.ItemTemplate>
+							<DataTemplate x:DataType="vm:TeachReviewItemViewModel">
+								<Grid Padding="0,6" ColumnSpacing="10">
+									<Grid.ColumnDefinitions>
+										<ColumnDefinition Width="4" />
+										<ColumnDefinition Width="56" />
+										<ColumnDefinition Width="*" />
+									</Grid.ColumnDefinitions>
+									<Border
+										Margin="0,6"
+										Background="{x:Bind Tint}"
+										CornerRadius="2" />
+									<Grid
+										Grid.Column="1"
+										Width="56"
+										Height="56"
+										Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+										CornerRadius="{StaticResource ControlCornerRadius}">
+										<FontIcon
+											FontSize="18"
+											Glyph="&#xE77B;"
+											Opacity="0.35" />
+										<Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="UniformToFill" />
+										<Border
+											Margin="3"
+											Padding="3,1"
+											HorizontalAlignment="Left"
+											VerticalAlignment="Bottom"
+											Background="{ThemeResource SmokeFillColorDefaultBrush}"
+											CornerRadius="3"
+											Visibility="{x:Bind VideoBadgeVisibility}">
+											<FontIcon
+												FontSize="10"
+												Foreground="White"
+												Glyph="&#xE714;" />
+										</Border>
+									</Grid>
+									<StackPanel Grid.Column="2" VerticalAlignment="Center">
+										<TextBlock Text="{x:Bind Question}" TextTrimming="CharacterEllipsis" />
+										<TextBlock
+											Opacity="0.7"
+											Style="{StaticResource CaptionTextBlockStyle}"
+											Text="{x:Bind FileName}"
+											TextTrimming="CharacterEllipsis" />
+									</StackPanel>
+								</Grid>
+							</DataTemplate>
+						</ListView.ItemTemplate>
+					</ListView>
+				</Grid>
+
+				<!--  The picture gets the full height; the question, the candidate's examples and the
+				      answers sit in a column beside it (it scrolls in a short window)  -->
+				<Grid
+					Grid.Column="1"
+					Padding="0,0,0,16"
+					ColumnSpacing="16"
+					Visibility="{x:Bind ViewModel.Review.PreviewVisibility, Mode=OneWay}">
+					<Grid.ColumnDefinitions>
+						<ColumnDefinition Width="*" />
+						<ColumnDefinition x:Name="ReviewAnswersColumn" Width="300" />
+					</Grid.ColumnDefinitions>
+
+					<Grid
+						x:Name="PreviewFrame"
+						BorderThickness="1"
+						Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+						CornerRadius="{StaticResource OverlayCornerRadius}">
+						<local:MediaZoomView
+							x:Name="PreviewMedia"
+							Margin="8"
+							ImageName="{x:Bind ViewModel.Review.DetailText, Mode=OneWay}"
+							ImageSource="{x:Bind ViewModel.Review.Preview, Mode=OneWay}"
+							ImageVisibility="{x:Bind ViewModel.Review.ImageVisibility, Mode=OneWay}"
+							PlayerVisibility="{x:Bind ViewModel.Review.PlayerVisibility, Mode=OneWay}" />
+						<ProgressRing
+							Width="32"
+							Height="32"
+							IsActive="{x:Bind ViewModel.Review.IsPreviewLoading, Mode=OneWay}" />
+						<!--  Actions on the file itself: top-right of the picture, apart from the answers  -->
+						<Border
+							Margin="16"
+							Padding="6"
+							HorizontalAlignment="Right"
+							VerticalAlignment="Top"
+							Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
+							BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+							BorderThickness="1"
+							CornerRadius="{StaticResource OverlayCornerRadius}">
+								<StackPanel Orientation="Horizontal" Spacing="6">
+									<!--  This file has copies: open that set in Duplicates  -->
+									<Button
+										x:Name="ReviewCopiesButton"
+										Click="ReviewCopies_Click"
+										Visibility="Collapsed">
+										<StackPanel Orientation="Horizontal" Spacing="8">
+											<FontIcon FontSize="14" Glyph="&#xE8C8;" />
+											<TextBlock x:Name="ReviewCopiesText" />
+										</StackPanel>
+									</Button>
+									<Button
+										x:Name="ReviewFullScreenButton"
+										AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_ReviewFullScreen}"
+										Click="ReviewFullScreen_Click"
+										ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_ReviewFullScreen}">
+										<FontIcon
+											x:Name="FullScreenIcon"
+											FontSize="14"
+											Glyph="&#xE740;" />
+									</Button>
+									<Button
+										x:Name="ReviewOpenButton"
+										Click="ReviewOpen_Click"
+										Content="{helpers:ResourceString Name=MediaMind_ReviewOpenFile}" />
+									<!--  Delete: same glassy button, soft red tint; always confirms first  -->
+									<Button
+										x:Name="ReviewDeleteButton"
+										AutomationProperties.Name="{x:Bind ViewModel.Review.DeleteText, Mode=OneWay}"
+										Click="ReviewDelete_Click"
+										IsEnabled="{x:Bind ViewModel.Review.CanDecide, Mode=OneWay}"
+										ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_ReviewDeleteTip}">
+										<Button.Resources>
+											<ResourceDictionary>
+												<ResourceDictionary.ThemeDictionaries>
+													<ResourceDictionary x:Key="Default">
+														<SolidColorBrush x:Key="ButtonBackground" Color="#2EF85149" />
+														<SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#47F85149" />
+														<SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#24F85149" />
+														<SolidColorBrush x:Key="ButtonBorderBrush" Color="#66F85149" />
+														<SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="#80F85149" />
+														<SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="#55F85149" />
+														<SolidColorBrush x:Key="ButtonForeground" Color="#FF9492" />
+														<SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="#FFB1AF" />
+														<SolidColorBrush x:Key="ButtonForegroundPressed" Color="#FF9492" />
+													</ResourceDictionary>
+													<ResourceDictionary x:Key="Light">
+														<SolidColorBrush x:Key="ButtonBackground" Color="#1FCF222E" />
+														<SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#33CF222E" />
+														<SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#14CF222E" />
+														<SolidColorBrush x:Key="ButtonBorderBrush" Color="#55CF222E" />
+														<SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="#70CF222E" />
+														<SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="#44CF222E" />
+														<SolidColorBrush x:Key="ButtonForeground" Color="#A40E26" />
+														<SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="#82071E" />
+														<SolidColorBrush x:Key="ButtonForegroundPressed" Color="#A40E26" />
+													</ResourceDictionary>
+												</ResourceDictionary.ThemeDictionaries>
+											</ResourceDictionary>
+										</Button.Resources>
+										<StackPanel Orientation="Horizontal" Spacing="8">
+											<FontIcon FontSize="14" Glyph="&#xE74D;" />
+											<TextBlock Text="{x:Bind ViewModel.Review.DeleteText, Mode=OneWay}" />
+										</StackPanel>
+									</Button>
+								</StackPanel>
+						</Border>
+						<TextBlock
+							MaxWidth="360"
+							HorizontalAlignment="Center"
+							VerticalAlignment="Center"
+							Text="{x:Bind ViewModel.Review.PreviewError, Mode=OneWay}"
+							TextAlignment="Center"
+							TextWrapping="Wrap"
+							Visibility="{x:Bind ViewModel.Review.PreviewErrorVisibility, Mode=OneWay}" />
+					</Grid>
+
+					<ScrollViewer
+						Grid.Column="1"
+						HorizontalScrollMode="Disabled"
+						VerticalScrollBarVisibility="Auto">
+					<StackPanel Padding="0,0,4,0" Spacing="16">
+					<StackPanel x:Name="QuestionGrid" Spacing="12">
+						<StackPanel Spacing="2">
+							<TextBlock
+								x:Name="ReviewQuestion"
+								Style="{StaticResource SubtitleTextBlockStyle}"
+								Text="{x:Bind ViewModel.Review.QuestionText, Mode=OneWay}"
+								TextWrapping="Wrap" />
+							<TextBlock
+								Opacity="0.7"
+								Style="{StaticResource CaptionTextBlockStyle}"
+								Text="{x:Bind ViewModel.Review.DetailText, Mode=OneWay}"
+								TextWrapping="Wrap" />
+							<TextBlock
+								x:Name="VideoNoteText"
+								Margin="0,4,0,0"
+								Style="{StaticResource CaptionTextBlockStyle}"
+								Text="{x:Bind ViewModel.Review.VideoNote, Mode=OneWay}"
+								TextWrapping="Wrap"
+								Visibility="{x:Bind ViewModel.Review.VideoNoteVisibility, Mode=OneWay}" />
+						</StackPanel>
+						<!--  What the candidate looks like: their named examples, to compare against  -->
+						<StackPanel x:Name="ExamplesPanel" Spacing="4">
+							<TextBlock
+								Opacity="0.7"
+								Style="{StaticResource CaptionTextBlockStyle}"
+								Text="{x:Bind ViewModel.Review.ExamplesHeader, Mode=OneWay}" />
+							<ItemsControl x:Name="ExampleStrip" ItemsSource="{x:Bind ViewModel.Review.CandidateExamples, Mode=OneWay}">
+								<ItemsControl.ItemsPanel>
+									<ItemsPanelTemplate>
+										<toolkit:WrapPanel HorizontalSpacing="6" VerticalSpacing="6" />
+									</ItemsPanelTemplate>
+								</ItemsControl.ItemsPanel>
+								<ItemsControl.ItemTemplate>
+									<DataTemplate x:DataType="vm:TeachFaceTileViewModel">
+										<Grid
+											Width="56"
+											Height="56"
+											Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+											CornerRadius="{StaticResource ControlCornerRadius}"
+											ToolTipService.ToolTip="{x:Bind FileName}">
+											<Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="UniformToFill" />
+										</Grid>
+									</DataTemplate>
+								</ItemsControl.ItemTemplate>
+							</ItemsControl>
+						</StackPanel>
+					</StackPanel>
+
+					<!--  The answers, one under another at the column's width  -->
+					<StackPanel x:Name="AnswersPanel" Spacing="8">
+						<StackPanel Spacing="8">
+								<!--  Yes: the glassy default button with a soft green tint  -->
+								<Button
+									x:Name="ReviewYesButton"
+									HorizontalAlignment="Stretch"
+									HorizontalContentAlignment="Left"
+									Click="ReviewYes_Click"
+									IsEnabled="{x:Bind ViewModel.Review.CanDecide, Mode=OneWay}">
+									<Button.Resources>
+										<ResourceDictionary>
+											<ResourceDictionary.ThemeDictionaries>
+												<ResourceDictionary x:Key="Default">
+													<SolidColorBrush x:Key="ButtonBackground" Color="#2E3FB950" />
+													<SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#473FB950" />
+													<SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#243FB950" />
+													<SolidColorBrush x:Key="ButtonBorderBrush" Color="#663FB950" />
+													<SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="#803FB950" />
+													<SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="#553FB950" />
+													<SolidColorBrush x:Key="ButtonForeground" Color="#8DDB8C" />
+													<SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="#A6E9A5" />
+													<SolidColorBrush x:Key="ButtonForegroundPressed" Color="#8DDB8C" />
+												</ResourceDictionary>
+												<ResourceDictionary x:Key="Light">
+													<SolidColorBrush x:Key="ButtonBackground" Color="#1F1A7F37" />
+													<SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#331A7F37" />
+													<SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#141A7F37" />
+													<SolidColorBrush x:Key="ButtonBorderBrush" Color="#551A7F37" />
+													<SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="#701A7F37" />
+													<SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="#441A7F37" />
+													<SolidColorBrush x:Key="ButtonForeground" Color="#116329" />
+													<SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="#0B4F20" />
+													<SolidColorBrush x:Key="ButtonForegroundPressed" Color="#116329" />
+												</ResourceDictionary>
+											</ResourceDictionary.ThemeDictionaries>
+										</ResourceDictionary>
+									</Button.Resources>
+									<StackPanel Orientation="Horizontal" Spacing="8">
+										<FontIcon FontSize="14" Glyph="&#xE73E;" />
+										<TextBlock Text="{x:Bind ViewModel.Review.YesText, Mode=OneWay}" />
+									</StackPanel>
+								</Button>
+								<Button
+									x:Name="ReviewNoButton"
+									HorizontalAlignment="Stretch"
+									HorizontalContentAlignment="Left"
+									Click="ReviewNo_Click"
+									IsEnabled="{x:Bind ViewModel.Review.CanDecide, Mode=OneWay}">
+									<StackPanel Orientation="Horizontal" Spacing="8">
+										<FontIcon FontSize="14" Glyph="&#xE711;" />
+										<TextBlock Text="{helpers:ResourceString Name=MediaMind_ReviewNo}" />
+									</StackPanel>
+								</Button>
+								<Button
+									x:Name="ReviewIgnoreButton"
+									HorizontalAlignment="Stretch"
+									HorizontalContentAlignment="Left"
+									Click="ReviewIgnore_Click"
+									IsEnabled="{x:Bind ViewModel.Review.CanDecide, Mode=OneWay}"
+									ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_ReviewIgnoreTip}">
+									<StackPanel Orientation="Horizontal" Spacing="8">
+										<FontIcon FontSize="14" Glyph="&#xED1A;" />
+										<TextBlock Text="{helpers:ResourceString Name=MediaMind_ReviewIgnore}" />
+									</StackPanel>
+								</Button>
+								<DropDownButton
+									x:Name="ReviewElseButton"
+									HorizontalAlignment="Stretch"
+									HorizontalContentAlignment="Left"
+									Content="{helpers:ResourceString Name=MediaMind_ReviewSomeoneElse}"
+									IsEnabled="{x:Bind ViewModel.Review.CanDecide, Mode=OneWay}">
+									<DropDownButton.Flyout>
+										<MenuFlyout
+											x:Name="ReviewElseMenu"
+											Opening="ReviewElseMenu_Opening"
+											Placement="TopEdgeAlignedLeft" />
+									</DropDownButton.Flyout>
+									<FlyoutBase.AttachedFlyout>
+										<Flyout x:Name="ReviewNameFlyout" Placement="TopEdgeAlignedLeft">
+											<AutoSuggestBox
+												x:Name="ReviewNameBox"
+												Width="280"
+												AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_TeachNamePlaceholder}"
+												PlaceholderText="{helpers:ResourceString Name=MediaMind_TeachNamePlaceholder}"
+												QueryIcon="Accept"
+												QuerySubmitted="ReviewNameBox_QuerySubmitted" />
+										</Flyout>
+									</FlyoutBase.AttachedFlyout>
+								</DropDownButton>
+								<Button
+									x:Name="ReviewSkipButton"
+									HorizontalAlignment="Stretch"
+									HorizontalContentAlignment="Left"
+									Click="ReviewSkip_Click"
+									Content="{helpers:ResourceString Name=MediaMind_ReviewSkip}" />
+						</StackPanel>
+						<TextBlock
+							Opacity="0.7"
+							Style="{StaticResource CaptionTextBlockStyle}"
+							Text="{helpers:ResourceString Name=MediaMind_ReviewKeysHint}"
+							TextWrapping="Wrap" />
+						<!--  Shown only after "Don't ask again" was ticked in the delete dialog  -->
+						<HyperlinkButton
+							x:Name="ReviewAskAgainLink"
+							Margin="-12,-6,0,0"
+							Click="ReviewAskAgain_Click"
+							Content="{helpers:ResourceString Name=MediaMind_ReviewAskAgain}"
+							FontSize="12"
+							Visibility="Collapsed" />
+						<TextBlock
+							Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+							Style="{StaticResource CaptionTextBlockStyle}"
+							Text="{x:Bind ViewModel.Review.ErrorText, Mode=OneWay}"
+							TextWrapping="Wrap"
+							Visibility="{x:Bind ViewModel.Review.ErrorVisibility, Mode=OneWay}" />
+					</StackPanel>
+					</StackPanel>
+					</ScrollViewer>
+				</Grid>
+
+				<StackPanel
+					Grid.Column="1"
+					MaxWidth="420"
+					Margin="0,64,0,0"
+					HorizontalAlignment="Center"
+					Spacing="8"
+					Visibility="{x:Bind ViewModel.Review.DoneVisibility, Mode=OneWay}">
+					<FontIcon
+						FontSize="28"
+						Glyph="&#xE73E;"
+						Opacity="0.6" />
+					<TextBlock
+						HorizontalAlignment="Center"
+						Text="{helpers:ResourceString Name=MediaMind_ReviewDone}"
+						TextAlignment="Center"
+						TextWrapping="Wrap" />
+				</StackPanel>
+			</Grid>
+			</Grid>
+		</Grid>
+
+		<!--  Selection bar: appears only while faces are selected  -->
+		<Border
+			x:Name="SelectionBar"
+			Grid.Row="3"
+			Padding="24,12"
+			Background="{ThemeResource LayerFillColorDefaultBrush}"
+			BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+			BorderThickness="0,1,0,0"
+			Visibility="{x:Bind ViewModel.SelectionBarVisibility, Mode=OneWay}">
+			<StackPanel Orientation="Horizontal" Spacing="12">
+				<TextBlock
+					MinWidth="96"
+					VerticalAlignment="Center"
+					FontWeight="SemiBold"
+					Text="{x:Bind ViewModel.SelectedText, Mode=OneWay}" />
+				<DropDownButton
+					x:Name="NameAsButton"
+					AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_TeachNameAs}"
+					Content="{helpers:ResourceString Name=MediaMind_TeachNameAs}"
+					IsEnabled="{x:Bind ViewModel.CanAct, Mode=OneWay}"
+					Style="{ThemeResource AccentButtonStyle}">
+					<DropDownButton.Flyout>
+						<Flyout x:Name="NameFlyout" Placement="TopEdgeAlignedLeft">
+							<StackPanel Width="280" Spacing="8">
+								<AutoSuggestBox
+									x:Name="NameBox"
+									AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_TeachNamePlaceholder}"
+									PlaceholderText="{helpers:ResourceString Name=MediaMind_TeachNamePlaceholder}"
+									QueryIcon="Accept"
+									QuerySubmitted="NameBox_QuerySubmitted"
+									TextChanged="NameBox_TextChanged" />
+								<TextBlock
+									Opacity="0.7"
+									Style="{StaticResource CaptionTextBlockStyle}"
+									Text="{helpers:ResourceString Name=MediaMind_TeachNameHint}"
+									TextWrapping="Wrap" />
+								<ListView
+									x:Name="NameList"
+									MaxHeight="240"
+									IsItemClickEnabled="True"
+									ItemClick="NameList_ItemClick"
+									ItemsSource="{x:Bind ViewModel.PersonNames, Mode=OneWay}"
+									SelectionMode="None" />
+							</StackPanel>
+						</Flyout>
+					</DropDownButton.Flyout>
+				</DropDownButton>
+				<Button
+					x:Name="ViewButton"
+					Click="ViewButton_Click"
+					IsEnabled="{x:Bind ViewModel.CanAct, Mode=OneWay}">
+					<StackPanel Orientation="Horizontal" Spacing="8">
+						<FontIcon FontSize="14" Glyph="&#xE740;" />
+						<TextBlock Text="{helpers:ResourceString Name=MediaMind_TeachView}" />
+					</StackPanel>
+				</Button>
+				<Button
+					x:Name="RemoveExamplesButton"
+					Click="RemoveExamplesButton_Click"
+					Content="{helpers:ResourceString Name=MediaMind_TeachRemoveExamples}"
+					IsEnabled="{x:Bind ViewModel.CanAct, Mode=OneWay}"
+					Visibility="{x:Bind ViewModel.RemoveExamplesVisibility, Mode=OneWay}" />
+				<Button
+					x:Name="ClearSelectionButton"
+					Click="ClearSelectionButton_Click"
+					Content="{helpers:ResourceString Name=MediaMind_TeachClearSelection}" />
+			</StackPanel>
+		</Border>
+	</Grid>
+</Page>

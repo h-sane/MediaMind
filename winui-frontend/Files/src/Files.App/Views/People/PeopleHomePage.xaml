@@ -1,0 +1,596 @@
+<!--  Copyright (c) Files Community. Licensed under the MIT License.  -->
+<Page
+	x:Class="Files.App.Views.People.PeopleHomePage"
+	xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+	xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+	xmlns:converters="using:Files.App.Converters"
+	xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+	xmlns:helpers="using:Files.App.Helpers"
+	xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+	xmlns:vm="using:Files.App.ViewModels.People"
+	DataContext="{x:Bind ViewModel, Mode=OneWay}"
+	mc:Ignorable="d">
+
+	<Page.Resources>
+		<ResourceDictionary>
+			<converters:NullToVisibilityCollapsedConverter x:Key="NullToVisibilityCollapsedConverter" />
+			<converters:PopulatedListToVisibilityConverter x:Key="PopulatedListToVisibilityConverter" />
+
+			<!--  One person. Circle-first: the face is the tile; everything else stays quiet.  -->
+			<DataTemplate x:Key="PersonTileTemplate" x:DataType="vm:PeopleTileViewModel">
+				<Border
+					Width="168"
+					Height="264"
+					Padding="12"
+					Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+					CanDrag="True"
+					ContextRequested="PersonTile_ContextRequested"
+					CornerRadius="{StaticResource ControlCornerRadius}"
+					DoubleTapped="PersonTile_DoubleTapped"
+					DragStarting="PersonTile_DragStarting"
+					PointerEntered="Tile_PointerEntered"
+					PointerExited="Tile_PointerExited"
+					Tag="{x:Bind}">
+					<Grid>
+						<StackPanel Spacing="6">
+							<PersonPicture
+								Width="96"
+								Height="96"
+								HorizontalAlignment="Center"
+								DisplayName="{x:Bind Text, Mode=OneWay}"
+								ProfilePicture="{x:Bind Thumbnail, Mode=OneWay}" />
+							<TextBlock
+								HorizontalAlignment="Center"
+								FontWeight="SemiBold"
+								Text="{x:Bind Text, Mode=OneWay}"
+								TextAlignment="Center"
+								TextTrimming="CharacterEllipsis"
+								Visibility="{x:Bind NameVisibility, Mode=OneWay}" />
+
+							<!--  A real, clustered-but-unnamed person is nameable right here — Enter, clicking away, or the check commits it.  -->
+							<Grid Visibility="{x:Bind NameBoxVisibility, Mode=OneWay}">
+								<Grid.ColumnDefinitions>
+									<ColumnDefinition Width="*" />
+									<ColumnDefinition Width="Auto" />
+								</Grid.ColumnDefinitions>
+								<TextBox
+									Grid.Column="0"
+									KeyDown="PersonNameTextBox_KeyDown"
+									LostFocus="PersonNameTextBox_LostFocus"
+									PlaceholderText="{helpers:ResourceString Name=MediaMind_PeopleNamePlaceholder}"
+									Tag="{x:Bind}" />
+								<Button
+									Grid.Column="1"
+									Width="32"
+									Height="32"
+									Margin="4,0,0,0"
+									Padding="0"
+									VerticalAlignment="Center"
+									Click="PersonNameConfirmButton_Click"
+									Tag="{x:Bind}"
+									ToolTipService.ToolTip="{helpers:ResourceString Name=Confirm}">
+									<FontIcon FontSize="14" Glyph="&#xE73E;" />
+								</Button>
+							</Grid>
+							<TextBlock
+								Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+								Style="{StaticResource CaptionTextBlockStyle}"
+								Text="{x:Bind NameError, Mode=OneWay}"
+								TextAlignment="Center"
+								TextWrapping="Wrap"
+								Visibility="{x:Bind NameErrorVisibility, Mode=OneWay}" />
+
+							<TextBlock
+								HorizontalAlignment="Center"
+								Opacity="0.7"
+								Style="{StaticResource CaptionTextBlockStyle}"
+								Text="{x:Bind MediaCount, Mode=OneWay}" />
+
+							<!--  Possible duplicate: same face scanned in another folder. Opens the compare dialog.  -->
+							<HyperlinkButton
+								HorizontalAlignment="Center"
+								Padding="4,0"
+								Click="DuplicateBadge_Click"
+								Content="{x:Bind DuplicateLabel}"
+								Tag="{x:Bind}"
+								Visibility="{x:Bind DuplicateVisibility}" />
+						</StackPanel>
+
+						<Button
+							Width="28"
+							Height="28"
+							HorizontalAlignment="Right"
+							VerticalAlignment="Top"
+							Padding="0"
+							Click="PinButton_Click"
+							Tag="{x:Bind}"
+							ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_PeoplePin}"
+							Visibility="{x:Bind PinButtonVisibility, Mode=OneWay}">
+							<FontIcon FontSize="13" Glyph="{x:Bind PinGlyph, Mode=OneWay}" />
+						</Button>
+
+						<!--  Card actions, pinned to the card's bottom edge: merge into the same person elsewhere (left), remove from the view (right)  -->
+						<Grid
+							Padding="0,4,0,0"
+							VerticalAlignment="Bottom"
+							BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+							BorderThickness="0,1,0,0">
+							<Button
+								MinHeight="28"
+								Padding="8,2"
+								HorizontalAlignment="Left"
+								Background="Transparent"
+								BorderThickness="0"
+								Click="MergeButton_Click"
+								Content="{helpers:ResourceString Name=MediaMind_PeopleMerge}"
+								FontSize="12"
+								Tag="{x:Bind}"
+								ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_PeopleMergeTip}" />
+							<Button
+								MinHeight="28"
+								Padding="8,2"
+								HorizontalAlignment="Right"
+								Background="Transparent"
+								BorderThickness="0"
+								Click="RemoveButton_Click"
+								Content="{helpers:ResourceString Name=MediaMind_PeopleRemove}"
+								FontSize="12"
+								Tag="{x:Bind}"
+								ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_PeopleRemoveTip}" />
+						</Grid>
+					</Grid>
+				</Border>
+			</DataTemplate>
+
+			<!--  One folder or collection: face-stack preview, "+N" for the rest. A collection is also a drop target.  -->
+			<DataTemplate x:Key="FolderCardTemplate" x:DataType="vm:FolderCardViewModel">
+				<Border
+					Width="168"
+					Padding="12"
+					AllowDrop="True"
+					Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+					CanDrag="True"
+					ContextRequested="Card_ContextRequested"
+					CornerRadius="{StaticResource ControlCornerRadius}"
+					DoubleTapped="Card_DoubleTapped"
+					DragOver="Collection_DragOver"
+					DragStarting="Card_DragStarting"
+					Drop="Collection_Drop"
+					Opacity="{x:Bind CardOpacity}"
+					PointerEntered="Tile_PointerEntered"
+					PointerExited="Tile_PointerExited"
+					Tag="{x:Bind}">
+					<Grid>
+						<StackPanel Spacing="8">
+							<Grid
+								Width="72"
+								Height="72"
+								HorizontalAlignment="Center">
+								<PersonPicture
+									Width="34"
+									Height="34"
+									Margin="0,0,38,38"
+									DisplayName="{x:Bind Person1.Text}"
+									ProfilePicture="{x:Bind Person1.Thumbnail, Mode=OneWay}"
+									Visibility="{x:Bind Person1, Converter={StaticResource NullToVisibilityCollapsedConverter}}" />
+								<PersonPicture
+									Width="34"
+									Height="34"
+									Margin="38,0,0,38"
+									DisplayName="{x:Bind Person2.Text}"
+									ProfilePicture="{x:Bind Person2.Thumbnail, Mode=OneWay}"
+									Visibility="{x:Bind Person2, Converter={StaticResource NullToVisibilityCollapsedConverter}}" />
+								<PersonPicture
+									Width="34"
+									Height="34"
+									Margin="0,38,38,0"
+									DisplayName="{x:Bind Person3.Text}"
+									ProfilePicture="{x:Bind Person3.Thumbnail, Mode=OneWay}"
+									Visibility="{x:Bind Person3, Converter={StaticResource NullToVisibilityCollapsedConverter}}" />
+								<Border
+									Width="34"
+									Height="34"
+									Margin="38,38,0,0"
+									Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+									CornerRadius="17"
+									Visibility="{x:Bind RemainingCount, Converter={StaticResource PopulatedListToVisibilityConverter}}">
+									<TextBlock
+										HorizontalAlignment="Center"
+										VerticalAlignment="Center"
+										FontSize="12"
+										FontWeight="SemiBold"
+										Text="{x:Bind RemainingLabel}" />
+								</Border>
+							</Grid>
+							<StackPanel
+								HorizontalAlignment="Center"
+								Orientation="Horizontal"
+								Spacing="6">
+								<FontIcon
+									FontSize="14"
+									Glyph="&#xE8F1;"
+									Visibility="{x:Bind CollectionGlyphVisibility}" />
+								<TextBlock
+									FontWeight="SemiBold"
+									Text="{x:Bind Text}"
+									TextTrimming="CharacterEllipsis" />
+							</StackPanel>
+							<TextBlock
+								HorizontalAlignment="Center"
+								Opacity="0.7"
+								Style="{StaticResource CaptionTextBlockStyle}"
+								Text="{x:Bind CountText}" />
+						</StackPanel>
+
+						<Button
+							Width="28"
+							Height="28"
+							HorizontalAlignment="Right"
+							VerticalAlignment="Top"
+							Padding="0"
+							Click="PinButton_Click"
+							Tag="{x:Bind}"
+							ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_PeoplePin}"
+							Visibility="{x:Bind PinButtonVisibility, Mode=OneWay}">
+							<FontIcon FontSize="13" Glyph="{x:Bind PinGlyph, Mode=OneWay}" />
+						</Button>
+					</Grid>
+				</Border>
+			</DataTemplate>
+
+			<!--  One photo in the person pop-up  -->
+			<DataTemplate x:Key="PersonMediaThumbTemplate" x:DataType="vm:PersonMediaThumbViewModel">
+				<Grid
+					Width="140"
+					Height="140"
+					Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+					CornerRadius="{StaticResource ControlCornerRadius}"
+					DoubleTapped="MediaThumb_DoubleTapped"
+					Tag="{x:Bind}">
+					<Image
+						Source="{x:Bind Image, Mode=OneWay}"
+						Stretch="UniformToFill" />
+					<FontIcon
+						HorizontalAlignment="Center"
+						VerticalAlignment="Center"
+						FontSize="32"
+						Glyph="&#xE714;"
+						Opacity="0.5"
+						Visibility="{x:Bind NoPreviewVisibility}" />
+					<FontIcon
+						Margin="8"
+						HorizontalAlignment="Right"
+						VerticalAlignment="Bottom"
+						FontSize="16"
+						Glyph="&#xE768;"
+						Visibility="{x:Bind VideoBadgeVisibility}" />
+				</Grid>
+			</DataTemplate>
+
+			<DataTemplate x:Key="CollectionChipTemplate" x:DataType="vm:CollectionChipViewModel">
+				<Button
+					Margin="0,0,8,0"
+					AllowDrop="True"
+					Click="CollectionChip_Click"
+					Content="{x:Bind Text}"
+					ContextRequested="CollectionChip_ContextRequested"
+					DragOver="Collection_DragOver"
+					Drop="Collection_Drop"
+					Tag="{x:Bind}" />
+			</DataTemplate>
+
+			<DataTemplate x:Key="BreadcrumbTemplate" x:DataType="vm:BreadcrumbItemViewModel">
+				<StackPanel Orientation="Horizontal">
+					<FontIcon
+						VerticalAlignment="Center"
+						FontSize="10"
+						Glyph="&#xE76C;"
+						Visibility="{x:Bind ChevronVisibility}" />
+					<HyperlinkButton
+						Click="Breadcrumb_Click"
+						Content="{x:Bind Text}"
+						Tag="{x:Bind}" />
+				</StackPanel>
+			</DataTemplate>
+		</ResourceDictionary>
+	</Page.Resources>
+
+	<Grid x:Name="ContainerGrid">
+		<Grid.RowDefinitions>
+			<RowDefinition Height="Auto" />
+			<RowDefinition Height="*" />
+		</Grid.RowDefinitions>
+
+		<!--  Toolbar: title, Faces/Folders switch, search, unnamed filter  -->
+		<Grid
+			Grid.Row="0"
+			Margin="24,16,24,8"
+			ColumnSpacing="16">
+			<Grid.ColumnDefinitions>
+				<ColumnDefinition Width="Auto" />
+				<ColumnDefinition Width="Auto" />
+				<ColumnDefinition Width="*" />
+				<ColumnDefinition Width="Auto" />
+				<ColumnDefinition Width="Auto" />
+			</Grid.ColumnDefinitions>
+
+			<TextBlock
+				Grid.Column="0"
+				VerticalAlignment="Center"
+				FontSize="20"
+				FontWeight="SemiBold"
+				Text="{helpers:ResourceString Name=People}" />
+			<ToggleSwitch
+				Grid.Column="1"
+				VerticalAlignment="Center"
+				IsOn="{x:Bind ViewModel.IsFoldersMode, Mode=TwoWay}"
+				OffContent="{helpers:ResourceString Name=MediaMind_PeopleModeFaces}"
+				OnContent="{helpers:ResourceString Name=MediaMind_PeopleModeFolders}" />
+			<TextBox
+				Grid.Column="2"
+				MaxWidth="320"
+				HorizontalAlignment="Left"
+				VerticalAlignment="Center"
+				PlaceholderText="{helpers:ResourceString Name=MediaMind_PeopleSearch}"
+				Text="{x:Bind ViewModel.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+			<Button
+				Grid.Column="3"
+				VerticalAlignment="Center"
+				Click="HiddenButton_Click"
+				Content="{x:Bind ViewModel.HiddenLabel, Mode=OneWay}"
+				ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_PeopleHiddenTip}"
+				Visibility="{x:Bind ViewModel.HiddenVisibility, Mode=OneWay}" />
+			<ToggleButton
+				Grid.Column="4"
+				VerticalAlignment="Center"
+				Content="{helpers:ResourceString Name=MediaMind_PeopleNotNamed}"
+				IsChecked="{x:Bind ViewModel.ShowOnlyUnnamed, Mode=TwoWay}" />
+		</Grid>
+
+		<Grid Grid.Row="1">
+
+			<ProgressRing
+				Width="32"
+				Height="32"
+				Margin="0,64,0,0"
+				HorizontalAlignment="Center"
+				VerticalAlignment="Top"
+				IsActive="{x:Bind ViewModel.IsLoading, Mode=OneWay}"
+				Visibility="{x:Bind ViewModel.LoadingVisibility, Mode=OneWay}" />
+
+			<!--  Nothing scanned yet  -->
+			<StackPanel
+				MaxWidth="360"
+				Margin="0,64,0,0"
+				HorizontalAlignment="Center"
+				VerticalAlignment="Top"
+				Spacing="8"
+				Visibility="{x:Bind ViewModel.EmptyVisibility, Mode=OneWay}">
+				<TextBlock
+					HorizontalAlignment="Center"
+					FontWeight="SemiBold"
+					Text="{helpers:ResourceString Name=MediaMind_PeopleEmptyTitle}"
+					TextAlignment="Center" />
+				<TextBlock
+					HorizontalAlignment="Center"
+					Opacity="0.7"
+					Text="{helpers:ResourceString Name=MediaMind_PeopleEmptyDescription}"
+					TextAlignment="Center"
+					TextWrapping="Wrap" />
+			</StackPanel>
+
+			<!--  The scroller is the grid itself, so thousands of faces stay virtualized; the sections above it ride in its header.  -->
+			<GridView
+				x:Name="PeopleGrid"
+				Padding="24,0,24,24"
+				ItemTemplate="{StaticResource PersonTileTemplate}"
+				ItemsSource="{x:Bind ViewModel.MainPeople, Mode=OneWay}"
+				SelectionMode="None">
+				<GridView.Header>
+					<StackPanel
+						Margin="0,0,0,12"
+						Spacing="16">
+
+						<TextBlock
+							Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+							Text="{x:Bind ViewModel.ErrorText, Mode=OneWay}"
+							Visibility="{x:Bind ViewModel.ErrorVisibility, Mode=OneWay}" />
+
+						<!--  Collections: drop a person or folder on one to file it there (display only — nothing moves on disk)  -->
+						<StackPanel Spacing="8">
+							<TextBlock
+								FontWeight="SemiBold"
+								Text="{helpers:ResourceString Name=MediaMind_PeopleCollections}" />
+							<ScrollViewer
+								HorizontalScrollBarVisibility="Auto"
+								HorizontalScrollMode="Enabled"
+								VerticalScrollMode="Disabled">
+								<StackPanel Orientation="Horizontal">
+									<ItemsControl
+										ItemTemplate="{StaticResource CollectionChipTemplate}"
+										ItemsSource="{x:Bind ViewModel.Collections, Mode=OneWay}">
+										<ItemsControl.ItemsPanel>
+											<ItemsPanelTemplate>
+												<StackPanel Orientation="Horizontal" />
+											</ItemsPanelTemplate>
+										</ItemsControl.ItemsPanel>
+									</ItemsControl>
+									<Button
+										Click="NewCollection_Click"
+										Content="{helpers:ResourceString Name=MediaMind_PeopleNewCollection}" />
+								</StackPanel>
+							</ScrollViewer>
+						</StackPanel>
+
+						<!--  Pinned  -->
+						<StackPanel
+							Spacing="8"
+							Visibility="{x:Bind ViewModel.PinnedVisibility, Mode=OneWay}">
+							<TextBlock
+								FontWeight="SemiBold"
+								Text="{helpers:ResourceString Name=MediaMind_PeoplePinned}" />
+							<GridView
+								IsItemClickEnabled="False"
+								ItemTemplate="{StaticResource FolderCardTemplate}"
+								ItemsSource="{x:Bind ViewModel.PinnedFolders, Mode=OneWay}"
+								SelectionMode="None"
+								Visibility="{x:Bind ViewModel.PinnedFoldersVisibility, Mode=OneWay}" />
+							<GridView
+								IsItemClickEnabled="False"
+								ItemTemplate="{StaticResource PersonTileTemplate}"
+								ItemsSource="{x:Bind ViewModel.PinnedPeople, Mode=OneWay}"
+								SelectionMode="None"
+								Visibility="{x:Bind ViewModel.PinnedPeopleVisibility, Mode=OneWay}" />
+						</StackPanel>
+
+						<!--  Faces mode: people who may be the same person scanned in two folders, kept out of the main grid  -->
+						<Border
+							Padding="12"
+							Background="{ThemeResource SystemFillColorCautionBackgroundBrush}"
+							BorderBrush="{ThemeResource SystemFillColorCautionBrush}"
+							BorderThickness="1"
+							CornerRadius="{StaticResource ControlCornerRadius}"
+							Visibility="{x:Bind ViewModel.DuplicatesVisibility, Mode=OneWay}">
+							<StackPanel Spacing="8">
+								<TextBlock
+									FontWeight="SemiBold"
+									Text="{helpers:ResourceString Name=MediaMind_PeopleDuplicates}" />
+								<GridView
+									IsItemClickEnabled="False"
+									ItemTemplate="{StaticResource PersonTileTemplate}"
+									ItemsSource="{x:Bind ViewModel.DuplicatePeople, Mode=OneWay}"
+									SelectionMode="None" />
+							</StackPanel>
+						</Border>
+
+						<!--  Folders mode: where you are, and the folders below it  -->
+						<StackPanel
+							Spacing="8"
+							Visibility="{x:Bind ViewModel.FoldersOnlyVisibility, Mode=OneWay}">
+							<ItemsControl
+								ItemTemplate="{StaticResource BreadcrumbTemplate}"
+								ItemsSource="{x:Bind ViewModel.Breadcrumb, Mode=OneWay}">
+								<ItemsControl.ItemsPanel>
+									<ItemsPanelTemplate>
+										<StackPanel Orientation="Horizontal" />
+									</ItemsPanelTemplate>
+								</ItemsControl.ItemsPanel>
+							</ItemsControl>
+							<GridView
+								IsItemClickEnabled="False"
+								ItemTemplate="{StaticResource FolderCardTemplate}"
+								ItemsSource="{x:Bind ViewModel.FolderCards, Mode=OneWay}"
+								SelectionMode="None"
+								Visibility="{x:Bind ViewModel.FolderCardsVisibility, Mode=OneWay}" />
+						</StackPanel>
+					</StackPanel>
+				</GridView.Header>
+			</GridView>
+		</Grid>
+
+		<!--  Person pop-up: opens over the People page (never navigates), closes with Esc, the X or a click outside  -->
+		<Grid
+			Grid.RowSpan="2"
+			Background="{ThemeResource SmokeFillColorDefaultBrush}"
+			Tapped="DetailScrim_Tapped"
+			Visibility="{x:Bind ViewModel.DetailVisibility, Mode=OneWay}">
+			<Grid.KeyboardAccelerators>
+				<KeyboardAccelerator
+					Key="Escape"
+					Invoked="DetailEscape_Invoked" />
+			</Grid.KeyboardAccelerators>
+
+			<Grid
+				MaxWidth="1040"
+				Margin="32"
+				Padding="24,20,24,24"
+				Background="{ThemeResource ContentDialogBackground}"
+				BorderBrush="{ThemeResource ContentDialogBorderBrush}"
+				BorderThickness="1"
+				CornerRadius="{ThemeResource OverlayCornerRadius}"
+				RowSpacing="16"
+				Tapped="DetailCard_Tapped">
+				<Grid.RowDefinitions>
+					<RowDefinition Height="Auto" />
+					<RowDefinition Height="Auto" />
+					<RowDefinition Height="*" />
+				</Grid.RowDefinitions>
+
+				<Grid ColumnSpacing="16">
+					<Grid.ColumnDefinitions>
+						<ColumnDefinition Width="Auto" />
+						<ColumnDefinition Width="*" />
+						<ColumnDefinition Width="Auto" />
+					</Grid.ColumnDefinitions>
+
+					<PersonPicture
+						Grid.Column="0"
+						Width="80"
+						Height="80"
+						DisplayName="{x:Bind ViewModel.Detail.Name, Mode=OneWay}"
+						ProfilePicture="{x:Bind ViewModel.Detail.Tile.Thumbnail, Mode=OneWay}" />
+
+					<StackPanel
+						Grid.Column="1"
+						VerticalAlignment="Center"
+						Spacing="4">
+						<TextBox
+							x:Name="DetailNameBox"
+							FontSize="22"
+							FontWeight="SemiBold"
+							KeyDown="DetailNameBox_KeyDown"
+							LostFocus="DetailNameBox_LostFocus"
+							PlaceholderText="{helpers:ResourceString Name=MediaMind_NameThisPerson}"
+							Text="{x:Bind ViewModel.Detail.Name, Mode=OneWay}" />
+						<TextBlock
+							Opacity="0.7"
+							Style="{StaticResource CaptionTextBlockStyle}"
+							Text="{x:Bind ViewModel.Detail.CountText, Mode=OneWay}" />
+					</StackPanel>
+
+					<StackPanel
+						Grid.Column="2"
+						VerticalAlignment="Top"
+						Orientation="Horizontal"
+						Spacing="4">
+						<Button
+							Click="DetailOpenInTab_Click"
+							ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_PersonDetailOpenInTab}">
+							<FontIcon
+								FontSize="16"
+								Glyph="&#xE8A7;" />
+						</Button>
+						<Button
+							Click="DetailClose_Click"
+							ToolTipService.ToolTip="{helpers:ResourceString Name=Close}">
+							<FontIcon
+								FontSize="16"
+								Glyph="&#xE711;" />
+						</Button>
+					</StackPanel>
+				</Grid>
+
+				<TextBlock
+					Grid.Row="1"
+					Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+					Text="{x:Bind ViewModel.Detail.ErrorText, Mode=OneWay}"
+					Visibility="{x:Bind ViewModel.Detail.ErrorVisibility, Mode=OneWay}" />
+
+				<GridView
+					Grid.Row="2"
+					IsItemClickEnabled="False"
+					ItemTemplate="{StaticResource PersonMediaThumbTemplate}"
+					ItemsSource="{x:Bind ViewModel.Detail.Items, Mode=OneWay}"
+					SelectionMode="None" />
+				<ProgressRing
+					Grid.Row="2"
+					Width="32"
+					Height="32"
+					HorizontalAlignment="Center"
+					VerticalAlignment="Center"
+					IsActive="{x:Bind ViewModel.Detail.IsLoading, Mode=OneWay}"
+					Visibility="{x:Bind ViewModel.Detail.LoadingVisibility, Mode=OneWay}" />
+			</Grid>
+		</Grid>
+	</Grid>
+</Page>

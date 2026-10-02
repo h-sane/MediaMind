@@ -1,0 +1,120 @@
+<!--  Copyright (c) Files Community. Licensed under the MIT License.  -->
+<UserControl
+	x:Class="Files.App.Views.People.MediaZoomView"
+	xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+	xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+	xmlns:helpers="using:Files.App.Helpers"
+	PointerEntered="Root_PointerEntered"
+	PointerExited="Root_PointerExited">
+
+	<Grid>
+		<!--  Pinch, Ctrl+scroll or double-click zooms the picture or the playing video.
+		      The content is sized to the viewport, so at 100% it fits exactly.  -->
+		<ScrollViewer
+			x:Name="ZoomScroller"
+			DoubleTapped="ZoomScroller_DoubleTapped"
+			HorizontalScrollBarVisibility="Auto"
+			HorizontalScrollMode="Enabled"
+			MaxZoomFactor="8"
+			MinZoomFactor="1"
+			SizeChanged="ZoomScroller_SizeChanged"
+			VerticalScrollBarVisibility="Auto"
+			VerticalScrollMode="Enabled"
+			ViewChanged="ZoomScroller_ViewChanged"
+			ZoomMode="Enabled">
+			<Grid x:Name="ZoomContent">
+				<!--  No built-in controls: they would zoom with the video. VideoBar replaces them.  -->
+				<MediaPlayerElement
+					x:Name="PlayerElement"
+					AreTransportControlsEnabled="False"
+					Stretch="Uniform"
+					Visibility="{x:Bind PlayerVisibility, Mode=OneWay}" />
+				<Image
+					x:Name="PictureImage"
+					AutomationProperties.Name="{x:Bind ImageName, Mode=OneWay}"
+					Source="{x:Bind ImageSource, Mode=OneWay}"
+					Stretch="Uniform"
+					Visibility="{x:Bind ImageVisibility, Mode=OneWay}" />
+			</Grid>
+		</ScrollViewer>
+
+		<!--  Zoom level, shown only when zoomed in; clicking it fits the picture again  -->
+		<Button
+			x:Name="ZoomResetButton"
+			Margin="8"
+			HorizontalAlignment="Left"
+			VerticalAlignment="Top"
+			AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_ReviewZoomReset}"
+			Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
+			Click="ZoomReset_Click"
+			ToolTipService.ToolTip="{helpers:ResourceString Name=MediaMind_ReviewZoomReset}"
+			Visibility="Collapsed">
+			<StackPanel Orientation="Horizontal" Spacing="8">
+				<FontIcon FontSize="14" Glyph="&#xE71F;" />
+				<TextBlock x:Name="ZoomText" />
+			</StackPanel>
+		</Button>
+
+		<!--  The video's own controls, outside the zoom so they stay put and readable.
+		      Shown while the pointer is over the picture; they fade out half a second after it leaves.  -->
+		<Border
+			x:Name="VideoBar"
+			Margin="8"
+			Padding="6"
+			VerticalAlignment="Bottom"
+			Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
+			BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+			BorderThickness="1"
+			CornerRadius="{StaticResource OverlayCornerRadius}"
+			IsHitTestVisible="False"
+			Opacity="0"
+			Visibility="{x:Bind PlayerVisibility, Mode=OneWay}">
+			<Border.OpacityTransition>
+				<ScalarTransition Duration="0:0:0.15" />
+			</Border.OpacityTransition>
+			<Grid ColumnSpacing="12">
+				<Grid.ColumnDefinitions>
+					<ColumnDefinition Width="Auto" />
+					<ColumnDefinition Width="Auto" />
+					<ColumnDefinition Width="*" />
+					<ColumnDefinition Width="Auto" />
+				</Grid.ColumnDefinitions>
+				<Button
+					x:Name="VideoPlayButton"
+					Width="40"
+					Click="VideoPlay_Click">
+					<FontIcon
+						x:Name="VideoPlayIcon"
+						FontSize="14"
+						Glyph="&#xE769;" />
+				</Button>
+				<TextBlock
+					x:Name="VideoTimeText"
+					Grid.Column="1"
+					MinWidth="84"
+					VerticalAlignment="Center"
+					Style="{StaticResource CaptionTextBlockStyle}"
+					Text="0:00 / 0:00" />
+				<Slider
+					x:Name="VideoSeek"
+					Grid.Column="2"
+					VerticalAlignment="Center"
+					AutomationProperties.Name="{helpers:ResourceString Name=MediaMind_ReviewVideoPosition}"
+					IsThumbToolTipEnabled="False"
+					Maximum="1"
+					StepFrequency="0.1"
+					ValueChanged="VideoSeek_ValueChanged" />
+				<Button
+					x:Name="VideoMuteButton"
+					Grid.Column="3"
+					Width="40"
+					Click="VideoMute_Click">
+					<FontIcon
+						x:Name="VideoMuteIcon"
+						FontSize="14"
+						Glyph="&#xE767;" />
+				</Button>
+			</Grid>
+		</Border>
+	</Grid>
+</UserControl>

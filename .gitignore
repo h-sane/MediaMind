@@ -13,12 +13,7 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
-# Node / Electron
 node_modules/
-app/dist/
-app/dist-electron/
-app/release/
-*.tsbuildinfo
 
 # MediaMind runtime artifacts (never commit user data or models)
 .mediamind/
@@ -54,20 +49,15 @@ desktop.ini
 *.log
 logs/
 
-# electron-vite build output
-app/out/
-
 # Session handoffs (working notes for continuing across Claude Code sessions).
 # Not committed: these are internal continuity notes, not project
 # documentation. Sessions 01-08 predate this convention and remain committed
 # under docs/handoffs/ as historical record.
 .claude/handoffs/
 
-# Screenshots taken by the run-desktop skill's Playwright driver
-app/.driver-shots/
-
-# Block 5 (ADR-0012): Files (files-community/Files) cloned as the new WinUI
-# frontend base. Staged here during build-viability evaluation; kept out of
-# git until it verifiably builds/runs, so the auto-commit policy can't sweep an
-# unevaluated ~300MB tree into history. Final placement decided by the blueprint.
-/winui-frontend/
+# WinUI frontend: packaging output and local signing material
+winui-frontend/Files/_pkgout/
+winui-frontend/Files/artifacts/
+winui-frontend/Files/devcert/*.pfx
+winui-frontend/Files/devcert/*.cer
+winui-frontend/Files/devcert/dumps/
